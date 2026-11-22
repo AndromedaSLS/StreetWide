@@ -1,0 +1,93 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "urn:streetwide:schema:asset-manifest:0.1",
+  "title": "StreetWide asset manifest (world format 0.1)",
+  "description": "Describes one asset: a glTF 2.0 binary mesh in one layer, with its content id, lineage and provenance. See rfcs/0001-world-format.md section 3.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "bounds_mm", "content_id", "contract_version", "feature_id", "fictional", "format",
+    "layer", "parent_version_id", "physics", "provenance", "size_bytes", "tile"
+  ],
+  "properties": {
+    "format": { "const": "streetwide.asset" },
+    "contract_version": { "$ref": "urn:streetwide:schema:common:0.1#/$defs/contractVersion" },
+    "content_id": { "$ref": "urn:streetwide:schema:common:0.1#/$defs/contentId" },
+    "size_bytes": { "type": "integer", "minimum": 1, "maximum": 67108864 },
+    "layer": { "$ref": "urn:streetwide:schema:common:0.1#/$defs/layer" },
+    "feature_id": { "$ref": "urn:streetwide:schema:common:0.1#/$defs/featureId" },
+    "tile": { "$ref": "urn:streetwide:schema:common:0.1#/$defs/tileKey" },
+    "bounds_mm": { "$ref": "urn:streetwide:schema:common:0.1#/$defs/boundsMm" },
+    "physics": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["collider"],
+      "properties": {
+        "collider": { "$ref": "urn:streetwide:schema:common:0.1#/$defs/collider" }
+      }
+    },
+    "fictional": {
+      "description": "true if the geometry is invented rather than derived from measurements of the real world.",
+      "type": "boolean"
+    },
+    "parent_version_id": {
+      "description": "Version id of the manifest this one replaces, or null for a first version.",
+      "oneOf": [
+        { "$ref": "urn:streetwide:schema:common:0.1#/$defs/contentId" },
+        { "type": "null" }
+      ]
+    },
+    "provenance": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["attribution", "generator", "license", "sources"],
+      "properties": {
+        "license": { "$ref": "urn:streetwide:schema:common:0.1#/$defs/license" },
+        "attribution": { "$ref": "urn:streetwide:schema:common:0.1#/$defs/attribution" },
+        "sources": {
+          "type": "array",
+          "minItems": 1,
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["attribution", "dataset", "license", "source_ids", "url", "version"],
+            "properties": {
+              "dataset": { "$ref": "urn:streetwide:schema:common:0.1#/$defs/text" },
+              "version": { "$ref": "urn:streetwide:schema:common:0.1#/$defs/text" },
+              "license": { "$ref": "urn:streetwide:schema:common:0.1#/$defs/license" },
+              "attribution": { "$ref": "urn:streetwide:schema:common:0.1#/$defs/text" },
+              "url": { "type": "string", "maxLength": 2048, "pattern": "^https://[!-~]+$" },
+              "source_ids": {
+                "description": "Ids of the source records used, sorted and unique.",
+                "type": "array",
+                "uniqueItems": true,
+                "items": { "$ref": "urn:streetwide:schema:common:0.1#/$defs/text" }
+              }
+            }
+          }
+        },
+        "generator": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["name", "version"],
+          "properties": {
+            "name": { "$ref": "urn:streetwide:schema:common:0.1#/$defs/text" },
+            "version": { "$ref": "urn:streetwide:schema:common:0.1#/$defs/text" }
+          }
+        }
+      }
+    }
+  },
+  "allOf": [
+    {
+      "description": "Private by design: interiors and furniture must be fictional.",
+      "if": {
+        "required": ["layer"],
+        "properties": { "layer": { "enum": ["interior", "furniture"] } }
+      },
+      "then": {
+        "properties": { "fictional": { "const": true } }
+      }
+    }
+  ]
+}

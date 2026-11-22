@@ -1,0 +1,83 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "urn:streetwide:schema:common:0.1",
+  "title": "StreetWide world format 0.1: shared definitions",
+  "description": "Definitions shared by the world-format schemas. See rfcs/0001-world-format.md. Some rules (sort order, cross-references, canonical bytes) cannot be expressed in JSON Schema and are enforced by op_world.",
+  "$defs": {
+    "contractVersion": {
+      "description": "World format version.",
+      "const": "0.1.0"
+    },
+    "text": {
+      "description": "Non-empty string without control characters.",
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 4096,
+      "pattern": "^[^\\u0000-\\u001F\\u007F]*$"
+    },
+    "int53": {
+      "description": "Integer exactly representable in IEEE 754 double precision.",
+      "type": "integer",
+      "minimum": -9007199254740991,
+      "maximum": 9007199254740991
+    },
+    "contentId": {
+      "description": "BLAKE3-256 hash of a file's exact bytes.",
+      "type": "string",
+      "pattern": "^blake3:[0-9a-f]{64}$"
+    },
+    "tileKey": {
+      "description": "Web Mercator z17 tile, \"z/x/y\". x and y must be below 131072.",
+      "type": "string",
+      "pattern": "^17/(0|[1-9][0-9]{0,5})/(0|[1-9][0-9]{0,5})$"
+    },
+    "regionKey": {
+      "description": "Web Mercator z12 region, \"z/x/y\". x and y must be below 4096.",
+      "type": "string",
+      "pattern": "^12/(0|[1-9][0-9]{0,3})/(0|[1-9][0-9]{0,3})$"
+    },
+    "featureId": {
+      "description": "Namespaced id of what an asset depicts, e.g. \"osm:way:123\".",
+      "type": "string",
+      "maxLength": 256,
+      "pattern": "^[a-z][a-z0-9_-]*:[!-~]+$"
+    },
+    "layer": {
+      "enum": ["shell", "facade", "interior", "furniture", "interactivity", "terrain", "transport"]
+    },
+    "collider": {
+      "enum": ["trimesh", "none"]
+    },
+    "license": {
+      "description": "SPDX license expression, e.g. \"CC-BY-SA-4.0\", \"ODbL-1.0\", \"LicenseRef-swisstopo-OGD\".",
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 256,
+      "pattern": "^[A-Za-z0-9.+:() -]+$"
+    },
+    "vec3mm": {
+      "description": "Position [x, y, z] in integer millimetres (X east, Y up, Z south).",
+      "type": "array",
+      "items": { "$ref": "#/$defs/int53" },
+      "minItems": 3,
+      "maxItems": 3
+    },
+    "boundsMm": {
+      "description": "Axis-aligned bounds in integer millimetres; min <= max per axis.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["max", "min"],
+      "properties": {
+        "max": { "$ref": "#/$defs/vec3mm" },
+        "min": { "$ref": "#/$defs/vec3mm" }
+      }
+    },
+    "attribution": {
+      "description": "Credits to display, sorted and unique.",
+      "type": "array",
+      "minItems": 1,
+      "uniqueItems": true,
+      "items": { "$ref": "#/$defs/text" }
+    }
+  }
+}

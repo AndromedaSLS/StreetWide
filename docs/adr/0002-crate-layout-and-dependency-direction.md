@@ -1,6 +1,6 @@
 # ADR-0002: Crate layout and dependency direction
 
-- **Status:** Proposed
+- **Status:** Accepted (2026-11-23, stage 1 checkpoint)
 - **Date:** 2026-11-22
 - **Deciders:** @victorpicaud
 

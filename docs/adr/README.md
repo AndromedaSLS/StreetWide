@@ -14,10 +14,10 @@ instead.
 
 | ADR | Title | Status |
 |---|---|---|
-| [0001](0001-licensing.md) | Licensing of code, content and data | Proposed |
-| [0002](0002-crate-layout-and-dependency-direction.md) | Crate layout and dependency direction | Proposed |
+| [0001](0001-licensing.md) | Licensing of code, content and data | Accepted |
+| [0002](0002-crate-layout-and-dependency-direction.md) | Crate layout and dependency direction | Accepted |
 | 0003 | Determinism strategy | *planned, stage 4* |
 | 0004 | Physics engine and character controller | *planned, stage 4* |
-| [0005](0005-toolchain-and-engine-pinning.md) | Toolchain and engine pinning | Proposed |
+| [0005](0005-toolchain-and-engine-pinning.md) | Toolchain and engine pinning | Accepted |
 | 0006 | Ingest pipeline and data sources | *planned, stage 3* |
 | 0007 | Replay file format | *planned, stage 4* |

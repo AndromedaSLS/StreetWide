@@ -1,6 +1,6 @@
 # ADR-0001: Licensing of code, content and data
 
-- **Status:** Proposed
+- **Status:** Accepted (2026-11-23, stage 1 checkpoint)
 - **Date:** 2026-11-22
 - **Deciders:** @victorpicaud
 

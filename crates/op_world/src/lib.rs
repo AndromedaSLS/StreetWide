@@ -1,5 +1,38 @@
-//! StreetWide world format.
+//! StreetWide world format (RFC 0001).
 //!
-//! Asset manifests, canonical JSON, BLAKE3 content ids and glTF 2.0
-//! validation, matching the JSON Schemas in `schemas/` and RFC 0001.
-//! Implemented in stage 2.
+//! - [`cjson`]: canonical JSON, the only serialisation of every document;
+//! - [`id`]: BLAKE3 content ids;
+//! - [`keys`]: Web Mercator tile (z17) and region (z12) keys;
+//! - [`manifest`], [`tile`], [`world`]: asset manifests, tile indexes and
+//!   world manifests, mirroring the JSON Schemas in `schemas/`;
+//! - [`glb`]: the StreetWide glb profile (reference writer, strict reader);
+//! - [`store`]: the content-addressed world directory;
+//! - [`validate`]: whole-world validation;
+//! - [`sample`]: the hand-made world used as the golden format fixture.
+//!
+//! This crate has no workspace dependencies (ADR-0002).
+
+mod error;
+
+pub mod cjson;
+pub mod glb;
+pub mod id;
+pub mod keys;
+pub mod manifest;
+pub mod rules;
+pub mod sample;
+pub mod store;
+pub mod tile;
+pub mod validate;
+pub mod world;
+
+pub use error::{Error, Result};
+pub use id::ContentId;
+pub use keys::{RegionKey, TileKey};
+pub use manifest::{AssetManifest, BoundsMm, Collider, Layer};
+pub use store::{ObjectKind, Store};
+pub use tile::{TileAsset, TileIndex};
+pub use world::WorldManifest;
+
+/// The world format version this crate reads and writes.
+pub const CONTRACT_VERSION: &str = "0.1.0";

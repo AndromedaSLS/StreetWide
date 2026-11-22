@@ -1,3 +1,0 @@
-# Test dependencies for the CI helper scripts (the scripts themselves use the
-# standard library only).
-pytest==9.2.0

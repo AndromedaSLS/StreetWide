@@ -1,0 +1,12 @@
+{
+  "name": "streetwide-gltf-check",
+  "private": true,
+  "description": "Validates every committed .glb with the Khronos glTF validator (independent of op_world's own profile check).",
+  "license": "MIT OR Apache-2.0",
+  "scripts": {
+    "check": "node validate.js ../../../fixtures"
+  },
+  "dependencies": {
+    "gltf-validator": "2.0.0-dev.3.10"
+  }
+}

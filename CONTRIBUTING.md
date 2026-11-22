@@ -79,9 +79,13 @@ Run the same checks as CI:
 cargo fmt --check
 cargo clippy --workspace --all-targets -- -D warnings
 cargo test --workspace
+python -m pip install -r tools/requirements.txt   # once, ideally in a venv
 python tools/ci/check_deps.py          # dependency direction (needs Python 3.11+)
 python -m pytest                       # tests for the Python tools
 ```
+
+If you change a `.glb` fixture, also run the Khronos glTF validator:
+`cd tools/ci/gltf && npm ci --ignore-scripts && npm run check`.
 
 Keep pull requests focused, explain *why* in the description, and update
 [docs/progress.md](docs/progress.md) when you complete a milestone.

@@ -1,0 +1,66 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "urn:streetwide:schema:world-manifest:0.1",
+  "title": "StreetWide world manifest (world format 0.1)",
+  "description": "Describes a playable world: one region frame, its tiles, a spawn point and the credits to display. Its BLAKE3 hash is the world id. See rfcs/0001-world-format.md section 4.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["attribution", "contract_version", "format", "name", "region", "spawn", "tiles"],
+  "properties": {
+    "format": { "const": "streetwide.world" },
+    "contract_version": { "$ref": "urn:streetwide:schema:common:0.1#/$defs/contractVersion" },
+    "name": {
+      "type": "string",
+      "maxLength": 64,
+      "pattern": "^[a-z0-9]+(-[a-z0-9]+)*$"
+    },
+    "region": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["anchor_e9", "key"],
+      "properties": {
+        "key": { "$ref": "urn:streetwide:schema:common:0.1#/$defs/regionKey" },
+        "anchor_e9": {
+          "description": "Region anchor (centre of the z12 cell) in integer nanodegrees.",
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["lat", "lon"],
+          "properties": {
+            "lat": { "type": "integer", "minimum": -85051128780, "maximum": 85051128780 },
+            "lon": { "type": "integer", "minimum": -180000000000, "maximum": 180000000000 }
+          }
+        }
+      }
+    },
+    "attribution": { "$ref": "urn:streetwide:schema:common:0.1#/$defs/attribution" },
+    "spawn": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["position_mm", "yaw"],
+      "properties": {
+        "position_mm": { "$ref": "urn:streetwide:schema:common:0.1#/$defs/vec3mm" },
+        "yaw": {
+          "description": "Heading in 1/65536 turns, 0 = north, increasing clockwise seen from above.",
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 65535
+        }
+      }
+    },
+    "tiles": {
+      "type": "array",
+      "minItems": 1,
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["bounds_mm", "origin_mm", "tile", "tile_id"],
+        "properties": {
+          "tile": { "$ref": "urn:streetwide:schema:common:0.1#/$defs/tileKey" },
+          "tile_id": { "$ref": "urn:streetwide:schema:common:0.1#/$defs/contentId" },
+          "origin_mm": { "$ref": "urn:streetwide:schema:common:0.1#/$defs/vec3mm" },
+          "bounds_mm": { "$ref": "urn:streetwide:schema:common:0.1#/$defs/boundsMm" }
+        }
+      }
+    }
+  }
+}

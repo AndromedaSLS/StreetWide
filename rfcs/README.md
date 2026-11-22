@@ -17,4 +17,4 @@ Process (see [GOVERNANCE.md](../GOVERNANCE.md)):
 
 | RFC | Title | Status |
 |---|---|---|
-| 0001 | World format | *planned, stage 2* |
+| [0001](0001-world-format.md) | World format | Draft |

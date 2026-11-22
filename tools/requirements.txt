@@ -1,0 +1,5 @@
+# Python dependencies for everything under tools/ (CI helpers, world-format
+# tools, and from stage 3 the ingest pipeline). Pinned for reproducibility.
+blake3==1.0.11
+jsonschema==4.26.0
+pytest==9.2.0

@@ -35,9 +35,11 @@ better.
 | `crates/op_world` | World format: manifests, content ids (BLAKE3), glTF validation |
 | `crates/op_stream` | Tile store and streaming |
 | `crates/op_client` | Desktop client (Bevy) |
-| `schemas/` | JSON Schemas for the world format *(stage 2)* |
+| `schemas/` | JSON Schemas for the world format ([RFC 0001](rfcs/0001-world-format.md)) |
+| `fixtures/` | Small committed test data (the world-format golden fixture) |
 | `tools/ingest` | Python ingest from open data *(stage 3)* |
-| `tools/ci` | CI helpers: dependency-direction and DCO checks |
+| `tools/worldfmt` | Python implementation of the world format, byte-compatible with `op_world` |
+| `tools/ci` | CI helpers: dependency-direction, DCO and glTF checks |
 | `docs/adr`, `rfcs/` | Architecture decision records and RFCs |
 
 Dependencies point inward: `op_sim` depends only on `op_kernel`, nothing
