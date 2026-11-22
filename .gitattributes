@@ -1,0 +1,12 @@
+# Normalise text to LF in the repository and the working tree on every
+# platform, so rustfmt, hashes of text fixtures and diffs agree everywhere.
+* text=auto eol=lf
+
+# Binary world and replay data: never touch line endings, never diff as text.
+*.glb   binary
+*.oprep binary
+*.png   binary
+*.jpg   binary
+*.ktx2  binary
+*.zip   binary
+*.tif   binary

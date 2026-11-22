@@ -1,0 +1,20 @@
+[package]
+name = "op_sim"
+description = "StreetWide deterministic simulation (player capsule, collision) on top of op_kernel and Rapier."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+authors.workspace = true
+publish.workspace = true
+
+[dependencies]
+
+[dev-dependencies]
+# Stage 1 canary: proves the pinned Rapier builds with `enhanced-determinism`
+# on every CI platform. Becomes a normal dependency in stage 4.
+rapier3d.workspace = true
+
+[lints]
+workspace = true

@@ -1,0 +1,26 @@
+# Rust build output
+/target/
+
+# Downloaded source data and generated worlds (never committed; see
+# tools/ingest and CLAUDE.md "No large data in Git")
+/data/
+
+# Replays recorded by the client (fixtures live in fixtures/replays/)
+/replays/
+
+# Python
+/.venv/
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.ruff_cache/
+
+# Editors and OS
+.idea/
+.vscode/
+*.swp
+.DS_Store
+Thumbs.db
+
+# Local agent settings
+.claude/settings.local.json

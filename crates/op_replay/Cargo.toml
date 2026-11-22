@@ -1,0 +1,15 @@
+[package]
+name = "op_replay"
+description = "StreetWide replays: input recording and playback, per-tick state hashes, and the op_replay CLI."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+authors.workspace = true
+publish.workspace = true
+
+[dependencies]
+
+[lints]
+workspace = true

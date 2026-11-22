@@ -1,0 +1,33 @@
+# Dependency-direction policy (ADR-0002), checked by tools/ci/check_deps.py.
+#
+# Every workspace crate must be listed here. `allow` names the workspace
+# crates it may depend on (normal, build and dev dependencies alike).
+# Dependencies point inward: op_kernel is the core, op_client the outermost
+# shell, and nothing may depend on op_client.
+#
+# Crates without `render = true` must not have any `banned` package anywhere
+# in their dependency closure: the simulation never depends on rendering.
+# Changing this file needs an ADR update.
+
+[crates.op_kernel]
+allow = []
+
+[crates.op_sim]
+allow = ["op_kernel"]
+
+[crates.op_world]
+allow = []
+
+[crates.op_stream]
+allow = ["op_kernel", "op_world"]
+
+[crates.op_replay]
+allow = ["op_kernel", "op_sim", "op_world", "op_stream"]
+
+[crates.op_client]
+allow = ["op_kernel", "op_sim", "op_world", "op_stream", "op_replay"]
+render = true
+
+[banned]
+# fnmatch-style patterns matched against package names.
+packages = ["bevy", "bevy_*", "wgpu", "wgpu-*", "winit", "naga", "gilrs", "gilrs-*"]

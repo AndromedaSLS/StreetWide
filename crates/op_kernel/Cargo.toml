@@ -1,0 +1,15 @@
+[package]
+name = "op_kernel"
+description = "StreetWide kernel: module API, fixed 60 Hz schedule, deterministic math, seeded RNG and state hashing."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+authors.workspace = true
+publish.workspace = true
+
+[dependencies]
+
+[lints]
+workspace = true

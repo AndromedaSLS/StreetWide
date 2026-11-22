@@ -1,0 +1,7 @@
+# Tool configuration only; StreetWide's Python code (tools/) is not a
+# distributable package.
+
+[tool.pytest.ini_options]
+testpaths = ["tools"]
+pythonpath = ["."]
+addopts = "-q"

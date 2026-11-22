@@ -1,0 +1,5 @@
+# op_client renders; rendering may be nondeterministic (CLAUDE.md), so the
+# determinism bans in the workspace clippy.toml do not apply here. Clippy uses
+# the nearest clippy.toml, so this (intentionally empty) file replaces it.
+#
+# The simulation itself still runs inside op_sim, where the bans apply.

@@ -1,0 +1,52 @@
+[workspace]
+resolver = "3"
+members = [
+    "crates/op_kernel",
+    "crates/op_sim",
+    "crates/op_replay",
+    "crates/op_world",
+    "crates/op_stream",
+    "crates/op_client",
+]
+
+[workspace.package]
+version = "0.1.0"
+edition = "2024"
+rust-version = "1.100"
+license = "MIT OR Apache-2.0"
+repository = "https://github.com/AndromedaSLS/StreetWide"
+authors = ["The StreetWide contributors"]
+publish = false
+
+[workspace.dependencies]
+# Workspace crates are added here as they start depending on each other.
+# Which crate may depend on which is fixed by ADR-0002 and checked in CI by
+# tools/ci/check_deps.py against tools/ci/deps-policy.toml.
+
+# Engine pins (ADR-0005). Exact versions on purpose: bump them only in a
+# dedicated PR that updates the ADR and re-records the determinism fixtures.
+bevy = { version = "=0.20.1", default-features = false }
+# `enhanced-determinism` makes Rapier use scalar math and libm so results are
+# bit-identical across platforms. Never drop it (ADR-0003).
+rapier3d = { version = "=0.36.1", default-features = false, features = [
+    "dim3",
+    "f32",
+    "std",
+    "enhanced-determinism",
+] }
+
+[workspace.lints.rust]
+unsafe_code = "forbid"
+
+[workspace.lints.clippy]
+# Determinism bans are configured in clippy.toml; make them hard errors even
+# without `-D warnings`.
+disallowed_types = "deny"
+disallowed_methods = "deny"
+
+[profile.dev]
+# Keep debug builds playable: optimise dependencies (Bevy, Rapier), not our code.
+opt-level = 1
+
+[profile.dev.package."*"]
+opt-level = 3

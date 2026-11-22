@@ -1,0 +1,16 @@
+[package]
+name = "op_client"
+description = "StreetWide desktop client (Bevy): streams tiles and lets you walk the world in first person."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+authors.workspace = true
+publish.workspace = true
+
+[dependencies]
+bevy = { workspace = true, features = ["3d", "ui"] }
+
+[lints]
+workspace = true

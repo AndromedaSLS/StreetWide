@@ -1,0 +1,76 @@
+# Determinism rules from CLAUDE.md, enforced mechanically (ADR-0003).
+#
+# This file applies to every crate except op_client, which has its own
+# clippy.toml because rendering is allowed to be nondeterministic. Clippy uses
+# the nearest clippy.toml only; files are not merged.
+#
+# If you think you need one of these, you almost certainly need a
+# deterministic alternative instead. Do not add `#[allow]` to silence them in
+# simulation code; open an issue or ADR.
+
+disallowed-types = [
+    { path = "std::collections::HashMap", reason = "iteration order is randomised per process; use BTreeMap or IndexMap" },
+    { path = "std::collections::HashSet", reason = "iteration order is randomised per process; use BTreeSet or IndexSet" },
+    { path = "std::collections::hash_map::RandomState", reason = "randomised hashing breaks determinism" },
+    { path = "std::time::Instant", reason = "no wall-clock time in simulation code; use the tick counter" },
+    { path = "std::time::SystemTime", reason = "no wall-clock time in simulation code; use the tick counter" },
+    { path = "hashbrown::HashMap", reason = "iteration order is not stable; use BTreeMap or IndexMap", allow-invalid = true },
+    { path = "hashbrown::HashSet", reason = "iteration order is not stable; use BTreeSet or IndexSet", allow-invalid = true },
+]
+
+disallowed-methods = [
+    # Unseeded randomness.
+    { path = "rand::thread_rng", reason = "unseeded randomness; use op_kernel's seeded RNG", allow-invalid = true },
+    { path = "rand::rng", reason = "unseeded randomness; use op_kernel's seeded RNG", allow-invalid = true },
+    { path = "rand::random", reason = "unseeded randomness; use op_kernel's seeded RNG", allow-invalid = true },
+
+    # Platform trig / transcendental functions: results differ between targets
+    # and libm implementations. Use op_kernel::dmath. (sqrt and mul_add are
+    # correctly rounded by IEEE 754 and therefore allowed.)
+    { path = "f32::sin", reason = "platform trig; use op_kernel::dmath" },
+    { path = "f32::cos", reason = "platform trig; use op_kernel::dmath" },
+    { path = "f32::tan", reason = "platform trig; use op_kernel::dmath" },
+    { path = "f32::sin_cos", reason = "platform trig; use op_kernel::dmath" },
+    { path = "f32::asin", reason = "platform trig; use op_kernel::dmath" },
+    { path = "f32::acos", reason = "platform trig; use op_kernel::dmath" },
+    { path = "f32::atan", reason = "platform trig; use op_kernel::dmath" },
+    { path = "f32::atan2", reason = "platform trig; use op_kernel::dmath" },
+    { path = "f32::sinh", reason = "platform transcendental; use op_kernel::dmath" },
+    { path = "f32::cosh", reason = "platform transcendental; use op_kernel::dmath" },
+    { path = "f32::tanh", reason = "platform transcendental; use op_kernel::dmath" },
+    { path = "f32::exp", reason = "platform transcendental; use op_kernel::dmath" },
+    { path = "f32::exp2", reason = "platform transcendental; use op_kernel::dmath" },
+    { path = "f32::exp_m1", reason = "platform transcendental; use op_kernel::dmath" },
+    { path = "f32::ln", reason = "platform transcendental; use op_kernel::dmath" },
+    { path = "f32::ln_1p", reason = "platform transcendental; use op_kernel::dmath" },
+    { path = "f32::log", reason = "platform transcendental; use op_kernel::dmath" },
+    { path = "f32::log2", reason = "platform transcendental; use op_kernel::dmath" },
+    { path = "f32::log10", reason = "platform transcendental; use op_kernel::dmath" },
+    { path = "f32::powf", reason = "platform transcendental; use op_kernel::dmath" },
+    { path = "f32::powi", reason = "rounding sequence is unspecified across targets; use op_kernel::dmath" },
+    { path = "f32::cbrt", reason = "platform transcendental; use op_kernel::dmath" },
+    { path = "f32::hypot", reason = "platform transcendental; use op_kernel::dmath" },
+    { path = "f64::sin", reason = "platform trig; use op_kernel::dmath" },
+    { path = "f64::cos", reason = "platform trig; use op_kernel::dmath" },
+    { path = "f64::tan", reason = "platform trig; use op_kernel::dmath" },
+    { path = "f64::sin_cos", reason = "platform trig; use op_kernel::dmath" },
+    { path = "f64::asin", reason = "platform trig; use op_kernel::dmath" },
+    { path = "f64::acos", reason = "platform trig; use op_kernel::dmath" },
+    { path = "f64::atan", reason = "platform trig; use op_kernel::dmath" },
+    { path = "f64::atan2", reason = "platform trig; use op_kernel::dmath" },
+    { path = "f64::sinh", reason = "platform transcendental; use op_kernel::dmath" },
+    { path = "f64::cosh", reason = "platform transcendental; use op_kernel::dmath" },
+    { path = "f64::tanh", reason = "platform transcendental; use op_kernel::dmath" },
+    { path = "f64::exp", reason = "platform transcendental; use op_kernel::dmath" },
+    { path = "f64::exp2", reason = "platform transcendental; use op_kernel::dmath" },
+    { path = "f64::exp_m1", reason = "platform transcendental; use op_kernel::dmath" },
+    { path = "f64::ln", reason = "platform transcendental; use op_kernel::dmath" },
+    { path = "f64::ln_1p", reason = "platform transcendental; use op_kernel::dmath" },
+    { path = "f64::log", reason = "platform transcendental; use op_kernel::dmath" },
+    { path = "f64::log2", reason = "platform transcendental; use op_kernel::dmath" },
+    { path = "f64::log10", reason = "platform transcendental; use op_kernel::dmath" },
+    { path = "f64::powf", reason = "platform transcendental; use op_kernel::dmath" },
+    { path = "f64::powi", reason = "rounding sequence is unspecified across targets; use op_kernel::dmath" },
+    { path = "f64::cbrt", reason = "platform transcendental; use op_kernel::dmath" },
+    { path = "f64::hypot", reason = "platform transcendental; use op_kernel::dmath" },
+]
