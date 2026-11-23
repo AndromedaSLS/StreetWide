@@ -16,8 +16,8 @@ instead.
 |---|---|---|
 | [0001](0001-licensing.md) | Licensing of code, content and data | Accepted |
 | [0002](0002-crate-layout-and-dependency-direction.md) | Crate layout and dependency direction | Accepted |
-| [0003](0003-determinism-strategy.md) | Determinism strategy | Proposed |
-| [0004](0004-physics-and-character-controller.md) | Physics engine and character controller | Proposed |
+| [0003](0003-determinism-strategy.md) | Determinism strategy | Accepted |
+| [0004](0004-physics-and-character-controller.md) | Physics engine and character controller | Accepted |
 | [0005](0005-toolchain-and-engine-pinning.md) | Toolchain and engine pinning | Accepted |
 | [0006](0006-ingest-pipeline-and-data-sources.md) | Ingest pipeline and data sources | Accepted |
-| [0007](0007-replay-file-format.md) | Replay file format | Proposed |
+| [0007](0007-replay-file-format.md) | Replay file format | Accepted |

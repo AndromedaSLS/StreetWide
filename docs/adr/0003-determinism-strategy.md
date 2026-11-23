@@ -1,6 +1,6 @@
 # ADR-0003: Make the simulation bit-identical on every platform
 
-- **Status:** Proposed (stage 4 checkpoint)
+- **Status:** Accepted (2026-11-23, stage 4 checkpoint)
 - **Date:** 2026-11-23
 - **Deciders:** @victorpicaud
 - **Supersedes / superseded by:** none

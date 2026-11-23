@@ -62,7 +62,7 @@ You need:
 - Python 3.11+ for the tools.
 
 ```sh
-cargo run -p op_client                      # the client (an empty window for now)
+cargo run -p op_client                      # walk the world (see below)
 cargo test --workspace                      # tests
 cargo fmt --check && cargo clippy --workspace --all-targets -- -D warnings
 cargo run -p op_replay -- check fixtures/replays/sample.oprep   # determinism check
@@ -95,7 +95,34 @@ Switzerland: `python -m tools.ingest --bbox minlon,minlat,maxlon,maxlat --name m
 Run `python -m tools.ingest --help` for the options (`--offline` uses only
 cached data; `STREETWIDE_CACHE` moves the cache).
 
-Instructions for walking the district will be added in stage 5.
+### Walking the district
+
+```sh
+cargo run --release -p op_client
+```
+
+The client opens `data/world/zurich-altstadt` if you have built it, or the
+one-tile fixture otherwise (`--world <dir>` picks another world). In the
+district you start on the Lindenhof, looking east over the Limmat; in the
+fixture, on the Grossmünsterplatz.
+
+| Key | Action |
+|---|---|
+| Click | Capture the mouse (Esc releases it) |
+| Mouse | Look around |
+| W A S D | Walk |
+| Shift | Sprint |
+| Space | Jump |
+| F9 | Save a replay of the session so far to `replays/` |
+| R | Restart at the spawn point |
+
+The simulation runs at a fixed 60 Hz, independent of the frame rate. A
+saved replay can be checked and watched:
+
+```sh
+cargo run -p op_replay -- check replays/<file>.oprep     # same hashes as when you played
+cargo run --release -p op_client -- --replay replays/<file>.oprep
+```
 
 ## Contributing
 

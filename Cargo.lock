@@ -4548,6 +4548,11 @@ name = "op_client"
 version = "0.1.0"
 dependencies = [
  "bevy",
+ "op_kernel",
+ "op_replay",
+ "op_sim",
+ "op_stream",
+ "op_world",
 ]
 
 [[package]]

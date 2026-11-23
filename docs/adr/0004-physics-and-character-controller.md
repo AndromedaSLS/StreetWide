@@ -1,6 +1,6 @@
 # ADR-0004: Use Rapier's kinematic character controller directly in op_sim
 
-- **Status:** Proposed (stage 4 checkpoint)
+- **Status:** Accepted (2026-11-23, stage 4 checkpoint)
 - **Date:** 2026-11-23
 - **Deciders:** @victorpicaud
 - **Supersedes / superseded by:** none

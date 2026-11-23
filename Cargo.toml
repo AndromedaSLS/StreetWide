@@ -22,6 +22,7 @@ publish = false
 # Workspace crates. Which crate may depend on which is fixed by ADR-0002 and
 # checked in CI by tools/ci/check_deps.py against tools/ci/deps-policy.toml.
 op_kernel = { path = "crates/op_kernel" }
+op_replay = { path = "crates/op_replay" }
 op_sim = { path = "crates/op_sim" }
 op_stream = { path = "crates/op_stream" }
 op_world = { path = "crates/op_world" }

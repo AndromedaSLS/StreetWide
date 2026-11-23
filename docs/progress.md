@@ -9,8 +9,8 @@ ending at a checkpoint where the checks are run and the result is reviewed.
 | 1 | Scaffold: workspace, licences, community docs, CI | ✅ done 2026-11-22, CI green |
 | 2 | World format: JSON Schemas, `op_world`, RFC 0001 | ✅ done 2026-11-23, CI green |
 | 3 | Ingest: swisstopo + OSM → world tiles, one fixture tile | ✅ done 2026-11-23, CI green |
-| 4 | Kernel, simulation, replay: 60 Hz, Rapier capsule, state hashes, replay CLI | ✅ checkpoint reached 2026-11-23 (CI pending) |
-| 5 | Client and streaming: Bevy first-person walking, replay recording | not started |
+| 4 | Kernel, simulation, replay: 60 Hz, Rapier capsule, state hashes, replay CLI | ✅ done 2026-11-23, CI green on 3 platforms |
+| 5 | Client and streaming: Bevy first-person walking, replay recording | ✅ checkpoint reached 2026-11-23 (your walk test pending) |
 | 6 | Docs and review: ADRs, README run guide, good-first-issues | not started |
 
 District bounding box (WGS84): `8.5377,47.3687,8.5507,47.3774`
@@ -285,12 +285,91 @@ one swissBUILDINGS3D sheet (1091-41) and one swissALTI3D tile (2683-1247).
 | `op_replay synth` regenerates the sample | byte-identical |
 | A changed input at tick 701 | caught at checkpoint 720 |
 | `python tools/ci/check_deps.py` | pass |
+| GitHub Actions CI on `main` (commit `bc3a8bb`) | all 10 jobs green; `op_replay check` gives final state `a1580200…fdad2` on Linux x86_64, Windows x86_64 and macOS arm64, twice in debug and once in release each ([run 45151989757](https://github.com/AndromedaSLS/StreetWide/actions/runs/45151989757)) |
 
 **Open items**
 
-- The stage 4 checkpoint ("the fixture replay gives the same hash on two
-  runs, in CI") is confirmed when CI on Linux, Windows and macOS arm64 is
-  green after the push.
+- ADR-0003, ADR-0004 and ADR-0007 were accepted with the go-ahead for this
+  checkpoint.
 - Known physics limitation (ADR-0004): pushing into an unclimbable concave
   corner can make the capsule oscillate by about 2 cm from tick to tick.
   It is deterministic; a good-first-issue candidate.
+
+---
+
+## Stage 5: client and streaming (2026-11-23)
+
+**Done**
+
+- `op_stream`:
+  - `WorldIndex`: the world manifest and all tile indexes, plus mesh
+    decoding.
+  - `Streamer`: a pool of 4 loader threads filling an LRU cache of decoded
+    meshes (768 MB budget in the client).
+  - `StreamSource`: the simulation's view of the streamer. It answers
+    `Pending` while a mesh loads, so the simulation stalls instead of
+    guessing.
+  - Rendering and physics read the same cache, so they share one loading
+    path.
+- `op_client` (Bevy 0.20.1):
+  - **Simulation:** `op_sim` runs in `FixedUpdate` at exactly 60 Hz. Input
+    is sampled every frame and latched for the next tick; a jump pressed
+    between ticks is kept until a tick uses it.
+  - **Camera:** it interpolates between the last two simulated positions.
+    Mouse look is applied every frame at full precision; the simulation
+    gets the heading quantised to 1/65536 turn.
+  - **Streaming:** meshes within 600 m of the camera are loaded nearest
+    first and unloaded beyond 700 m.
+  - **Look:** palette materials (drawn double-sided), an afternoon sun
+    with cascaded shadows, ambient light, sky colour and distance fog.
+  - **HUD:**
+    - the world's credits, always shown ("© OpenStreetMap contributors ·
+      © swisstopo"), in a system font with those glyphs;
+    - status and controls help;
+    - "Loading…" while the simulation is stalled.
+  - **Controls:** click to capture the mouse, WASD, Shift sprint, Space
+    jump; F9 saves a replay of the session; R restarts at the spawn point;
+    Esc releases the mouse.
+  - **Options:**
+    - `--world`, `--seed`;
+    - `--replay <file>` plays a replay back in the client and checks every
+      checkpoint;
+    - `--exit-when-done` and `--screenshot <png> [--screenshot-tick <n>]`
+      for scripted runs.
+- README: how to walk the district and check or watch replays.
+
+**Checks** (local, Windows 11 x86_64, RTX 3070)
+
+| Check | Result |
+|---|---|
+| fmt, clippy `-D warnings` (Bevy client included) | pass |
+| `cargo test --workspace --locked` | 59 passed (3 new) |
+| `python -m pytest` | 80 passed |
+| Sample replay through `StreamSource` (2 loader threads, 64 KB cache forcing evictions, stalls) | same 20 checkpoints as recorded |
+| A live client session (streaming, stalls, latched jumps, turning, sprint) saved the F9 way, then `op_replay check` | match |
+| `op_client --replay fixtures/replays/sample.oprep --exit-when-done` | real-time playback in the window, every checkpoint matches, exit code 0 |
+| Same with `--release` (4.5 min build) | every checkpoint matches, exit code 0 |
+| `op_client` on `data/world/zurich-altstadt` | Lindenhof view east over the old town; 1,355 meshes streamed within 600 m, 296 colliders; credits rendered with © |
+| `op_replay check fixtures/replays/sample.oprep` (twice) | match |
+| `python tools/ci/check_deps.py` | pass |
+
+**Changes from the plan**
+
+- **F9 saves rather than toggles.** It saves the session from its start to
+  now, instead of starting and stopping a recording. A replay must begin
+  from a fresh simulation at a spawn point, and recording that way means
+  you never lose what just happened. R starts a fresh session.
+- **Credit font.** Bevy's built-in font has no `©`, so the client loads a
+  common system font (Segoe UI, Arial, DejaVu Sans or Noto Sans). If none
+  is found, it writes "(c)".
+
+**Open items**
+
+- Checkpoint: you walk the district and record a replay
+  (`cargo run --release -p op_client`, then F9; then
+  `cargo run -p op_replay -- check replays/<file>.oprep`).
+- **Known gaps** (stage 6 good-first-issue drafts):
+  - no water surface;
+  - you can walk off the edge of the built area and fall (R restarts);
+  - no levels of detail beyond 600 m;
+  - the corner jitter noted in ADR-0004.

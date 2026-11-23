@@ -1,6 +1,6 @@
 # ADR-0007: Record replays as inputs plus a hash trail (`.oprep`)
 
-- **Status:** Proposed (stage 4 checkpoint)
+- **Status:** Accepted (2026-11-23, stage 4 checkpoint)
 - **Date:** 2026-11-23
 - **Deciders:** @victorpicaud
 - **Supersedes / superseded by:** none

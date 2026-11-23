@@ -41,8 +41,9 @@ pub struct StepContext<'a> {
     pub rng: &'a mut Rng,
 }
 
-/// A part of the simulation.
-pub trait Module: Any {
+/// A part of the simulation. `Send + Sync` so hosts (such as the Bevy
+/// client) can keep the simulation in shared resources.
+pub trait Module: Any + Send + Sync {
     /// Stable name, hashed into the state (so renaming changes hashes).
     fn name(&self) -> &'static str;
 
