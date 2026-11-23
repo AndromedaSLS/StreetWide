@@ -71,21 +71,45 @@ The email must match the commit's author email. CI rejects pull requests
 with unsigned commits. To fix a branch, run
 `git rebase --signoff origin/main` and force-push.
 
+## Where to start
+
+[docs/issues/](docs/issues/) has ready-to-pick issue drafts for newcomers,
+each with what to do and when it is done. The README's
+[Getting started](README.md#getting-started) gets you from a fresh clone to
+walking the Zurich district.
+
 ## Before you open a pull request
 
-Run the same checks as CI:
+Run the same checks as CI (with the virtual environment from the README;
+on Windows use `.venv\Scripts\python`):
 
 ```sh
 cargo fmt --check
 cargo clippy --workspace --all-targets -- -D warnings
 cargo test --workspace
-python -m pip install -r tools/requirements.txt   # once, ideally in a venv
-python tools/ci/check_deps.py          # dependency direction (needs Python 3.11+)
-python -m pytest                       # tests for the Python tools
+cargo run -p op_replay -- check fixtures/replays/sample.oprep   # determinism
+.venv/bin/python tools/ci/check_deps.py     # dependency direction
+.venv/bin/python -m pytest                  # Python tools and ingest
 ```
 
 If you change a `.glb` fixture, also run the Khronos glTF validator:
 `cd tools/ci/gltf && npm ci --ignore-scripts && npm run check`.
+
+## When your change alters simulation results
+
+Any change that alters a state hash (physics parameters, module order, the
+state hash encoding, input handling) is a new simulation contract:
+
+1. Bump `SIM_CONTRACT_VERSION` in `crates/op_sim/src/lib.rs`.
+2. Re-record the sample replay with `cargo run -p op_replay -- synth`, and
+   check that the walk still covers what it should (the test
+   `the_sample_regenerates_byte_for_byte_and_covers_the_script` says what).
+3. Explain in the commit message why hashes changed.
+
+Never edit a recorded hash, golden digest or pinned value just to make a
+test pass. If a determinism test fails, find the cause first.
+[fixtures/README.md](fixtures/README.md) lists every fixture and how to
+regenerate it on purpose.
 
 Keep pull requests focused, explain *why* in the description, and update
 [docs/progress.md](docs/progress.md) when you complete a milestone.

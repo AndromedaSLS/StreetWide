@@ -42,69 +42,89 @@ better.
 | `tools/worldfmt` | Python implementation of the world format, byte-compatible with `op_world` |
 | `tools/ci` | CI helpers: dependency-direction, DCO and glTF checks |
 | `docs/adr`, `rfcs/` | Architecture decision records and RFCs |
+| `docs/issues` | Ready-to-file issue drafts for newcomers |
+| `docs/progress.md` | What has been built, checkpoint by checkpoint |
 
 Dependencies point inward: `op_sim` depends only on `op_kernel`, nothing
 depends on `op_client`, and only `op_client` may use Bevy. CI enforces this
 ([ADR-0002](docs/adr/0002-crate-layout-and-dependency-direction.md)).
 
-## Building
+## Getting started
 
-You need:
+From a fresh clone to walking the Zurich old town takes five steps. The
+first builds and downloads take a while (see the times below); later runs
+are fast.
 
-- Rust via [rustup](https://rustup.rs). The pinned toolchain in
-  `rust-toolchain.toml` installs automatically on the first `cargo` command.
-- On Windows: Visual Studio Build Tools with the "Desktop development with
-  C++" workload.
-- On Linux: Bevy's system packages
-  ([list](https://github.com/bevyengine/bevy/blob/main/docs/linux_dependencies.md)),
-  e.g. on Debian/Ubuntu
-  `sudo apt-get install g++ pkg-config libx11-dev libasound2-dev libudev-dev libxkbcommon-x11-0 libwayland-dev libxkbcommon-dev`.
-- Python 3.11+ for the tools.
+### 1. Install the prerequisites
+
+| | Windows | macOS | Linux |
+|---|---|---|---|
+| Git | [git-scm.com](https://git-scm.com) | `xcode-select --install` | your package manager |
+| Rust | [rustup](https://rustup.rs) | [rustup](https://rustup.rs) | [rustup](https://rustup.rs) |
+| C/C++ build tools | Visual Studio Build Tools, workload "Desktop development with C++" | `xcode-select --install` | `sudo apt-get install g++ pkg-config libx11-dev libasound2-dev libudev-dev libxkbcommon-x11-0 libwayland-dev libxkbcommon-dev` (Debian/Ubuntu; [other distributions](https://github.com/bevyengine/bevy/blob/main/docs/linux_dependencies.md)) |
+| Python 3.11 or newer | [python.org](https://www.python.org) (gives the `py` launcher) | [python.org](https://www.python.org) or Homebrew | your package manager (`python3`, `python3-venv`) |
+
+You also need:
+- **A GPU** with Vulkan, DirectX 12 or Metal.
+- **About 8 GB of free disk:** Rust build output plus about 330 MB of data.
+- **An internet connection** for the first build and data download.
+
+You don't need to pick a Rust version: `rust-toolchain.toml` pins it, and
+`cargo` installs it on first use.
+
+### 2. Get the code and run the determinism check
 
 ```sh
-cargo run -p op_client                      # walk the world (see below)
-cargo test --workspace                      # tests
-cargo fmt --check && cargo clippy --workspace --all-targets -- -D warnings
-cargo run -p op_replay -- check fixtures/replays/sample.oprep   # determinism check
+git clone https://github.com/AndromedaSLS/StreetWide.git
+cd StreetWide
+cargo run -p op_replay -- check fixtures/replays/sample.oprep
 ```
 
-`op_replay check` replays a recorded walk through the Grossmünster tile
-and verifies that the simulation reproduces every recorded state hash
-([ADR-0003](docs/adr/0003-determinism-strategy.md),
-[ADR-0007](docs/adr/0007-replay-file-format.md)). `op_replay info`,
-`trace` and `run` show a replay's header, the player's path and the final
-state hash.
+The first `cargo` command downloads the toolchain and dependencies and
+compiles them, which takes a few minutes. It should end with
+`ok: 1200 ticks, 20 checkpoints match, final state a1580200…`: the
+simulation reproduced a recorded 20-second walk bit for bit
+([ADR-0003](docs/adr/0003-determinism-strategy.md)).
 
-### Building the Zurich district from open data
+### 3. Build the Zurich district from open data
 
-The ingest downloads about 275 MB (one swissBUILDINGS3D sheet, one
-swissALTI3D tile and one OpenStreetMap query) into `data/cache/`, then
-writes the world to `data/world/zurich-altstadt/` (about 50 MB). Nothing
-there is committed. A first run takes about 4 minutes; later runs reuse the
-cache.
+The ingest:
+- downloads about 275 MB into `data/cache/`: one swissBUILDINGS3D sheet,
+  one swissALTI3D tile and one OpenStreetMap query;
+- builds the world in `data/world/zurich-altstadt/`, about 50 MB.
+
+Nothing in `data/` is committed. It takes 4 to 5 minutes the first time.
+
+Linux and macOS:
 
 ```sh
-python -m venv .venv
-.venv/bin/pip install -r tools/requirements.txt       # Windows: .venv\Scripts\pip
+python3 -m venv .venv
+.venv/bin/pip install -r tools/requirements.txt
 .venv/bin/python -m tools.ingest --world zurich-altstadt
-cargo run -p op_world -- validate data/world/zurich-altstadt
 ```
 
-Any other area works too, as long as it lies in one z12 region in
-Switzerland: `python -m tools.ingest --bbox minlon,minlat,maxlon,maxlat --name my-area`.
-Run `python -m tools.ingest --help` for the options (`--offline` uses only
-cached data; `STREETWIDE_CACHE` moves the cache).
+Windows (PowerShell):
 
-### Walking the district
+```powershell
+py -m venv .venv
+.venv\Scripts\pip install -r tools\requirements.txt
+.venv\Scripts\python -m tools.ingest --world zurich-altstadt
+```
+
+It ends by printing the new world's id. Optionally, check the result with
+the Rust reference implementation:
+`cargo run -p op_world -- validate data/world/zurich-altstadt`.
+
+### 4. Walk the district
 
 ```sh
 cargo run --release -p op_client
 ```
 
-The client opens `data/world/zurich-altstadt` if you have built it, or the
-one-tile fixture otherwise (`--world <dir>` picks another world). In the
-district you start on the Lindenhof, looking east over the Limmat; in the
-fixture, on the Grossmünsterplatz.
+The first release build takes about 5 minutes. You start on the Lindenhof,
+looking east over the Limmat. Without step 3, the client opens the one-tile
+test fixture by the Grossmünster instead. `--world <dir>` picks any other
+world.
 
 | Key | Action |
 |---|---|
@@ -116,13 +136,59 @@ fixture, on the Grossmünsterplatz.
 | F9 | Save a replay of the session so far to `replays/` |
 | R | Restart at the spawn point |
 
-The simulation runs at a fixed 60 Hz, independent of the frame rate. A
-saved replay can be checked and watched:
+The simulation runs at a fixed 60 Hz, whatever your frame rate. Buildings
+and terrain stream in around you; "Loading…" means the simulation is waiting
+for geometry it needs.
+
+### 5. Check and watch your replay
 
 ```sh
-cargo run -p op_replay -- check replays/<file>.oprep     # same hashes as when you played
+cargo run -p op_replay -- check replays/<file>.oprep           # must say "ok"
 cargo run --release -p op_client -- --replay replays/<file>.oprep
 ```
+
+`op_replay info`, `trace` and `run` show a replay's header, the player's
+path and the final state hash
+([ADR-0007](docs/adr/0007-replay-file-format.md)).
+
+### Other areas
+
+Any area inside one z12 map region in Switzerland works:
+
+```sh
+.venv/bin/python -m tools.ingest --bbox <minlon,minlat,maxlon,maxlat> --name <my-area>
+cargo run --release -p op_client -- --world data/world/<my-area>
+```
+
+`python -m tools.ingest --help` lists the options:
+- `--offline` uses only cached data;
+- `--refresh` re-queries the data catalogues;
+- the `STREETWIDE_CACHE` environment variable moves the cache.
+
+### Development checks
+
+```sh
+cargo fmt --check && cargo clippy --workspace --all-targets -- -D warnings
+cargo test --workspace
+.venv/bin/python -m pytest          # Windows: .venv\Scripts\python -m pytest
+```
+
+[CONTRIBUTING.md](CONTRIBUTING.md) has the full list and the rules.
+
+## Troubleshooting
+
+| Problem | What to do |
+|---|---|
+| Windows: `linker 'link.exe' not found` | Install Visual Studio Build Tools with the "Desktop development with C++" workload, then open a new terminal. |
+| Linux: build errors mentioning `alsa`, `libudev` or `pkg-config` | Install the system packages from step 1. |
+| `python` is not found, or is older than 3.11 | Use `python3` (Linux, macOS) or `py` (Windows). Check with `python3 --version` or `py --version`. |
+| Ingest: `Overpass error`, HTTP 429 or a timeout | The public OpenStreetMap server is busy. Wait a minute and run the same command again; finished downloads are cached and reused. |
+| Ingest: `no ... data covers` | The area is outside Switzerland or outside the data's coverage. |
+| Ingest: a checksum mismatch for a cached file | Delete that file under `data/cache/` and run again. |
+| The client window stays black or closes at start | Update your GPU driver. Selecting a graphics backend explicitly can help, e.g. `WGPU_BACKEND=vulkan` (or `dx12`, `metal`). |
+| You fell off the edge of the world | The built area ends at its bounding box. Press R. |
+| `op_replay check`: `world ... not found` | The replay was recorded in a world that is not on this machine. Build it, or pass `--world <dir>`. |
+| `op_replay check`: `recorded with simulation contract ...` | The replay comes from a different simulation version. Record a new one. |
 
 ## Contributing
 
