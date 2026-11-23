@@ -65,7 +65,15 @@ You need:
 cargo run -p op_client                      # the client (an empty window for now)
 cargo test --workspace                      # tests
 cargo fmt --check && cargo clippy --workspace --all-targets -- -D warnings
+cargo run -p op_replay -- check fixtures/replays/sample.oprep   # determinism check
 ```
+
+`op_replay check` replays a recorded walk through the Grossmünster tile
+and verifies that the simulation reproduces every recorded state hash
+([ADR-0003](docs/adr/0003-determinism-strategy.md),
+[ADR-0007](docs/adr/0007-replay-file-format.md)). `op_replay info`,
+`trace` and `run` show a replay's header, the player's path and the final
+state hash.
 
 ### Building the Zurich district from open data
 

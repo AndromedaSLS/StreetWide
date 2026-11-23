@@ -15,6 +15,7 @@ _BY_FORMAT = {
     "streetwide.asset": "asset-manifest.schema.json",
     "streetwide.tile": "tile-index.schema.json",
     "streetwide.world": "world-manifest.schema.json",
+    "streetwide.replay": "replay-header.schema.json",
 }
 
 

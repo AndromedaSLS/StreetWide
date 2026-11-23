@@ -1,6 +1,6 @@
 # ADR-0006: Build the baseline world with a Python ingest from swisstopo and OpenStreetMap
 
-- **Status:** Proposed (stage 3 checkpoint)
+- **Status:** Accepted (2026-11-23, stage 3 checkpoint)
 - **Date:** 2026-11-23
 - **Deciders:** @victorpicaud
 - **Supersedes / superseded by:** none

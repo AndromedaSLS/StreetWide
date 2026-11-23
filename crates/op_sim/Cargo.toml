@@ -10,10 +10,7 @@ authors.workspace = true
 publish.workspace = true
 
 [dependencies]
-
-[dev-dependencies]
-# Stage 1 canary: proves the pinned Rapier builds with `enhanced-determinism`
-# on every CI platform. Becomes a normal dependency in stage 4.
+op_kernel.workspace = true
 rapier3d.workspace = true
 
 [lints]

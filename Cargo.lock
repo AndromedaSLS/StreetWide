@@ -4553,21 +4553,39 @@ dependencies = [
 [[package]]
 name = "op_kernel"
 version = "0.1.0"
+dependencies = [
+ "blake3",
+ "libm",
+]
 
 [[package]]
 name = "op_replay"
 version = "0.1.0"
+dependencies = [
+ "jsonschema",
+ "op_kernel",
+ "op_sim",
+ "op_stream",
+ "op_world",
+ "serde",
+ "serde_json",
+]
 
 [[package]]
 name = "op_sim"
 version = "0.1.0"
 dependencies = [
+ "op_kernel",
  "rapier3d",
 ]
 
 [[package]]
 name = "op_stream"
 version = "0.1.0"
+dependencies = [
+ "op_kernel",
+ "op_world",
+]
 
 [[package]]
 name = "op_world"

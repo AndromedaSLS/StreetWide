@@ -7,6 +7,7 @@ stay byte-exact (`.gitattributes` turns off line-ending conversion there).
 | Fixture | What | Checked by | Regenerate with |
 |---|---|---|---|
 | `format/` | The world-format golden fixture: a tiny fictional world (one house, one ground plate) with pinned ids in `expected.json` | `op_world` tests, `tools/worldfmt` tests, CI on Linux, Windows and macOS | `cargo run -p op_world --example make_format_fixtures -- fixtures/format` |
+| `replays/sample.oprep` | A 20 s scripted walk in `world/`: lands, runs into a wall, jumps, climbs a lane. Its hash trail must reproduce on every platform | `op_replay` tests, `op_replay check` in CI on Linux, Windows and macOS (debug and release) | `cargo run -p op_replay -- synth` |
 | `world/` | The ingest fixture: tile 17/68646/45903 of the Zurich old town (Grossmünster, Münsterbrücke, the Limmat), cut to the `zurich-altstadt` bbox. It holds 44 assets: terrain, 33 building shells, the ribbons of the tile and 9 bridge decks | `op_world validate` and the `ingest_fixture` test (Rust), `tools/ingest/tests/test_fixture_world.py`, the Khronos glTF validator | `python -m tools.ingest --world fixture-grossmuenster --out fixtures/world` |
 
 Regenerate only on purpose, and say why in the commit. The ingest fixture

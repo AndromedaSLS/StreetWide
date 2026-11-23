@@ -19,9 +19,16 @@ authors = ["The StreetWide contributors"]
 publish = false
 
 [workspace.dependencies]
-# Workspace crates are added here as they start depending on each other.
-# Which crate may depend on which is fixed by ADR-0002 and checked in CI by
-# tools/ci/check_deps.py against tools/ci/deps-policy.toml.
+# Workspace crates. Which crate may depend on which is fixed by ADR-0002 and
+# checked in CI by tools/ci/check_deps.py against tools/ci/deps-policy.toml.
+op_kernel = { path = "crates/op_kernel" }
+op_sim = { path = "crates/op_sim" }
+op_stream = { path = "crates/op_stream" }
+op_world = { path = "crates/op_world" }
+
+# Deterministic transcendental functions (pure Rust, identical on every
+# platform). Simulation code calls them through op_kernel::dmath (ADR-0003).
+libm = "0.2.16"
 
 # World format (RFC 0001). Never enable serde_json's `preserve_order` or
 # `arbitrary_precision`: canonical JSON relies on plain integers.

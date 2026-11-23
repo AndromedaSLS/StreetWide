@@ -59,10 +59,10 @@ jobs:
       - run: cargo test --workspace --locked
 
   determinism:
-    # Cross-platform determinism: the Rapier canary (golden digest) and the
-    # world-format golden ids must be identical on every OS. Stage 4 adds
-    # `op_replay check` on the fixture replay. Never weaken or skip this job
-    # to get CI green (CLAUDE.md); find the cause.
+    # Cross-platform determinism: the Rapier canary (golden digest), the
+    # world-format golden ids and the fixture replay's hash trail must be
+    # identical on every OS (x86_64 Linux and Windows, arm64 macOS). Never
+    # weaken or skip this job to get CI green (CLAUDE.md); find the cause.
     name: determinism (${{ matrix.os }})
     strategy:
       fail-fast: false
@@ -85,6 +85,16 @@ jobs:
         run: cargo run -p op_world --locked -- validate fixtures/format/world
       - name: Validate the ingest fixture world
         run: cargo run -p op_world --locked -- validate fixtures/world
+      - name: Kernel, simulation and replay tests (pinned bits, sample replay)
+        run: cargo test -p op_kernel -p op_sim -p op_stream -p op_replay --locked
+      # The replay check runs twice, in separate processes, and once more in
+      # release: every run must reproduce all recorded checkpoints.
+      - name: Replay check (debug, run 1)
+        run: cargo run -p op_replay --locked -- check fixtures/replays/sample.oprep
+      - name: Replay check (debug, run 2)
+        run: cargo run -p op_replay --locked -- check fixtures/replays/sample.oprep
+      - name: Replay check (release)
+        run: cargo run -p op_replay --locked --release -- check fixtures/replays/sample.oprep
 
   python:
     name: python tools

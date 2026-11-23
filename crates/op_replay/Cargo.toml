@@ -10,6 +10,15 @@ authors.workspace = true
 publish.workspace = true
 
 [dependencies]
+op_kernel.workspace = true
+op_sim.workspace = true
+op_stream.workspace = true
+op_world.workspace = true
+serde.workspace = true
+
+[dev-dependencies]
+jsonschema.workspace = true
+serde_json.workspace = true
 
 [lints]
 workspace = true

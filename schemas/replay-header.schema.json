@@ -1,0 +1,41 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "urn:streetwide:schema:replay-header:0.1",
+  "title": "StreetWide replay header (replay contract 0.1)",
+  "description": "The canonical-JSON header inside a .oprep replay file: what the replay was recorded with. See docs/adr/0007-replay-file-format.md. The binary layout around it (inputs, checkpoints) is checked by op_replay.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "checkpoint_interval", "contract_version", "format", "recorder", "seed",
+    "sim_contract_version", "spawn", "tick_hz", "ticks", "world_id", "world_name"
+  ],
+  "properties": {
+    "format": { "const": "streetwide.replay" },
+    "contract_version": { "const": "0.1.0" },
+    "sim_contract_version": { "$ref": "urn:streetwide:schema:common:0.1#/$defs/text" },
+    "world_id": { "$ref": "urn:streetwide:schema:common:0.1#/$defs/contentId" },
+    "world_name": { "type": "string", "maxLength": 64, "pattern": "^[a-z0-9]+(-[a-z0-9]+)*$" },
+    "seed": { "type": "integer", "minimum": 0, "maximum": 9007199254740991 },
+    "spawn": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["position_mm", "yaw"],
+      "properties": {
+        "position_mm": { "$ref": "urn:streetwide:schema:common:0.1#/$defs/vec3mm" },
+        "yaw": { "type": "integer", "minimum": 0, "maximum": 65535 }
+      }
+    },
+    "tick_hz": { "const": 60 },
+    "ticks": { "type": "integer", "minimum": 1, "maximum": 5184000 },
+    "checkpoint_interval": { "type": "integer", "minimum": 1, "maximum": 3600 },
+    "recorder": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["name", "version"],
+      "properties": {
+        "name": { "$ref": "urn:streetwide:schema:common:0.1#/$defs/text" },
+        "version": { "$ref": "urn:streetwide:schema:common:0.1#/$defs/text" }
+      }
+    }
+  }
+}

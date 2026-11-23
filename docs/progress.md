@@ -8,8 +8,8 @@ ending at a checkpoint where the checks are run and the result is reviewed.
 |---|---|---|
 | 1 | Scaffold: workspace, licences, community docs, CI | ✅ done 2026-11-22, CI green |
 | 2 | World format: JSON Schemas, `op_world`, RFC 0001 | ✅ done 2026-11-23, CI green |
-| 3 | Ingest: swisstopo + OSM → world tiles, one fixture tile | ✅ checkpoint reached 2026-11-23 |
-| 4 | Kernel, simulation, replay: 60 Hz, Rapier capsule, state hashes, replay CLI | not started |
+| 3 | Ingest: swisstopo + OSM → world tiles, one fixture tile | ✅ done 2026-11-23, CI green |
+| 4 | Kernel, simulation, replay: 60 Hz, Rapier capsule, state hashes, replay CLI | ✅ checkpoint reached 2026-11-23 (CI pending) |
 | 5 | Client and streaming: Bevy first-person walking, replay recording | not started |
 | 6 | Docs and review: ADRs, README run guide, good-first-issues | not started |
 
@@ -213,11 +213,11 @@ one swissBUILDINGS3D sheet (1091-41) and one swissALTI3D tile (2683-1247).
 | Fixture regenerated from cache (`--offline`) | byte-identical to `fixtures/world` |
 | Downloads | SHA-256 match swisstopo's published checksums |
 | `python tools/ci/check_deps.py` | pass |
+| GitHub Actions CI on `main` (commit `59362ca`) | all 10 jobs green, incl. the Python ingest tests on Linux and the ingest fixture on Linux, Windows and macOS arm64 ([run 45142654990](https://github.com/AndromedaSLS/StreetWide/actions/runs/45142654990)) |
 
 **Open items**
 
-- ADR-0006 is *Proposed*; it becomes *Accepted* with this checkpoint's
-  go-ahead.
+- ADR-0006 was accepted with the go-ahead for this checkpoint.
 - Known gaps for good-first-issue drafts (stage 6):
   - no water surface (the Limmat is walkable terrain at water level);
   - squares mapped as areas are not drawn;
@@ -227,3 +227,70 @@ one swissBUILDINGS3D sheet (1091-41) and one swissALTI3D tile (2683-1247).
   rebuilt), so it is absent; the temporary bridge next to it is present.
 - Ingest output is reproducible on one platform. Across platforms, libm,
   PROJ or GEOS differences could in rare cases move a vertex by 1 mm.
+
+---
+
+## Stage 4: kernel, simulation, replay (2026-11-23)
+
+**Done**
+
+- `op_kernel` (Bevy-free, no workspace dependencies):
+  - `Module` trait and a fixed-order `Schedule`. Each tick prepares, then
+    steps. A tick whose geometry is still loading stalls without changing
+    anything.
+  - `PlayerInput`: quantised, an 8-byte record.
+  - BLAKE3 `StateHasher` (`streetwide.state.v1`).
+  - Seeded `Rng` (xoshiro256** via SplitMix64).
+  - `dmath` on libm.
+  - The `GeometrySource` contract, in integer millimetres in a sim frame
+    whose integer origin is at the spawn point.
+- `op_sim`:
+  - `Sim` with the `PlayerPhysics` module: Rapier 0.36
+    `KinematicCharacterController` on a 0.3 × 1.8 m capsule.
+  - Walk 1.4 m/s, sprint 4 m/s, jump about 0.6 m, autostep 0.3 m, 45°
+    slopes, snap to ground.
+  - Colliders within 160 m are added and removed in key order.
+  - `SIM_CONTRACT_VERSION` 0.1.0.
+- `op_stream`: `StoreSource`, the collision geometry of a world store with
+  exact millimetre conversion (synchronous; stage 5 adds background
+  loading).
+- `op_replay`:
+  - **`.oprep` format:** canonical-JSON header, 8-byte inputs, a
+    checkpoint every 60 ticks and at the end. Strict reader.
+  - **`schemas/replay-header.schema.json`**, the schema moved here from
+    stage 2.
+  - **Playback** against a world store, checked by world id.
+  - **CLI:** `check`, `run`, `info`, `trace`, `synth`.
+- `fixtures/replays/sample.oprep` (10.8 KB): a 20 s scripted walk in the
+  Grossmünster fixture. It lands on the square, sprints into a house wall
+  (blocked 88 ticks), jumps (42 ticks airborne), crosses the square and
+  climbs the lane east of the Grossmünster (2.45 m up), 63.8 m in all.
+- ADR-0003 (determinism strategy), ADR-0004 (physics and character
+  controller) and ADR-0007 (replay format) are *Proposed*. ADR-0006 is
+  *Accepted*.
+- CI: the determinism job on Linux, Windows and macOS arm64 now also runs
+  the kernel, sim, stream and replay tests, and `op_replay check` on the
+  sample twice in debug (separate processes) and once in release.
+
+**Checks** (local, Windows 11 x86_64)
+
+| Check | Result |
+|---|---|
+| `cargo fmt --all --check`, `cargo clippy --workspace --all-targets --locked -- -D warnings` (determinism bans active) | pass |
+| `cargo test --workspace --locked` | 56 passed (29 new) |
+| `python -m pytest` | 80 passed |
+| `op_replay check fixtures/replays/sample.oprep`, two separate debug runs | 20/20 checkpoints match, final `a1580200f7aa78dbd750220e35382ad105be40969e57a636f999350badbfdad2` |
+| Same in release | identical |
+| Two simulations in one process; a run with loading stalls | identical hash trails |
+| `op_replay synth` regenerates the sample | byte-identical |
+| A changed input at tick 701 | caught at checkpoint 720 |
+| `python tools/ci/check_deps.py` | pass |
+
+**Open items**
+
+- The stage 4 checkpoint ("the fixture replay gives the same hash on two
+  runs, in CI") is confirmed when CI on Linux, Windows and macOS arm64 is
+  green after the push.
+- Known physics limitation (ADR-0004): pushing into an unclimbable concave
+  corner can make the capsule oscillate by about 2 cm from tick to tick.
+  It is deterministic; a good-first-issue candidate.
