@@ -453,3 +453,19 @@ checkouts.
 - **RFC 0001:** *Draft*; the maintainer decides when to accept it.
 - **Code of Conduct:** the contact address is still a placeholder.
 - **Issue drafts:** file the ones in `docs/issues/` on GitHub if wanted.
+
+---
+
+## Next: contributions (started 2026-11-23)
+
+- [RFC 0002](../rfcs/0002-contributions-and-merge-rules.md) (*Draft*):
+  - change sets;
+  - the deterministic gate (format, lineage, layer policy, licence,
+    provenance, privacy, budgets, placement, walkability, replays);
+  - "beats what is there": no measured regression, plus a measured or
+    reviewed improvement;
+  - a hash-chained world log, baseline refreshes, takedowns;
+  - facades as the first, visual-only contributable layer;
+  - OSM-derived layers fixed upstream.
+
+  Open for comment until at least 2026-11-30.
