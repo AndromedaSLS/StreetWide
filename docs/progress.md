@@ -11,7 +11,7 @@ ending at a checkpoint where the checks are run and the result is reviewed.
 | 3 | Ingest: swisstopo + OSM → world tiles, one fixture tile | ✅ done 2026-11-23, CI green |
 | 4 | Kernel, simulation, replay: 60 Hz, Rapier capsule, state hashes, replay CLI | ✅ done 2026-11-23, CI green on 3 platforms |
 | 5 | Client and streaming: Bevy first-person walking, replay recording | ✅ done 2026-11-23, CI green |
-| 6 | Docs and review: ADRs, README run guide, good-first-issues | ✅ checkpoint reached 2026-11-23 |
+| 6 | Docs and review: ADRs, README run guide, good-first-issues | ✅ done 2026-11-23, CI green |
 
 District bounding box (WGS84): `8.5377,47.3687,8.5507,47.3774`
 (`worlds/zurich-altstadt.json`), the largest lon/lat rectangle inside the
@@ -429,6 +429,7 @@ literally (Windows 11; PowerShell commands for Python):
 | 4. `cargo run --release -p op_client` | release build 270 s; the district renders from the Lindenhof, credits correct |
 | 5. Client playback of the sample replay | every checkpoint matches |
 | Development checks | `cargo fmt --check` pass; clippy `-D warnings` pass; `cargo test --workspace` 59 passed; pytest 80 passed; `check_deps.py` pass |
+| GitHub Actions CI on `main` (commit `d9fe307`) | all 10 jobs green ([run 45161462257](https://github.com/AndromedaSLS/StreetWide/actions/runs/45161462257)) |
 
 The fresh clone's world id (`5cdaeaf0…`) differs from the working copy's
 (`30c4e880…`) only because OpenStreetMap moved on between the two
