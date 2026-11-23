@@ -504,9 +504,30 @@ while it was a draft:
   outcomes, the cases left to review, the 10 mm roof tolerance, and the
   null fields of the baseline record.
 
-**Next:**
-- an ADR on where G9 and G10 run (they need `op_sim`, so not in
-  `op_world`);
-- the hosting ADR for the canonical store and world log;
-- `op_world merge` to write merge records;
-- a CI workflow running the gate on pull requests that add a change set.
+### Contribution gate, part 2 (2026-11-23)
+
+- **`op_world baseline` and `op_world merge`:**
+  - write the first world-log record, and merge (or take down) a change
+    set into a world store with its merge record and check report;
+  - a merge reruns the gate, needs a review judging the change better and
+    none blocking, and checks that the log ends at the store's world;
+  - nothing is written unless all of that holds;
+  - new objects are copied in, and `world.json` is written last.
+- **Tests:**
+  - baseline, then merge of the sample facade, then takedown, form a log
+    that verifies;
+  - the takedown restores the original world id exactly;
+  - refused merges leave the store untouched.
+- **Two decisions drafted** (*Proposed*, for the maintainer):
+  - [ADR-0009](adr/0009-simulation-based-gate-checks.md): run G9
+    (walkability) and G10 (replays) in `op_replay`, with no new crate;
+  - [ADR-0010](adr/0010-hosting-the-canonical-world.md): the world log in
+    its own Git repository, objects in an S3-compatible bucket. The
+    provider is the maintainer's choice.
+
+**Next, after those decisions:**
+- G9 and G10 in `op_replay`, which opens shells and terrain to
+  contributions;
+- the world repository and the merge bot;
+- a CI workflow running the gate on contribution pull requests;
+- an HTTP-backed store for the client.

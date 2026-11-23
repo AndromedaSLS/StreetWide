@@ -22,3 +22,5 @@ instead.
 | [0006](0006-ingest-pipeline-and-data-sources.md) | Ingest pipeline and data sources | Accepted |
 | [0007](0007-replay-file-format.md) | Replay file format | Accepted |
 | [0008](0008-client-architecture-and-streaming.md) | Client architecture and streaming | Accepted |
+| [0009](0009-simulation-based-gate-checks.md) | Where the simulation-based gate checks run | Proposed |
+| [0010](0010-hosting-the-canonical-world.md) | Hosting the canonical world store and world log | Proposed |

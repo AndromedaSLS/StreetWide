@@ -21,6 +21,7 @@ pub mod glb;
 pub mod id;
 pub mod keys;
 pub mod manifest;
+pub mod merge;
 pub mod rules;
 pub mod sample;
 pub mod sample_change;
