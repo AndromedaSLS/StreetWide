@@ -1,5 +1,12 @@
 # Python dependencies for everything under tools/ (CI helpers, world-format
-# tools, and from stage 3 the ingest pipeline). Pinned for reproducibility.
+# tools and the ingest pipeline). Pinned for reproducibility; upgrades are
+# deliberate and re-run the ingest determinism check (ADR-0006).
 blake3==1.0.11
+imagecodecs==2026.10.10
 jsonschema==4.26.0
+mapbox-earcut==2.1.0
+numpy==2.5.4
+pyproj==3.8.0
 pytest==9.2.0
+shapely==2.2.0
+tifffile==2026.10.15

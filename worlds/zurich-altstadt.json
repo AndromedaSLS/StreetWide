@@ -1,0 +1,6 @@
+{
+  "name": "zurich-altstadt",
+  "description": "Zurich old town on both banks of the Limmat, about 0.98 x 0.97 km: the largest WGS84 rectangle inside the LV95 kilometre square E 2683-2684 / N 1247-1248, so it needs one swissBUILDINGS3D sheet and one swissALTI3D tile.",
+  "bbox": [8.5377, 47.3687, 8.5507, 47.3774],
+  "spawn": {"lon": 8.5409, "lat": 47.3729, "yaw_deg": 90}
+}

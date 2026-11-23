@@ -36,8 +36,9 @@ better.
 | `crates/op_stream` | Tile store and streaming |
 | `crates/op_client` | Desktop client (Bevy) |
 | `schemas/` | JSON Schemas for the world format ([RFC 0001](rfcs/0001-world-format.md)) |
-| `fixtures/` | Small committed test data (the world-format golden fixture) |
-| `tools/ingest` | Python ingest from open data *(stage 3)* |
+| `fixtures/` | Small committed test data: the world-format golden fixture and one real tile ([fixtures/README.md](fixtures/README.md)) |
+| `worlds/` | World definitions for the ingest (area, spawn point) |
+| `tools/ingest` | Python ingest: builds a world from swisstopo and OpenStreetMap data ([ADR-0006](docs/adr/0006-ingest-pipeline-and-data-sources.md)) |
 | `tools/worldfmt` | Python implementation of the world format, byte-compatible with `op_world` |
 | `tools/ci` | CI helpers: dependency-direction, DCO and glTF checks |
 | `docs/adr`, `rfcs/` | Architecture decision records and RFCs |
@@ -66,8 +67,27 @@ cargo test --workspace                      # tests
 cargo fmt --check && cargo clippy --workspace --all-targets -- -D warnings
 ```
 
-Complete instructions for downloading the district and walking it will be
-added as the stages land.
+### Building the Zurich district from open data
+
+The ingest downloads about 275 MB (one swissBUILDINGS3D sheet, one
+swissALTI3D tile and one OpenStreetMap query) into `data/cache/`, then
+writes the world to `data/world/zurich-altstadt/` (about 50 MB). Nothing
+there is committed. A first run takes about 4 minutes; later runs reuse the
+cache.
+
+```sh
+python -m venv .venv
+.venv/bin/pip install -r tools/requirements.txt       # Windows: .venv\Scripts\pip
+.venv/bin/python -m tools.ingest --world zurich-altstadt
+cargo run -p op_world -- validate data/world/zurich-altstadt
+```
+
+Any other area works too, as long as it lies in one z12 region in
+Switzerland: `python -m tools.ingest --bbox minlon,minlat,maxlon,maxlat --name my-area`.
+Run `python -m tools.ingest --help` for the options (`--offline` uses only
+cached data; `STREETWIDE_CACHE` moves the cache).
+
+Instructions for walking the district will be added in stage 5.
 
 ## Contributing
 

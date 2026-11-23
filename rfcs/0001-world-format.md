@@ -114,11 +114,16 @@ building's layer has its own version history (`parent_version_id`). A
 building belongs to the tile that contains the centroid of its footprint,
 even if it extends into a neighbouring tile.
 
-**Licence separation.** An asset never mixes geometry from sources with
-different licences. In particular, geometry derived from OpenStreetMap
-(ODbL) is always in its own assets. Every tile index lists each asset's
-licence, so the ODbL-licensed part of the world can be identified and
-extracted mechanically as its own database.
+**Licence separation.** Geometry derived from OpenStreetMap (ODbL) is
+always in its own assets, never merged with geometry from other sources.
+An OSM-derived asset may use another source only to place its OSM
+geometry, for example terrain heights to drape a road. It then lists every
+source it used and states the combined licence, e.g.
+`ODbL-1.0 AND LicenseRef-swisstopo-OGD` (see
+[ADR-0006](../docs/adr/0006-ingest-pipeline-and-data-sources.md)). Every
+tile index lists each asset's licence, so the ODbL-licensed part of the
+world (every asset whose licence expression contains `ODbL-1.0`) can be
+identified and extracted mechanically as its own database.
 
 **Feature ids** are stable identifiers of the real-world (or fictional)
 thing an asset describes, namespaced by source:

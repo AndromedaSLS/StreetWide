@@ -1,4 +1,4 @@
 {
   "comment": "Pinned ids of the world-format golden fixture. Rust (crates/op_world/tests) and Python (tools/worldfmt/tests) must both reproduce them on every platform. Regenerate only on purpose: cargo run -p op_world --example make_format_fixtures -- fixtures/format",
-  "world_id": "blake3:f5a3cc70b342251b7286d752e28f1df961f9aa7631064baf4fae0060f47b8fa3"
+  "world_id": "blake3:f2d6f86933f9a8820ec057888b0c3b9642795b026bcd0312c824d25cb496bda1"
 }

@@ -1,0 +1,7 @@
+{
+  "name": "grossmuenster",
+  "description": "Test fixture: tile 17/68646/45903 (Grossmuenster, Muensterbruecke, the Limmat and the slope up to the church), cut to the zurich-altstadt bbox. Committed in fixtures/world; regenerate with: python -m tools.ingest --world fixture-grossmuenster --out fixtures/world",
+  "tile": "17/68646/45903",
+  "bbox": [8.5377, 47.3687, 8.5507, 47.3774],
+  "spawn": {"lon": 8.544082, "lat": 47.369816, "yaw_deg": 270}
+}

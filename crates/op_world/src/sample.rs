@@ -102,8 +102,10 @@ fn provenance() -> Provenance {
 /// `meshes` must contain `house` (a shell) and `ground` (terrain).
 pub fn build_sample_world(store: &Store, meshes: &BTreeMap<String, MeshSpec>) -> Result<ContentId> {
     let tile = TileKey::parse(SAMPLE_TILE)?;
-    // Tile centre relative to the region anchor (rounded to the millimetre).
-    let origin_mm = [-1_967_230, 0, 931_920];
+    // Tile centre in the region frame at height 0 (RFC 0001 section 1,
+    // geodetic -> ECEF -> ENU), rounded to the millimetre, with y = 0.
+    // `tools/ingest/tests/test_geo.py` recomputes it.
+    let origin_mm = [-1_971_116, 0, 930_405];
 
     let specs = [
         ("house", Layer::Shell, "streetwide:sample-house".to_string()),

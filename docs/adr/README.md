@@ -19,5 +19,5 @@ instead.
 | 0003 | Determinism strategy | *planned, stage 4* |
 | 0004 | Physics engine and character controller | *planned, stage 4* |
 | [0005](0005-toolchain-and-engine-pinning.md) | Toolchain and engine pinning | Accepted |
-| 0006 | Ingest pipeline and data sources | *planned, stage 3* |
+| [0006](0006-ingest-pipeline-and-data-sources.md) | Ingest pipeline and data sources | Proposed |
 | 0007 | Replay file format | *planned, stage 4* |

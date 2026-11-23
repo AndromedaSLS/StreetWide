@@ -80,9 +80,11 @@ jobs:
       - name: Rapier canary (release)
         run: cargo test -p op_sim --locked --release --test rapier_canary
       - name: World-format golden ids
-        run: cargo test -p op_world --locked --test format_fixtures --test glb_profile --test cjson_rules
+        run: cargo test -p op_world --locked --test format_fixtures --test glb_profile --test cjson_rules --test ingest_fixture
       - name: Validate the format fixture world
         run: cargo run -p op_world --locked -- validate fixtures/format/world
+      - name: Validate the ingest fixture world
+        run: cargo run -p op_world --locked -- validate fixtures/world
 
   python:
     name: python tools
