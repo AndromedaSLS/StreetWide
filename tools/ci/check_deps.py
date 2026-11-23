@@ -32,13 +32,16 @@ DEFAULT_POLICY = Path(__file__).with_name("deps-policy.toml")
 def load_metadata(path: Path | None) -> dict:
     if path is not None:
         return json.loads(path.read_text(encoding="utf-8"))
-    out = subprocess.run(
-        ["cargo", "metadata", "--format-version", "1", "--locked"],
-        check=True,
-        capture_output=True,
-        text=True,
-        encoding="utf-8",
-    )
+    try:
+        out = subprocess.run(
+            ["cargo", "metadata", "--format-version", "1", "--locked"],
+            check=True,
+            capture_output=True,
+            text=True,
+            encoding="utf-8",
+        )
+    except FileNotFoundError:
+        sys.exit("error: `cargo` not found. Install Rust with rustup and open a new terminal.")
     return json.loads(out.stdout)
 
 

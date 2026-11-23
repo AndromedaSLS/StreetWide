@@ -10,8 +10,8 @@ ending at a checkpoint where the checks are run and the result is reviewed.
 | 2 | World format: JSON Schemas, `op_world`, RFC 0001 | ✅ done 2026-11-23, CI green |
 | 3 | Ingest: swisstopo + OSM → world tiles, one fixture tile | ✅ done 2026-11-23, CI green |
 | 4 | Kernel, simulation, replay: 60 Hz, Rapier capsule, state hashes, replay CLI | ✅ done 2026-11-23, CI green on 3 platforms |
-| 5 | Client and streaming: Bevy first-person walking, replay recording | ✅ checkpoint reached 2026-11-23 (your walk test pending) |
-| 6 | Docs and review: ADRs, README run guide, good-first-issues | not started |
+| 5 | Client and streaming: Bevy first-person walking, replay recording | ✅ done 2026-11-23, CI green |
+| 6 | Docs and review: ADRs, README run guide, good-first-issues | ✅ checkpoint reached 2026-11-23 |
 
 District bounding box (WGS84): `8.5377,47.3687,8.5507,47.3774`
 (`worlds/zurich-altstadt.json`), the largest lon/lat rectangle inside the
@@ -352,6 +352,7 @@ one swissBUILDINGS3D sheet (1091-41) and one swissALTI3D tile (2683-1247).
 | `op_client` on `data/world/zurich-altstadt` | Lindenhof view east over the old town; 1,355 meshes streamed within 600 m, 296 colliders; credits rendered with © |
 | `op_replay check fixtures/replays/sample.oprep` (twice) | match |
 | `python tools/ci/check_deps.py` | pass |
+| GitHub Actions CI on `main` (commit `27a96c5`) | all 10 jobs green, incl. the client's tests on Linux ([run 45157493381](https://github.com/AndromedaSLS/StreetWide/actions/runs/45157493381)) |
 
 **Changes from the plan**
 
@@ -365,11 +366,89 @@ one swissBUILDINGS3D sheet (1091-41) and one swissALTI3D tile (2683-1247).
 
 **Open items**
 
-- Checkpoint: you walk the district and record a replay
-  (`cargo run --release -p op_client`, then F9; then
-  `cargo run -p op_replay -- check replays/<file>.oprep`).
 - **Known gaps** (stage 6 good-first-issue drafts):
   - no water surface;
   - you can walk off the edge of the built area and fall (R restarts);
   - no levels of detail beyond 600 m;
   - the corner jitter noted in ADR-0004.
+
+---
+
+## Stage 6: docs and review (2026-11-23)
+
+**Done**
+
+- **README: Getting started.** One path from a fresh clone to walking the
+  district:
+  - per-OS prerequisites (Git, Rust, C/C++ build tools, Python 3.11+, GPU,
+    disk);
+  - the determinism check;
+  - building the district (bash and PowerShell commands);
+  - walking it, then checking and watching replays;
+  - other areas, development checks, and a troubleshooting table.
+- **CONTRIBUTING:**
+  - where to start;
+  - the full check list, including `op_replay check`;
+  - what to do when a change alters simulation results: bump the contract
+    version, re-record the sample, never edit hashes.
+- **ADR audit:** one record per foundational choice.
+  - ADR-0001 to 0007 are *Accepted*.
+  - New ADR-0008 (accepted with this checkpoint's go-ahead) covers the
+    client architecture: the
+    fixed-step simulation inside Bevy, input latching, one shared mesh
+    cache for rendering and physics, F9 recording, the credit font.
+  - The world format is RFC 0001 (still *Draft*).
+- **`docs/issues/`:** eight good-first-issue drafts, each with why, what to
+  do, done-when and pointers:
+  - ingest progress output;
+  - pedestrian squares;
+  - OSM `building:part`;
+  - fall recovery in the client;
+  - replay playback controls;
+  - a minimap;
+  - cargo-deny;
+  - a schema reference page.
+
+  The index also lists larger known gaps (water, corner jitter, levels of
+  detail, bridges at doors).
+- **`tools/ci/check_deps.py`** explains a missing `cargo` instead of
+  printing a traceback (found during the fresh-clone test).
+
+**Checkpoint: a fresh clone builds and runs from the README alone**
+
+Cloned the committed repository into `c:\tmp\streetwide-fresh`, with an
+empty build directory and an empty data cache, then followed the README
+literally (Windows 11; PowerShell commands for Python):
+
+| README step | Result |
+|---|---|
+| 2. `cargo run -p op_replay -- check fixtures/replays/sample.oprep` | cold build 58 s; `ok: 1200 ticks, 20 checkpoints match, final state a1580200…` |
+| 3. `py -m venv .venv`, `pip install -r tools\requirements.txt` | pass (Python 3.13) |
+| 3. `.venv\Scripts\python -m tools.ingest --world zurich-altstadt` | 3.9 min including fresh downloads (258 + 16 MB from swisstopo, checksums verified; Overpass query); 30 tiles, 1,483 assets |
+| 3. `cargo run -p op_world -- validate data/world/zurich-altstadt` | 0 errors |
+| 4. `cargo run --release -p op_client` | release build 270 s; the district renders from the Lindenhof, credits correct |
+| 5. Client playback of the sample replay | every checkpoint matches |
+| Development checks | `cargo fmt --check` pass; clippy `-D warnings` pass; `cargo test --workspace` 59 passed; pytest 80 passed; `check_deps.py` pass |
+
+The fresh clone's world id (`5cdaeaf0…`) differs from the working copy's
+(`30c4e880…`) only because OpenStreetMap moved on between the two
+Overpass queries (08:22 vs 10:39 UTC). The swisstopo files were
+byte-identical. With the working copy's cached inputs, the fresh clone's
+code reproduces `30c4e880…` exactly, so the ingest is reproducible across
+checkouts.
+
+**Not covered by this test**
+
+- **rustup first install:** the pinned toolchain was already installed on
+  this machine.
+- **Linux and macOS:** CI builds, lints and tests there (including the
+  determinism and client tests) but does not run the ingest downloads or
+  open a window.
+- **The published clone:** the clone came from the local repository
+  because the stage 6 commits were not pushed yet.
+
+**Open items before announcing the project**
+
+- **RFC 0001:** *Draft*; the maintainer decides when to accept it.
+- **Code of Conduct:** the contact address is still a placeholder.
+- **Issue drafts:** file the ones in `docs/issues/` on GitHub if wanted.

@@ -21,4 +21,4 @@ instead.
 | [0005](0005-toolchain-and-engine-pinning.md) | Toolchain and engine pinning | Accepted |
 | [0006](0006-ingest-pipeline-and-data-sources.md) | Ingest pipeline and data sources | Accepted |
 | [0007](0007-replay-file-format.md) | Replay file format | Accepted |
-| [0008](0008-client-architecture-and-streaming.md) | Client architecture and streaming | Proposed |
+| [0008](0008-client-architecture-and-streaming.md) | Client architecture and streaming | Accepted |

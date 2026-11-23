@@ -1,6 +1,6 @@
 # ADR-0008: Host the fixed-step simulation in Bevy and stream one shared mesh cache
 
-- **Status:** Proposed (stage 6 checkpoint)
+- **Status:** Accepted (2026-11-23, stage 6 checkpoint)
 - **Date:** 2026-11-23
 - **Deciders:** @victorpicaud
 - **Supersedes / superseded by:** none
