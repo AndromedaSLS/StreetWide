@@ -18,3 +18,4 @@ Process (see [GOVERNANCE.md](../GOVERNANCE.md)):
 | RFC | Title | Status |
 |---|---|---|
 | [0001](0001-world-format.md) | World format | Draft |
+| [0002](0002-contributions-and-merge-rules.md) | Contributions and merge rules | Draft |
