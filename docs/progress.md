@@ -573,6 +573,51 @@ ADR-0009 was accepted (option A, `op_replay`).
   - locally, a bundle made by the tool for the Grossmünster tile passes
     the gate.
 
+### Corner oscillation fixed, simulation contract 0.2.0 (2026-11-23)
+
+- **The problem** (ADR-0004's known limitation): where a wall meets
+  ground too steep to climb, Rapier's character controller slid along one
+  surface, then the other. Sprinting into the corner at the top of the
+  lane east of the Grossmünster moved the player about 2 cm back and forth
+  in 174 of 200 ticks.
+- **The rule** ([ADR-0011](adr/0011-stop-corner-oscillation.md),
+  *Proposed*):
+  - a tick whose horizontal move points against the input is resolved
+    again with only the vertical part of the input, so the player stays
+    put horizontally but still falls and collides;
+  - a descending slide down too-steep ground is exempt.
+  - The first version simply zeroed the horizontal move and kept the
+    vertical one. That could apply a vertical move the controller had
+    computed for a different path, so it was replaced before commit.
+- **`SIM_CONTRACT_VERSION` 0.2.0.**
+  - `fixtures/replays/sample.oprep` is re-recorded. It still lands, hits
+    the wall (86 ticks blocked), jumps (42 ticks airborne) and climbs
+    2.47 m. The final state is now
+    `212bd353e656f51dbff126640d3e6333ec1e1cd19c57e76bbd9cb5aa0c85ad3b`.
+  - Replays recorded with 0.1.0, including walks recorded in the client,
+    are refused: "recorded with simulation contract 0.1.0, this build
+    implements 0.2.0".
+- **Tests:**
+  - `op_replay` `corners`: pushing into the fixture corner for 10 s gives
+    0 reversals in the last 200 ticks (174 before), and the player then
+    walks more than 2 m out of the corner.
+  - `op_sim`:
+    - a wall beside a 60° slope (6 reversals without the rule, 0 with it);
+    - a wedge of two walls;
+    - sliding along a single wall at 45°, which must keep its speed.
+
+| Check | Result |
+|---|---|
+| `cargo fmt --all --check`, `cargo clippy --workspace --all-targets -- -D warnings` | pass |
+| `cargo test --workspace` | 84 passed |
+| `python -m pytest` | 91 passed |
+| `op_replay check fixtures/replays/sample.oprep`, debug twice and release once | 20/20 checkpoints, final `212bd353…` |
+| Rapier canary (release) | pass, unchanged |
+| Sample facade, `op_world check-change` | passes, same report `2fc732d4…` |
+| Tool-made facade, `op_replay check-change --replay sample.oprep` | passes the gate |
+| `python tools/ci/check_deps.py` | pass |
+| The 4 new tests with the rule disabled | the slope test and `corners` fail; the wedge and slide tests pass (they guard behaviour the rule must keep) |
+
 **Next:** ADR-0010 (hosting) is waiting for the maintainer's choice of
 provider. After it come the world repository, the merge bot, a CI workflow
 running the gate on contribution pull requests, and an HTTP-backed store

@@ -24,3 +24,4 @@ instead.
 | [0008](0008-client-architecture-and-streaming.md) | Client architecture and streaming | Accepted |
 | [0009](0009-simulation-based-gate-checks.md) | Where the simulation-based gate checks run | Accepted |
 | [0010](0010-hosting-the-canonical-world.md) | Hosting the canonical world store and world log | Proposed |
+| [0011](0011-stop-corner-oscillation.md) | Stop the player oscillating in concave corners | Proposed |

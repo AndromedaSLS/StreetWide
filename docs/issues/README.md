@@ -25,10 +25,6 @@ bump with re-recorded replays.
 
 - **Water.** The Limmat is walkable terrain at water level. Water needs a
   layer or asset kind that RFC 0001 does not have yet.
-- **Corner jitter.** Pushing into some unclimbable concave corners makes
-  the capsule oscillate by about 2 cm (ADR-0004). A fix changes the
-  physics, so it needs `SIM_CONTRACT_VERSION` 0.2.0 and a re-recorded
-  `fixtures/replays/sample.oprep`.
 - **Levels of detail** beyond the 600 m streaming radius (RFC 0001
   unresolved questions).
 - **Bridges that end at building doors** are anchored to the ground

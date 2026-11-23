@@ -194,6 +194,15 @@ impl PlayerPhysics {
     }
 }
 
+/// Whether the horizontal part of `actual` points more than about 91
+/// degrees away from the horizontal part of `desired`.
+fn moves_against_input(desired: Vector, actual: Vector) -> bool {
+    let dot = desired.x * actual.x + desired.z * actual.z;
+    let d = (desired.x * desired.x + desired.z * desired.z).sqrt();
+    let a = (actual.x * actual.x + actual.z * actual.z).sqrt();
+    dot < -0.02 * d * a
+}
+
 impl Module for PlayerPhysics {
     fn name(&self) -> &'static str {
         "player_physics"
@@ -273,14 +282,30 @@ impl Module for PlayerPhysics {
 
         let desired = self.desired_translation(ctx.input);
         let [x, y, z] = self.state.position;
-        let movement = self.controller.move_shape(
-            TICK_DT,
-            &self.world.query_pipeline(),
-            self.shape.as_ref(),
-            &Pose::from_translation(Vector::new(x, y, z)),
-            desired,
-            |_| {},
-        );
+        let pose = Pose::from_translation(Vector::new(x, y, z));
+        let resolve = |wanted: Vector| {
+            self.controller.move_shape(
+                TICK_DT,
+                &self.world.query_pipeline(),
+                self.shape.as_ref(),
+                &pose,
+                wanted,
+                |_| {},
+            )
+        };
+        let mut movement = resolve(desired);
+        // A genuine slide down ground too steep to stand on descends.
+        let sliding_down = movement.is_sliding_down_slope && movement.translation.y < 0.0;
+        if moves_against_input(desired, movement.translation) && !sliding_down {
+            // In a concave corner (two walls, or a wall and ground too steep
+            // to climb), the controller alternates between sliding along one
+            // surface and the other, which moves the player back and forth
+            // every tick. A walk never moves backwards against its input, so
+            // such a tick is resolved again with the vertical part of the
+            // input only: the player stays put horizontally, still falls and
+            // still collides (ADR-0011).
+            movement = resolve(Vector::new(0.0, desired.y, 0.0));
+        }
         let t = movement.translation;
         let s = &mut self.state;
         s.position = [x + t.x, y + t.y, z + t.z];

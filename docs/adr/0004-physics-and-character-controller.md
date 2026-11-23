@@ -80,6 +80,7 @@ prepare phase, so a stall never half-applies a change.
 - **Known limitation:** pushing into an unclimbable concave corner can make
   the capsule oscillate by about 2 cm between two surfaces from tick to
   tick. It is deterministic. Smoothing it is a good first issue.
+  (Addressed by [ADR-0011](0011-stop-corner-oscillation.md).)
 - **Known limitation:** trimeshes have no internal-edge fixing, which costs
   sub-millimetre sideways drift along mesh edges.
 - **Later:** the client may want a camera collider, swimming once water

@@ -83,7 +83,7 @@ cargo run -p op_replay -- check fixtures/replays/sample.oprep
 
 The first `cargo` command downloads the toolchain and dependencies and
 compiles them, which takes a few minutes. It should end with
-`ok: 1200 ticks, 20 checkpoints match, final state a1580200…`: the
+`ok: 1200 ticks, 20 checkpoints match, final state 212bd353…`: the
 simulation reproduced a recorded 20-second walk bit for bit
 ([ADR-0003](docs/adr/0003-determinism-strategy.md)).
 

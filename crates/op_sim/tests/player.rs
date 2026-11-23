@@ -1,6 +1,7 @@
 //! Player physics on a small synthetic world: flat ground, a wall, a 20
-//! degree ramp, a 0.2 m kerb, and a box far away. Checks the behaviour the
-//! client relies on, and that runs are deterministic.
+//! degree ramp, a 0.2 m kerb, and a box far away; and on small worlds with
+//! concave corners. Checks the behaviour the client relies on, and that runs
+//! are deterministic.
 
 use std::collections::BTreeMap;
 use std::sync::Arc;
@@ -59,18 +60,19 @@ struct TestWorld {
     pending_meshes: u32,
 }
 
+fn ground() -> ColliderMesh {
+    quad(
+        [-100_000, 0, -100_000],
+        [-100_000, 0, 100_000],
+        [100_000, 0, 100_000],
+        [100_000, 0, -100_000],
+    )
+}
+
 impl TestWorld {
     fn new() -> Self {
         let mut parts = BTreeMap::new();
-        parts.insert(
-            ("terrain", "ground"),
-            quad(
-                [-100_000, 0, -100_000],
-                [-100_000, 0, 100_000],
-                [100_000, 0, 100_000],
-                [100_000, 0, -100_000],
-            ),
-        );
+        parts.insert(("terrain", "ground"), ground());
         parts.insert(
             ("shell", "wall"),
             cuboid([5_000, 0, -10_000], [6_000, 4_000, 10_000]),
@@ -93,6 +95,10 @@ impl TestWorld {
             ("shell", "far"),
             cuboid([900_000, 0, 0], [901_000, 1_000, 1_000]),
         );
+        Self::from_parts(parts)
+    }
+
+    fn from_parts(parts: BTreeMap<(&str, &str), ColliderMesh>) -> Self {
         let assets = parts
             .into_iter()
             .enumerate()
@@ -315,4 +321,107 @@ fn stalls_while_loading_do_not_change_the_result() {
     let (a, _) = trail(7, 0);
     let (b, _) = trail(7, 3);
     assert_eq!(a, b);
+}
+
+/// Ticks, among `ticks` more, in which the player moved horizontally
+/// (more than 1 mm) against its previous horizontal move.
+fn reversals(sim: &mut Sim, world: &mut TestWorld, i: PlayerInput, ticks: u32) -> u32 {
+    let mut previous: Option<[f32; 2]> = None;
+    let mut count = 0;
+    for _ in 0..ticks {
+        run(sim, world, i, 1);
+        let m = sim.last_move().actual;
+        let h = [m[0], m[2]];
+        if let Some(p) = previous
+            && (h[0] * h[0] + h[1] * h[1]).sqrt() > 0.001
+            && p[0] * h[0] + p[1] * h[1] < 0.0
+        {
+            count += 1;
+        }
+        previous = Some(h);
+    }
+    count
+}
+
+/// A player standing at the origin of a world made of `parts` and ground.
+fn landed_in(mut parts: BTreeMap<(&'static str, &'static str), ColliderMesh>) -> (Sim, TestWorld) {
+    parts.insert(("terrain", "ground"), ground());
+    let mut world = TestWorld::from_parts(parts);
+    let mut sim = Sim::new(7, [0, 1_000, 0], NORTH);
+    run(&mut sim, &mut world, input(NORTH, 0, 0), 60);
+    assert!(sim.player().grounded);
+    (sim, world)
+}
+
+/// A vertical wall, 3 m high, from `a` to `b` on the ground (x, z in mm).
+fn wall(a: [i64; 2], b: [i64; 2]) -> ColliderMesh {
+    quad(
+        [a[0], 0, a[1]],
+        [b[0], 0, b[1]],
+        [b[0], 3_000, b[1]],
+        [a[0], 3_000, a[1]],
+    )
+}
+
+#[test]
+fn stops_steadily_in_a_wedge_of_two_walls() {
+    // Two walls meet 6 m north of the start at 50 degrees, opening south;
+    // the player sprints slightly east of north into the apex. Rapier
+    // resolves two vertical walls without oscillating; this guards that
+    // the corner rule keeps it that way.
+    let mut parts = BTreeMap::new();
+    parts.insert(("shell", "left"), wall([0, -6_000], [-1_800, -2_000]));
+    parts.insert(("shell", "right"), wall([0, -6_000], [3_000, -1_500]));
+    let (mut sim, mut world) = landed_in(parts);
+    let push = input(NORTH.wrapping_add(1_200), 127, buttons::SPRINT);
+    run(&mut sim, &mut world, push, 240);
+    let [x, _, z] = feet(&sim);
+    assert!(z < -4.5 && x.abs() < 0.5, "reached the apex: ({x}, {z})");
+    assert_eq!(reversals(&mut sim, &mut world, push, 200), 0);
+}
+
+#[test]
+fn pushing_into_a_wall_beside_a_steep_slope_does_not_oscillate() {
+    // A 60 degree slope rises north from z = -4 m; a wall along x = 0.6 m
+    // closes it to the east. The player pushes north-east into the corner
+    // between them, like the lane in `op_replay`'s corner test. Without the
+    // corner rule, the player reverses 6 times in these 200 ticks (on the
+    // real, triangulated terrain of that test, 174 times).
+    let mut parts = BTreeMap::new();
+    parts.insert(
+        ("terrain", "slope"),
+        quad(
+            [-10_000, 0, -4_000],
+            [10_000, 0, -4_000],
+            [10_000, 5_196, -7_000],
+            [-10_000, 5_196, -7_000],
+        ),
+    );
+    parts.insert(("shell", "wall"), wall([600, 0], [600, -10_000]));
+    let (mut sim, mut world) = landed_in(parts);
+    let push = input(NORTH.wrapping_add(6_000), 127, buttons::SPRINT);
+    run(&mut sim, &mut world, push, 240);
+    let [x, _, z] = feet(&sim);
+    assert!(z < -3.0 && x > 0.2, "reached the corner: ({x}, {z})");
+    assert_eq!(reversals(&mut sim, &mut world, push, 200), 0);
+}
+
+#[test]
+fn sliding_along_a_single_wall_is_unchanged() {
+    // Walking north-east into the wall at x = 5 m slides north along it at
+    // the walking speed times cos 45 degrees.
+    let (mut sim, mut world) = landed(NORTH);
+    let ne = input(8_192, 127, 0);
+    run(&mut sim, &mut world, ne, 330);
+    let [x0, _, z0] = feet(&sim);
+    assert!((4.6..4.7).contains(&x0), "at the wall: x = {x0}");
+    assert_eq!(reversals(&mut sim, &mut world, ne, 60), 0);
+    let [x1, _, z1] = feet(&sim);
+    let slid = z0 - z1;
+    assert!(
+        (slid - WALK_SPEED * std::f32::consts::FRAC_1_SQRT_2).abs() < 0.03
+            && (x1 - x0).abs() < 1e-3,
+        "slid {slid} m north in 1 s, {} m east",
+        x1 - x0
+    );
 }

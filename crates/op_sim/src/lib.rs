@@ -19,7 +19,9 @@ pub use player::{LastMove, PlayerPhysics, PlayerState};
 /// Version of the simulation contract: the state, its hash encoding and the
 /// player physics. Replays record it; a change that alters any state hash
 /// must bump it.
-pub const SIM_CONTRACT_VERSION: &str = "0.1.0";
+/// 0.2.0: the player no longer moves against its input in concave corners
+/// (ADR-0011).
+pub const SIM_CONTRACT_VERSION: &str = "0.2.0";
 
 /// The simulation of one session.
 pub struct Sim {
