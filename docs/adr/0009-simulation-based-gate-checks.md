@@ -1,6 +1,6 @@
 # ADR-0009: Run the simulation-based gate checks in op_replay
 
-- **Status:** Proposed
+- **Status:** Accepted (2026-11-23)
 - **Date:** 2026-11-23
 - **Deciders:** @victorpicaud
 - **Supersedes / superseded by:** none
@@ -59,31 +59,47 @@ It would depend on `op_world`, `op_sim`, `op_stream` and `op_replay`.
 
 ## Decision
 
-*Proposed:* option A.
+Option A.
 
 **G9 walkability:**
-1. Take the transport ribbon meshes (`collider: none`) of the affected
-   tiles and their neighbours, and sample probe points on them about 1 m
-   apart.
+1. Take the transport ribbon meshes (`collider: none`) within 2 m of the
+   changed assets. Use each ribbon triangle's centroid as a probe point,
+   which gives points roughly 1 to 2 m apart.
 2. At each point, place the player capsule (ADR-0004) with its feet 2 cm
    above the ribbon.
-3. Test it against every collider in the world, except the terrain under
-   it, with Rapier's intersection queries.
+3. The point is **blocked** if the capsule overlaps any collider, terrain
+   included, or if rays from its centre in the four horizontal directions
+   and straight up all hit something within 30 m. The second test catches
+   a capsule standing entirely inside a new closed volume.
 4. A probe point free in the base world must still be free in the
-   candidate world.
+   candidate world. Comparing the two worlds means steep streets or
+   arcades that already count as blocked never count against a change.
 
-**G10 replays:** the replays the canonical world registers (their location
-is ADR-0010) whose spawn tile, or any tile within 160 m of their path, is
-affected:
+**G10 replays:** the replays registered for the canonical world (their
+location is ADR-0010; until then they are passed as `--replay` arguments)
+that come within 160 m of the change:
 1. Re-run them in the candidate world.
 2. Record the player's path every second.
 3. The candidate passes if every recorded waypoint is reached within 2 m.
    Hash equality is not expected, since the world changed.
 
+## Implementation
+
+- `op_sim::probe::ProbeWorld` (the player capsule against static
+  colliders).
+- `op_replay::gate::check_change` and
+  `op_replay check-change <world> <bundle> --replay <file>...`.
+
+Tested on the fixture tile:
+- removing the house the sample walk runs into fails G10 (5.6 m off the
+  path at tick 300);
+- removing a building far from the path keeps every waypoint;
+- a 3 m block placed on a street fails G9.
+
 ## Consequences
 
-- Shell and terrain contributions can pass the gate once this exists.
-- G9's probes give contributors a precise answer: "this wall now blocks
-  the pavement at 47.37°N, 8.54°E".
+- Shell and terrain contributions can now pass the gate.
+- G9's probes give contributors a precise answer: the tile and position
+  (region frame) where a public way is newly blocked.
 - If the gate later needs a home of its own, option B can supersede this
   ADR with no format change.

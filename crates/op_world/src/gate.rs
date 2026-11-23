@@ -6,9 +6,11 @@
 //! deterministic, and its messages name assets and ids, never local paths,
 //! so the same inputs give the same report bytes on every machine.
 //!
-//! Checks that need the simulation (G9 walkability, G10 replays) are not
-//! implemented here; when a change set touches colliders they are reported
-//! as `not_run`, so such a change set cannot pass yet.
+//! Checks that need the simulation (G9 walkability, G10 replays) cannot run
+//! here (`op_world` does not depend on `op_sim`, ADR-0002). When a change
+//! set touches colliders they are reported as `not_run`;
+//! `op_replay check-change` runs the complete gate and fills them in
+//! (ADR-0009).
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::Path;

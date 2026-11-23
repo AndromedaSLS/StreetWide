@@ -8,6 +8,9 @@
 //!                                          print the player's path
 //! op_replay synth [--world <dir>] [--out <file>]
 //!                                          record the scripted sample walk
+//! op_replay check-change <world-dir> <bundle-dir> [--replay <file>]... [--report <file>]
+//!                                          the full contribution gate, G1-G10
+//!                                          (RFC 0002, ADR-0009)
 //! ```
 //!
 //! Without `--world`, the world is looked up by id in `fixtures/world` and
@@ -25,13 +28,16 @@ const USAGE: &str = "usage:
   op_replay run   <file> [--world <dir>]
   op_replay info  <file>
   op_replay trace <file> [--world <dir>] [--every <ticks>]
-  op_replay synth [--world <dir>] [--out <file>]";
+  op_replay synth [--world <dir>] [--out <file>]
+  op_replay check-change <world-dir> <bundle-dir> [--replay <file>]... [--report <file>]";
 
 struct Args {
     positional: Vec<String>,
     world: Option<PathBuf>,
     out: Option<PathBuf>,
     every: u64,
+    replays: Vec<PathBuf>,
+    report: Option<PathBuf>,
 }
 
 fn parse(args: &[String]) -> Result<Args, String> {
@@ -40,6 +46,8 @@ fn parse(args: &[String]) -> Result<Args, String> {
         world: None,
         out: None,
         every: 60,
+        replays: Vec::new(),
+        report: None,
     };
     let mut it = args.iter();
     while let Some(arg) = it.next() {
@@ -47,6 +55,8 @@ fn parse(args: &[String]) -> Result<Args, String> {
         match arg.as_str() {
             "--world" => a.world = Some(PathBuf::from(value()?)),
             "--out" => a.out = Some(PathBuf::from(value()?)),
+            "--replay" => a.replays.push(PathBuf::from(value()?)),
+            "--report" => a.report = Some(PathBuf::from(value()?)),
             "--every" => {
                 a.every = value()?
                     .parse()
@@ -80,6 +90,9 @@ fn main() -> ExitCode {
                 ("info", [file]) => cmd_info(file),
                 ("trace", [file]) => cmd_trace(file, args.world.as_deref(), args.every),
                 ("synth", []) => cmd_synth(args.world.as_deref(), args.out.as_deref()),
+                ("check-change", [world, bundle]) => {
+                    cmd_check_change(world, bundle, &args.replays, args.report.as_deref())
+                }
                 _ => Err(USAGE.to_string()),
             },
         );
@@ -212,4 +225,54 @@ fn cmd_synth(world: Option<&Path>, out: Option<&Path>) -> Result<ExitCode, Strin
             .unwrap_or_default()
     );
     Ok(ExitCode::SUCCESS)
+}
+
+fn cmd_check_change(
+    world: &str,
+    bundle: &str,
+    replays: &[PathBuf],
+    report: Option<&Path>,
+) -> Result<ExitCode, String> {
+    let replays = replays
+        .iter()
+        .map(|p| load(&p.to_string_lossy()))
+        .collect::<Result<Vec<_>, _>>()?;
+    let candidate =
+        std::env::temp_dir().join(format!("streetwide-full-gate-{}", std::process::id()));
+    let result =
+        op_replay::gate::check_change(Path::new(world), Path::new(bundle), &candidate, &replays);
+    let _ = std::fs::remove_dir_all(&candidate);
+    let r = result.map_err(|e| e.to_string())?;
+    for c in &r.checks {
+        let outcome = match c.outcome {
+            op_world::contrib::Outcome::Pass => "pass",
+            op_world::contrib::Outcome::Fail => "FAIL",
+            op_world::contrib::Outcome::NotApplicable => "not applicable",
+            op_world::contrib::Outcome::NotRun => "NOT RUN",
+            op_world::contrib::Outcome::Review => "review",
+        };
+        println!("{:>3} {:<13} {outcome}", c.id, c.name);
+        for d in &c.details {
+            println!("      {d}");
+        }
+    }
+    let bytes = r.to_bytes().map_err(|e| e.to_string())?;
+    if let Some(path) = report {
+        std::fs::write(path, &bytes).map_err(|e| format!("{}: {e}", path.display()))?;
+    }
+    println!(
+        "change {}: {} (report {})",
+        r.change_id,
+        if r.passed {
+            "passes the gate"
+        } else {
+            "does NOT pass the gate"
+        },
+        op_world::ContentId::of(&bytes)
+    );
+    Ok(if r.passed {
+        ExitCode::SUCCESS
+    } else {
+        ExitCode::from(1)
+    })
 }

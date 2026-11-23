@@ -525,9 +525,33 @@ while it was a draft:
     its own Git repository, objects in an S3-compatible bucket. The
     provider is the maintainer's choice.
 
-**Next, after those decisions:**
-- G9 and G10 in `op_replay`, which opens shells and terrain to
-  contributions;
-- the world repository and the merge bot;
-- a CI workflow running the gate on contribution pull requests;
-- an HTTP-backed store for the client.
+### Contribution gate, part 3: the simulation checks (2026-11-23)
+
+ADR-0009 was accepted (option A, `op_replay`).
+
+- **`op_sim::probe::ProbeWorld`:** the player capsule against static
+  colliders. A point is blocked if the capsule overlaps something, or if
+  it is enclosed (rays in four horizontal directions and up all hit within
+  30 m).
+- **`op_replay check-change <world> <bundle> --replay <file>...`:** the
+  complete gate.
+  - **G9:** probe points on the transport ribbons within 2 m of the change
+    must not become blocked.
+  - **G10:** registered replays within 160 m of the change must still
+    reach every waypoint (one per second) within 2 m.
+  - With these, shell and terrain contributions can pass the gate.
+- **Tests on the fixture tile:**
+  - the sample facade gets exactly the committed report (G9 and G10 do not
+    apply to facades);
+  - removing the house the sample walk runs into fails G10 (5.6 m off the
+    path at tick 300);
+  - removing a building away from the path keeps every waypoint;
+  - a 3 m block placed on a street fails G9 (6 of 13 probe points newly
+    blocked).
+
+**Next:**
+- ADR-0010 (hosting) is waiting for the maintainer's choice of provider.
+  After it: the world repository, the merge bot, a CI workflow running the
+  gate on contribution pull requests, and an HTTP-backed store for the
+  client.
+- A guide for the first facade contributors.

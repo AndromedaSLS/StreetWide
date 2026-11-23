@@ -79,7 +79,12 @@ impl WorldIndex {
     /// Reads `world.json` and every tile index (they are small; meshes are
     /// loaded on demand).
     pub fn open(dir: &Path) -> Result<Self, StreamError> {
-        let store = Store::new(dir);
+        Self::from_store(Store::new(dir))
+    }
+
+    /// Like [`WorldIndex::open`], for any store, e.g. a layered one (the
+    /// contribution gate's candidate world).
+    pub fn from_store(store: Store) -> Result<Self, StreamError> {
         let (world_id, world) = store.read_world()?;
         let mut tiles = Vec::with_capacity(world.tiles.len());
         for wt in &world.tiles {
@@ -198,7 +203,12 @@ impl StoreSource {
     /// Opens the store at `dir` for a sim frame whose origin is
     /// `sim_origin_mm` (region frame).
     pub fn open(dir: &Path, sim_origin_mm: [i64; 3]) -> Result<Self, StreamError> {
-        let index = WorldIndex::open(dir)?;
+        Self::from_store(Store::new(dir), sim_origin_mm)
+    }
+
+    /// Like [`StoreSource::open`], for any store.
+    pub fn from_store(store: Store, sim_origin_mm: [i64; 3]) -> Result<Self, StreamError> {
+        let index = WorldIndex::from_store(store)?;
         let colliders = index.colliders(sim_origin_mm);
         Ok(StoreSource {
             index,

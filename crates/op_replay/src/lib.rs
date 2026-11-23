@@ -8,6 +8,7 @@
 //! it on Linux, Windows and macOS.
 
 pub mod format;
+pub mod gate;
 pub mod synth;
 
 use std::fmt;

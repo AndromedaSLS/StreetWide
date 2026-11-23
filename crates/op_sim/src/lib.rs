@@ -10,6 +10,7 @@
 //! through [`op_kernel::GeometrySource`].
 
 pub mod player;
+pub mod probe;
 
 use op_kernel::{GeometrySource, PlayerInput, Schedule, SimError, StateHash, TickOutcome};
 
