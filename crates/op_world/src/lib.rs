@@ -15,12 +15,15 @@
 mod error;
 
 pub mod cjson;
+pub mod contrib;
+pub mod gate;
 pub mod glb;
 pub mod id;
 pub mod keys;
 pub mod manifest;
 pub mod rules;
 pub mod sample;
+pub mod sample_change;
 pub mod store;
 pub mod tile;
 pub mod validate;

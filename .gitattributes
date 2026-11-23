@@ -14,3 +14,5 @@
 # Content-addressed world objects: their names are hashes of their exact
 # bytes, so git must never convert them.
 fixtures/**/world/** -text
+# Contribution fixtures are content-addressed too.
+fixtures/changes/** -text

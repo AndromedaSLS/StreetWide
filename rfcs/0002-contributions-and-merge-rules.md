@@ -67,8 +67,9 @@ This RFC turns those into a process that:
 A change set is a canonical-JSON document (RFC 0001 §5) with
 `format: "streetwide.change"`. Its id is the BLAKE3 content id of its
 bytes. It travels with the new manifests and meshes it references,
-forming a *bundle*: a world store (RFC 0001 §7) that holds only the new
-objects. (The JSON examples in this RFC list keys in reading order; the
+forming a *bundle*: a directory with the change set as `change.json` and
+the new objects in the world-store layout (`objects/<aa>/<hex>.json|glb`,
+RFC 0001 §7). (The JSON examples in this RFC list keys in reading order; the
 canonical form sorts them.)
 
 ```json
@@ -137,22 +138,35 @@ also be reported to swisstopo. The contribution can be merged meanwhile.
 The gate builds the candidate world: the base world with the change set
 applied, through a new world manifest and new tile indexes. It then runs
 the checks below. Every check is deterministic, and the gate writes a
-canonical-JSON **check report** (`format: "streetwide.check"`, with
-`gate_version`, one entry per check with result and measurements, and
-`report_id` = its content id).
+canonical-JSON **check report** (`format: "streetwide.check"`). The report
+contains:
+- the `gate_version`;
+- the `change_id`, the `world_id` it ran against, and the
+  `candidate_world_id` (`null` if the candidate could not be built);
+- one entry per check, `G1` to `G10`, with an `outcome` and `details`.
 
-A change set **passes the gate** only if every check passes.
+The report's id is its content id.
+
+Each check has one of five outcomes:
+- `pass`: everything it checked is fine;
+- `fail`: a rule is broken;
+- `not_applicable`: nothing in the change set concerns it;
+- `not_run`: it applies, but could not run;
+- `review`: the decision is left to the reviewers of section 5.
+
+A change set **passes the gate** (`passed: true`) only if every outcome is
+`pass`, `not_applicable` or `review`.
 
 | # | Check | Rule |
 |---|---|---|
 | G1 | Format | The candidate world validates completely (`op_world validate`, RFC 0001), and every new document is canonical and schema-valid. |
 | G2 | Lineage | Every `parent_version_id` is current in the world the change set is applied to (section 2), and every `add` targets a free `(tile, layer, feature_id)`. |
-| G3 | Layer policy | Only layers open to contributions (section 3) are changed, with the collider that section prescribes. |
+| G3 | Layer policy | Only layers open to contributions (section 3) are changed, with the collider that section prescribes. A baseline refresh (author `streetwide:ingest`, section 7) may change any layer; its outcome is `review`, because a maintainer reviews it. |
 | G4 | Licence | **Contributed geometry:** licensed `CC-BY-SA-4.0`. **Reused geometry:** an asset that reuses geometry from another source (e.g. vertices copied from a swisstopo shell) lists that source and states the combined licence (e.g. `CC-BY-SA-4.0 AND LicenseRef-swisstopo-OGD`). **ODbL:** ODbL-derived geometry is never combined with CC BY-SA content (ADR-0001). **Forbidden sources:** proprietary imagery and maps (e.g. Google, Apple, Bing street-level or aerial imagery), copyrighted plans, and anything without an open, compatible licence. |
 | G5 | Provenance | Every new manifest lists its sources: a source entry `StreetWide contributions` whose `source_ids` contain the author's handle, plus every upstream dataset used. Its `generator` names the tool and version (including AI tools, see section 8). Its attribution includes `The StreetWide contributors` and every upstream credit. |
-| G6 | Privacy | `fictional: true` for interiors and furniture (already in RFC 0001). Facades show only what is visible from public ground, and never: people, vehicle number plates, name plates on doors, bells or letterboxes, or the inside of buildings. In format 0.1 meshes carry no textures, so this is a reviewer check, plus an automatic check that facade geometry stays within the facade zone (G8). |
+| G6 | Privacy | `fictional: true` for interiors and furniture (already in RFC 0001). Facades show only what is visible from public ground, and never: people, vehicle number plates, name plates on doors, bells or letterboxes, or the inside of buildings. In format 0.1 meshes carry no textures, so for every added or replaced facade the outcome is `review`, backed by the automatic placement check (G8). |
 | G7 | Budgets | Per asset, by layer: facade ≤ 50,000 triangles and ≤ 4 MiB; shell ≤ 100,000 triangles. Per tile: ≤ 1,000,000 rendered triangles and ≤ 300,000 collider triangles after the change. |
-| G8 | Placement | **Facades** lie within 0.5 m of the feature's current shell walls (outside or inside) and do not extend above its roof. **Shells** keep their footprint within 1 m of the previous version's, unless a reviewer accepts the evidence for a larger change. **Terrain** edge vertices equal the neighbouring tiles' edge vertices. |
+| G8 | Placement | **Facades:** every vertex is within 0.5 m of the building's shell in the candidate world (same feature id and tile) and at most 10 mm above the shell's highest point. Heights are compared in exact millimetres. A facade without a shell fails. **Shells:** a replaced shell keeps its footprint (horizontal bounds) within 1 m of the previous version's; a larger move, or a new building, is `review`. **Terrain:** a replaced terrain mesh keeps every vertex on the open edges of the previous mesh at exactly the same position, so neighbouring tiles still meet; new terrain is `review`. |
 | G9 | Walkability | Public space must stay walkable. On the surface of every transport ribbon in the affected tiles, the gate places the player capsule (ADR-0004) on the ground at points about 1 m apart. A probe point that was free in the base world must still be free in the candidate world. This applies to collider changes only; facades are `none` in 0.1. |
 | G10 | Simulation | Every recorded replay of the CI replay suite whose world is the base world, and whose path crosses an affected tile, is re-recorded on the candidate world. It must still reach its recorded waypoints. Hash equality is not expected: the world changed. |
 
@@ -239,8 +253,11 @@ versions:
 
 - `decision` is `merged`, `baseline` or `takedown`.
 - `reviews` is sorted by reviewer; `verdict` is `better`, `not_better` or
-  `blocked`.
-- The first record (`baseline`) has `previous_record_id: null`.
+  `blocked`. A `merged` record needs at least one `better` verdict and no
+  `blocked` one.
+- The first record (`baseline`) has `null` for `change_id`,
+  `world_before`, `check_report_id` and `previous_record_id`. Every other
+  record has all four.
 
 The world log is the chain of merge records:
 - each record names the previous record's id;

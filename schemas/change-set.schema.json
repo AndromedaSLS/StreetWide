@@ -1,0 +1,62 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "urn:streetwide:schema:change-set:0.1",
+  "title": "StreetWide change set (contribution contract 0.1)",
+  "description": "A proposal to change the canonical world: asset additions, replacements and removals made against one world version. See rfcs/0002-contributions-and-merge-rules.md section 2. Sort order of changes and the agreement between each change and its manifest are checked by op_world.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["author", "base_world_id", "changes", "contract_version", "format", "rationale", "title"],
+  "properties": {
+    "format": { "const": "streetwide.change" },
+    "contract_version": { "const": "0.1.0" },
+    "base_world_id": { "$ref": "urn:streetwide:schema:common:0.1#/$defs/contentId" },
+    "title": { "$ref": "urn:streetwide:schema:common:0.1#/$defs/text" },
+    "author": {
+      "description": "Public handle such as github:<login>. Never an e-mail address.",
+      "$ref": "urn:streetwide:schema:common:0.1#/$defs/featureId"
+    },
+    "rationale": { "$ref": "urn:streetwide:schema:common:0.1#/$defs/text" },
+    "changes": {
+      "type": "array",
+      "minItems": 1,
+      "maxItems": 50,
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["feature_id", "layer", "manifest_id", "op", "parent_version_id", "tile"],
+        "properties": {
+          "op": { "enum": ["add", "replace", "remove"] },
+          "tile": { "$ref": "urn:streetwide:schema:common:0.1#/$defs/tileKey" },
+          "layer": { "$ref": "urn:streetwide:schema:common:0.1#/$defs/layer" },
+          "feature_id": { "$ref": "urn:streetwide:schema:common:0.1#/$defs/featureId" },
+          "parent_version_id": {
+            "oneOf": [
+              { "$ref": "urn:streetwide:schema:common:0.1#/$defs/contentId" },
+              { "type": "null" }
+            ]
+          },
+          "manifest_id": {
+            "oneOf": [
+              { "$ref": "urn:streetwide:schema:common:0.1#/$defs/contentId" },
+              { "type": "null" }
+            ]
+          }
+        },
+        "allOf": [
+          {
+            "if": { "properties": { "op": { "const": "add" } } },
+            "then": { "properties": { "parent_version_id": { "type": "null" }, "manifest_id": { "type": "string" } } }
+          },
+          {
+            "if": { "properties": { "op": { "const": "replace" } } },
+            "then": { "properties": { "parent_version_id": { "type": "string" }, "manifest_id": { "type": "string" } } }
+          },
+          {
+            "if": { "properties": { "op": { "const": "remove" } } },
+            "then": { "properties": { "parent_version_id": { "type": "string" }, "manifest_id": { "type": "null" } } }
+          }
+        ]
+      }
+    }
+  }
+}

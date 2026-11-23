@@ -36,7 +36,7 @@ better.
 | `crates/op_stream` | Tile store and streaming |
 | `crates/op_client` | Desktop client (Bevy) |
 | `schemas/` | JSON Schemas for the world format ([RFC 0001](rfcs/0001-world-format.md)) |
-| `fixtures/` | Small committed test data: the world-format golden fixture and one real tile ([fixtures/README.md](fixtures/README.md)) |
+| `fixtures/` | Small committed test data: golden fixtures for the world format and contributions, one real tile, a replay ([fixtures/README.md](fixtures/README.md)) |
 | `worlds/` | World definitions for the ingest (area, spawn point) |
 | `tools/ingest` | Python ingest: builds a world from swisstopo and OpenStreetMap data ([ADR-0006](docs/adr/0006-ingest-pipeline-and-data-sources.md)) |
 | `tools/worldfmt` | Python implementation of the world format, byte-compatible with `op_world` |

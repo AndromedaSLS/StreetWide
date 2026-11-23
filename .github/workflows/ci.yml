@@ -80,11 +80,13 @@ jobs:
       - name: Rapier canary (release)
         run: cargo test -p op_sim --locked --release --test rapier_canary
       - name: World-format golden ids
-        run: cargo test -p op_world --locked --test format_fixtures --test glb_profile --test cjson_rules --test ingest_fixture
+        run: cargo test -p op_world --locked --test format_fixtures --test glb_profile --test cjson_rules --test ingest_fixture --test gate --test contrib_schemas
       - name: Validate the format fixture world
         run: cargo run -p op_world --locked -- validate fixtures/format/world
       - name: Validate the ingest fixture world
         run: cargo run -p op_world --locked -- validate fixtures/world
+      - name: Contribution gate on the sample change set
+        run: cargo run -p op_world --locked -- check-change fixtures/world fixtures/changes/facade-sample
       - name: Kernel, simulation and replay tests (pinned bits, sample replay)
         run: cargo test -p op_kernel -p op_sim -p op_stream -p op_replay --locked
       # The replay check runs twice, in separate processes, and once more in

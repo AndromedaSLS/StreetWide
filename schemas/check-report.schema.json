@@ -1,0 +1,37 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "urn:streetwide:schema:check-report:0.1",
+  "title": "StreetWide gate check report (contribution contract 0.1)",
+  "description": "The deterministic gate's report on one change set: one entry per check G1 to G10. See rfcs/0002-contributions-and-merge-rules.md section 4. That `passed` agrees with the outcomes is checked by op_world.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["candidate_world_id", "change_id", "checks", "contract_version", "format", "gate_version", "passed", "world_id"],
+  "properties": {
+    "format": { "const": "streetwide.check" },
+    "contract_version": { "const": "0.1.0" },
+    "gate_version": { "$ref": "urn:streetwide:schema:common:0.1#/$defs/text" },
+    "change_id": { "$ref": "urn:streetwide:schema:common:0.1#/$defs/contentId" },
+    "world_id": { "$ref": "urn:streetwide:schema:common:0.1#/$defs/contentId" },
+    "candidate_world_id": {
+      "oneOf": [
+        { "$ref": "urn:streetwide:schema:common:0.1#/$defs/contentId" },
+        { "type": "null" }
+      ]
+    },
+    "passed": { "type": "boolean" },
+    "checks": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["details", "id", "name", "outcome"],
+        "properties": {
+          "id": { "type": "string", "pattern": "^G[1-9][0-9]*$" },
+          "name": { "$ref": "urn:streetwide:schema:common:0.1#/$defs/text" },
+          "outcome": { "enum": ["pass", "fail", "not_applicable", "not_run", "review"] },
+          "details": { "type": "array", "items": { "$ref": "urn:streetwide:schema:common:0.1#/$defs/text" } }
+        }
+      }
+    }
+  }
+}

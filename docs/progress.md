@@ -469,3 +469,44 @@ checkouts.
   - OSM-derived layers fixed upstream.
 
   Open for comment until at least 2026-11-30.
+
+### Contribution gate, part 1 (2026-11-23)
+
+RFC 0002 was merged into `main` (PR #1). Its status stays *Draft* until it
+is accepted after the comment period. Implementing it, as RFC 0001 was
+while it was a draft:
+
+- **Schemas** for change sets, check reports and merge records
+  (`schemas/change-set`, `check-report`, `merge-record`), with Rust and
+  Python agreement tests.
+- **`op_world`:**
+  - `contrib`: the three document types with strict validation, and
+    world-log hash-chain verification;
+  - `gate`: builds the candidate world (new tile indexes over the bundle
+    and the canonical store, via layered stores, without copying) and runs
+    G1–G8;
+  - `op_world check-change <world> <bundle>` prints the report and exits
+    1 unless the change set passes.
+- **G9 and G10** (walkability, replays) need the simulation and are not
+  implemented yet. Change sets that touch colliders report them as
+  `not_run` and cannot pass. Facades have no collider and are not
+  affected.
+- **Golden fixture** `fixtures/changes/facade-sample`: a test facade (a
+  3 cm skin over one building's walls, swisstopo-derived, so it carries
+  the combined licence). It passes the gate with G6 left to review. Its
+  report bytes are pinned and checked on Linux, Windows and macOS.
+- **Gate tests:** for each check, a deliberately broken contribution that
+  it must catch. They cover a stale parent, a facade with a collider, a
+  closed layer, ODbL content, a missing licence, a proprietary source, a
+  wrong author, a missing credit, an over-budget mesh, a facade 2 m from
+  its wall, a facade without a building, and a collider change.
+- **RFC 0002 clarified** (still *Draft*): the bundle layout, the five check
+  outcomes, the cases left to review, the 10 mm roof tolerance, and the
+  null fields of the baseline record.
+
+**Next:**
+- an ADR on where G9 and G10 run (they need `op_sim`, so not in
+  `op_world`);
+- the hosting ADR for the canonical store and world log;
+- `op_world merge` to write merge records;
+- a CI workflow running the gate on pull requests that add a change set.

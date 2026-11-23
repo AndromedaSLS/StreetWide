@@ -16,6 +16,9 @@ _BY_FORMAT = {
     "streetwide.tile": "tile-index.schema.json",
     "streetwide.world": "world-manifest.schema.json",
     "streetwide.replay": "replay-header.schema.json",
+    "streetwide.change": "change-set.schema.json",
+    "streetwide.check": "check-report.schema.json",
+    "streetwide.merge": "merge-record.schema.json",
 }
 
 

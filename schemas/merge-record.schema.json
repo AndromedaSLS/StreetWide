@@ -1,0 +1,66 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "urn:streetwide:schema:merge-record:0.1",
+  "title": "StreetWide merge record (contribution contract 0.1)",
+  "description": "One entry of the world log: a baseline, a merge or a takedown, with its evidence. See rfcs/0002-contributions-and-merge-rules.md section 6. The hash chain between records and the review rules for merges are checked by op_world.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "change_id", "check_report_id", "contract_version", "decision", "format", "previous_record_id",
+    "reasons", "reviews", "world_after", "world_before"
+  ],
+  "properties": {
+    "format": { "const": "streetwide.merge" },
+    "contract_version": { "const": "0.1.0" },
+    "decision": { "enum": ["baseline", "merged", "takedown"] },
+    "change_id": { "$ref": "#/$defs/optionalId" },
+    "world_before": { "$ref": "#/$defs/optionalId" },
+    "world_after": { "$ref": "urn:streetwide:schema:common:0.1#/$defs/contentId" },
+    "check_report_id": { "$ref": "#/$defs/optionalId" },
+    "reviews": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["notes", "reviewer", "verdict"],
+        "properties": {
+          "reviewer": { "$ref": "urn:streetwide:schema:common:0.1#/$defs/featureId" },
+          "verdict": { "enum": ["better", "not_better", "blocked"] },
+          "notes": { "$ref": "urn:streetwide:schema:common:0.1#/$defs/text" }
+        }
+      }
+    },
+    "reasons": { "$ref": "urn:streetwide:schema:common:0.1#/$defs/text" },
+    "previous_record_id": { "$ref": "#/$defs/optionalId" }
+  },
+  "allOf": [
+    {
+      "description": "A baseline starts the log: no change, previous world, report or previous record.",
+      "if": { "properties": { "decision": { "const": "baseline" } } },
+      "then": {
+        "properties": {
+          "change_id": { "type": "null" },
+          "world_before": { "type": "null" },
+          "check_report_id": { "type": "null" },
+          "previous_record_id": { "type": "null" }
+        }
+      },
+      "else": {
+        "properties": {
+          "change_id": { "type": "string" },
+          "world_before": { "type": "string" },
+          "check_report_id": { "type": "string" },
+          "previous_record_id": { "type": "string" }
+        }
+      }
+    }
+  ],
+  "$defs": {
+    "optionalId": {
+      "oneOf": [
+        { "$ref": "urn:streetwide:schema:common:0.1#/$defs/contentId" },
+        { "type": "null" }
+      ]
+    }
+  }
+}

@@ -30,14 +30,32 @@ impl ObjectKind {
 }
 
 /// A world directory.
+///
+/// A store may have read-only *fallback* directories: objects missing from
+/// the root are looked up in them, in order. Writes always go to the root.
+/// The contribution gate (RFC 0002) uses this to see a candidate world as
+/// its new tile indexes over the contributor's bundle over the canonical
+/// world, without copying anything.
 #[derive(Clone, Debug)]
 pub struct Store {
     root: PathBuf,
+    fallbacks: Vec<PathBuf>,
 }
 
 impl Store {
     pub fn new(root: impl Into<PathBuf>) -> Self {
-        Self { root: root.into() }
+        Self {
+            root: root.into(),
+            fallbacks: Vec::new(),
+        }
+    }
+
+    /// A store at `root` that also reads objects from `fallbacks`.
+    pub fn layered(root: impl Into<PathBuf>, fallbacks: Vec<PathBuf>) -> Self {
+        Self {
+            root: root.into(),
+            fallbacks,
+        }
     }
 
     pub fn root(&self) -> &Path {
@@ -49,17 +67,25 @@ impl Store {
     }
 
     pub fn object_path(&self, id: &ContentId, kind: ObjectKind) -> PathBuf {
-        let hex = id.hex();
-        self.root
-            .join("objects")
-            .join(&hex[..2])
-            .join(format!("{hex}.{}", kind.extension()))
+        object_path_in(&self.root, id, kind)
     }
 
-    /// Reads an object and verifies that its bytes hash to `id`.
+    /// Whether the object exists in the root or a fallback.
+    pub fn has_object(&self, id: &ContentId, kind: ObjectKind) -> bool {
+        std::iter::once(&self.root)
+            .chain(&self.fallbacks)
+            .any(|dir| object_path_in(dir, id, kind).is_file())
+    }
+
+    /// Reads an object (from the root, else the first fallback that has it)
+    /// and verifies that its bytes hash to `id`.
     pub fn read_object(&self, id: &ContentId, kind: ObjectKind) -> Result<Vec<u8>> {
-        let path = self.object_path(id, kind);
-        let bytes = fs::read(&path).map_err(|e| Error::Io(format!("{}: {e}", path.display())))?;
+        let path = std::iter::once(&self.root)
+            .chain(&self.fallbacks)
+            .map(|dir| object_path_in(dir, id, kind))
+            .find(|p| p.is_file())
+            .unwrap_or_else(|| self.object_path(id, kind));
+        let bytes = fs::read(&path).map_err(|e| Error::Io(format!("object {id}: {e}")))?;
         let actual = ContentId::of(&bytes);
         if actual != *id {
             return Err(Error::HashMismatch {
@@ -95,6 +121,13 @@ impl Store {
         write_atomically(&self.world_path(), &bytes)?;
         Ok(ContentId::of(&bytes))
     }
+}
+
+fn object_path_in(root: &Path, id: &ContentId, kind: ObjectKind) -> PathBuf {
+    let hex = id.hex();
+    root.join("objects")
+        .join(&hex[..2])
+        .join(format!("{hex}.{}", kind.extension()))
 }
 
 fn write_atomically(path: &Path, bytes: &[u8]) -> Result<()> {
