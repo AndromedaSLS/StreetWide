@@ -549,9 +549,31 @@ ADR-0009 was accepted (option A, `op_replay`).
   - a 3 m block placed on a street fails G9 (6 of 13 probe points newly
     blocked).
 
-**Next:**
-- ADR-0010 (hosting) is waiting for the maintainer's choice of provider.
-  After it: the world repository, the merge bot, a CI workflow running the
-  gate on contribution pull requests, and an HTTP-backed store for the
-  client.
-- A guide for the first facade contributors.
+### Facade contributions: tool and guide (2026-11-23)
+
+- **`tools/contrib`** (Python):
+  - `reference` finds the building at a longitude and latitude and exports
+    its shell as a standard `.glb` to model on, in the building's own
+    frame;
+  - `facade` turns a model exported from a 3D editor into a contribution
+    bundle. It applies node transforms, snaps to millimetres, maps
+    materials to the palette and writes the manifest. The licence is
+    CC BY-SA 4.0, plus swisstopo's terms with `--derived-from-shell`. The
+    tool refuses facades derived from OpenStreetMap shells.
+  - It is deterministic: the same model gives the same bundle.
+- **[docs/contributing/facades.md](contributing/facades.md):** the rules,
+  then picking a building, modelling in Blender, exporting, converting,
+  checking with the gate, and previewing by merging into a private copy of
+  the world. Submission opens with ADR-0010.
+- **Checks:**
+  - 9 Python tests (glTF node transforms, palette mapping, bundle rules,
+    determinism, refusals);
+  - CI's `tests` job now runs the tool on the sample model and the full
+    Rust gate on its output;
+  - locally, a bundle made by the tool for the Grossmünster tile passes
+    the gate.
+
+**Next:** ADR-0010 (hosting) is waiting for the maintainer's choice of
+provider. After it come the world repository, the merge bot, a CI workflow
+running the gate on contribution pull requests, and an HTTP-backed store
+for the client.

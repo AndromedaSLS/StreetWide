@@ -40,6 +40,7 @@ better.
 | `worlds/` | World definitions for the ingest (area, spawn point) |
 | `tools/ingest` | Python ingest: builds a world from swisstopo and OpenStreetMap data ([ADR-0006](docs/adr/0006-ingest-pipeline-and-data-sources.md)) |
 | `tools/worldfmt` | Python implementation of the world format, byte-compatible with `op_world` |
+| `tools/contrib` | Contribution tools: export a building to model on, turn a model into a contribution ([guide](docs/contributing/facades.md)) |
 | `tools/ci` | CI helpers: dependency-direction, DCO and glTF checks |
 | `docs/adr`, `rfcs/` | Architecture decision records and RFCs |
 | `docs/issues` | Ready-to-file issue drafts for newcomers |

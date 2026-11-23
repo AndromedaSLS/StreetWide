@@ -155,6 +155,9 @@ not decided silently in code.
 
 ## Contributing world content
 
+To add a facade to a building, follow
+[docs/contributing/facades.md](docs/contributing/facades.md).
+
 World content (meshes, textures, manifests) is licensed under
 **CC BY-SA 4.0**. Layers derived from OpenStreetMap are **ODbL 1.0** and
 must stay in separate assets. Every asset needs a manifest with its source

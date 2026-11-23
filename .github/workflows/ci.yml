@@ -57,6 +57,16 @@ jobs:
         with:
           save-if: ${{ env.SAVE_CACHE }}
       - run: cargo test --workspace --locked
+      - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7.1.0
+        with:
+          python-version: "3.13"
+      - name: Contribution tool output passes the full gate
+        run: |
+          python -m pip install -r tools/requirements.txt
+          FEATURE=$(python -c "import json; print(json.load(open('fixtures/changes/facade-sample/change.json'))['changes'][0]['feature_id'])")
+          MODEL=$(ls fixtures/changes/facade-sample/objects/*/*.glb)
+          python -m tools.contrib facade --world fixtures/world --building "$FEATURE" --model "$MODEL" --author github:ci --title "CI facade" --rationale "Tool-to-gate check in CI." --derived-from-shell --out target/ci-facade
+          cargo run -p op_replay --locked -- check-change fixtures/world target/ci-facade --replay fixtures/replays/sample.oprep
 
   determinism:
     # Cross-platform determinism: the Rapier canary (golden digest), the
