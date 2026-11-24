@@ -13,7 +13,7 @@ import numpy as np
 from shapely.geometry import Polygon
 from shapely.ops import unary_union
 
-from tools.ingest import buildings, overpass, stac, terrain, transport
+from tools.ingest import buildings, overpass, stac, terrain, transport, water
 from tools.ingest.assemble import (
     OSM_CREDIT,
     OSM_LICENSE,
@@ -63,6 +63,12 @@ def _dem_sources(files: list[stac.SourceFile]) -> list[dict]:
     ]
 
 
+def _terrain_tile(f: stac.SourceFile) -> tuple[int, int]:
+    """A swissALTI3D item's tile ("2683-1247") as LV95 kilometres."""
+    e, n = f.tile.split("-")
+    return int(e), int(n)
+
+
 def _lv95_polygon(corners_tilef: list[tuple[float, float]], steps: int = 8) -> Polygon:
     """A polygon in LV95 from a rectangle in tile units (edges densified)."""
     pts = []
@@ -103,9 +109,15 @@ def run(name: str, area: Area, spawn: Spawn | None, out: Path, cache: Path, *,
     dem_files = stac.find_and_fetch(stac.SWISSALTI3D, bbox, cache, offline=offline, refresh=refresh)
     osm_doc = overpass.fetch(bbox, cache, offline=offline, refresh=refresh)
     osm_version = osm_doc["osm3s"]["timestamp_osm_base"]
+    water_doc = overpass.fetch_water(bbox, cache, offline=offline, refresh=refresh)
+    water_version = water_doc["osm3s"]["timestamp_osm_base"]
+    # Parsed now, so a broken river relation stops the run before the slow steps.
+    bodies = water.parse(water_doc, bbox, stats)
     dem = Dem([f.path for f in dem_files])
     dem_sources = _dem_sources(dem_files)
     area_poly = _lv95_polygon(_rect(area.x0, area.y0, area.x1, area.y1))
+    # Each tile cut to the area, in LV95.
+    clips = {(x, y): _lv95_polygon(_rect(x, y, x + 1, y + 1)).intersection(area_poly) for x, y in tiles}
     assets: list[Asset] = []
 
     print("terrain", flush=True)
@@ -173,12 +185,14 @@ def run(name: str, area: Area, spawn: Spawn | None, out: Path, cache: Path, *,
         assets.append(Asset(tile, "transport", f"osm:way:{w.id}", mesh, OSM_ON_TERRAIN_LICENSE,
                             osm_sources([w.ref]), "trimesh"))
     for t in tiles:
-        x, y = t
-        clip = _lv95_polygon(_rect(x, y, x + 1, y + 1)).intersection(area_poly)
-        mesh, refs = transport.tile_ribbons(frame, dem, streets, clip, origins[t], stats)
+        mesh, refs = transport.tile_ribbons(frame, dem, streets, clips[t], origins[t], stats)
         if not mesh.is_empty():
             assets.append(Asset(t, "transport", f"tile:{tile_key(*t)}", mesh, OSM_ON_TERRAIN_LICENSE,
                                 osm_sources(refs), "none"))
+
+    print("water (OpenStreetMap, ADR-0014)", flush=True)
+    water_assets, water_report = build_water(frame, dem, dem_files, bodies, water_version, area_poly, clips, origins, stats)
+    assets += water_assets
 
     print("buildings (OpenStreetMap fallback)", flush=True)
     inside = []
@@ -230,11 +244,68 @@ def run(name: str, area: Area, spawn: Spawn | None, out: Path, cache: Path, *,
             "swissBUILDINGS3D": [s.item_id for s in sheets],
             "swissALTI3D": [f.item_id for f in dem_files],
             "OpenStreetMap": osm_version,
+            "OpenStreetMap water": water_version,
         },
+        "water": water_report,
         "stats": dict(sorted(stats.items())),
         "seconds": round(time.time() - t0, 1),
     }
     return report
+
+
+def build_water(frame: Frame, dem: Dem, dem_files: list[stac.SourceFile], bodies: list[water.Body],
+                version: str, area_poly: Polygon, clips: dict[tuple[int, int], Polygon],
+                origins: dict[tuple[int, int], list[int]], stats: dict[str, int]) -> tuple[list[Asset], dict]:
+    """One water asset per tile (RFC 0003, ADR-0014) and the report's water
+    section. `version` is the water snapshot's `timestamp_osm_base`, and
+    `clips` are the tiles cut to the area."""
+    items = {_terrain_tile(f): f for f in dem_files}
+    cut = water.pieces(dem, bodies, area_poly, set(items), stats)
+    assets: list[Asset] = []
+    tiles: dict[str, dict] = {}
+    for t in sorted(clips):
+        w = water.tile_water(frame, dem, cut, clips[t], origins[t], stats)
+        if w.area_m2 > 0 or w.drawn_m2 > 0:
+            tiles[tile_key(*t)] = {
+                "area_m2": round(w.area_m2, 1),
+                "drawn_m2": round(w.drawn_m2, 1),
+                "hidden_m2": round(w.hidden_m2, 1),
+            }
+        if w.mesh.is_empty():
+            continue
+        # The OSM ids of the bodies drawn here, and the terrain tiles whose
+        # heights set their levels.
+        osm = _source("OpenStreetMap", version, OSM_LICENSE, OSM_CREDIT, OSM_URL, w.refs)
+        assets.append(Asset(t, "water", f"tile:{tile_key(*t)}", w.mesh, OSM_ON_TERRAIN_LICENSE,
+                            [osm] + _dem_sources([items[k] for k in w.terrain_tiles]), "none"))
+    def piece(p: water.Piece) -> dict:
+        terrain = items[p.terrain_tile].item_id if p.terrain_tile in items else "{}-{}".format(*p.terrain_tile)
+        name = {"name": p.body.tags["name"]} if "name" in p.body.tags else {}
+        return {"body": p.body.ref, **name, "swissALTI3D": terrain}
+
+    levels = [
+        {
+            **piece(p),
+            # The water surface, and the spread of the terrain samples under it.
+            "level_m": round(p.level.height_m, 3),
+            "p10_m": round(p.level.p10_m, 3),
+            "p90_m": round(p.level.p90_m, 3),
+            "samples": p.level.samples,
+        }
+        for p in cut
+        if p.level is not None
+    ]
+    report = {
+        "assets": len(assets),
+        "area_m2": round(sum(v["area_m2"] for v in tiles.values()), 1),
+        "hidden_m2": round(sum(v["hidden_m2"] for v in tiles.values()), 1),
+        "tiles": tiles,
+        "levels": levels,
+        # Water with no level in a terrain tile (no grid point far enough
+        # inside it, or no terrain loaded there) is left out.
+        "not_drawn": [piece(p) for p in cut if p.level is None],
+    }
+    return assets, report
 
 
 def _replace_dir(tmp: Path, out: Path) -> None:

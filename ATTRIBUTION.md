@@ -17,8 +17,8 @@ list of the world manifest, which is the union of all asset credits.
 | Source | Used for | Licence / terms | Credit |
 |---|---|---|---|
 | swisstopo swissBUILDINGS3D 3.0 Beta | Building shells (roofs, walls, ground plates) | [swisstopo terms for free geodata](https://www.swisstopo.admin.ch/en/terms-of-use-free-geodata-and-geoservices) (`LicenseRef-swisstopo-OGD`) | © swisstopo |
-| swisstopo swissALTI3D | Terrain; heights of roads, bridges and OSM fallback buildings | swisstopo terms for free geodata (`LicenseRef-swisstopo-OGD`) | © swisstopo |
-| OpenStreetMap | Roads, paths, steps and bridges; building footprints where swissBUILDINGS3D has no building | [Open Database License 1.0](LICENSES/ODbL-1.0.txt) (`ODbL-1.0`) | © OpenStreetMap contributors |
+| swisstopo swissALTI3D | Terrain; heights of roads, bridges, water surfaces and OSM fallback buildings | swisstopo terms for free geodata (`LicenseRef-swisstopo-OGD`) | © swisstopo |
+| OpenStreetMap | Roads, paths, steps and bridges; water areas (rivers, lakes, canals, ponds); building footprints where swissBUILDINGS3D has no building | [Open Database License 1.0](LICENSES/ODbL-1.0.txt) (`ODbL-1.0`) | © OpenStreetMap contributors |
 
 ### swisstopo (Federal Office of Topography)
 
@@ -41,17 +41,22 @@ list of the world manifest, which is the union of all asset credits.
 
 - Data © [OpenStreetMap contributors](https://www.openstreetmap.org/copyright),
   available under the [Open Database License](https://opendatacommons.org/licenses/odbl/1-0/).
-- We query it through the [Overpass API](https://overpass-api.de/), one
-  query per area. The `timestamp_osm_base` of the answer is recorded as the
-  data version in every OSM-derived manifest.
+- We query it through the [Overpass API](https://overpass-api.de/), with
+  two queries per area, each cached separately: one for roads, paths and
+  building footprints, and one for water areas
+  ([ADR-0014](docs/adr/0014-water-areas-from-openstreetmap.md)). The
+  `timestamp_osm_base` of each answer is recorded as the data version in
+  every manifest derived from it.
 - **ODbL notice:** StreetWide worlds contain information from OpenStreetMap,
   which is made available here under the Open Database License (ODbL).
 - **Derived databases:** every asset whose licence contains `ODbL-1.0`
-  (roads, paths, bridges and OSM fallback buildings) is a derivative of
-  OpenStreetMap. It is offered under the ODbL together with the swisstopo
-  terrain heights it uses, so its licence is
+  (roads, paths, bridges, water and OSM fallback buildings) is a derivative
+  of OpenStreetMap. It is offered under the ODbL together with the
+  swisstopo terrain heights it uses, so its licence is
   `ODbL-1.0 AND LicenseRef-swisstopo-OGD`. These assets can be extracted
   mechanically from the tile indexes, which list each asset's licence.
+  Water stays in its own layer (`water`,
+  [RFC 0003](rfcs/0003-water-layer.md)).
 
 ## Data in this repository
 
@@ -61,7 +66,7 @@ Only small test data is committed. Full worlds are built locally with
 | Path | Content | Licence |
 |---|---|---|
 | `fixtures/format/` | Hand-made fictional sample world | CC BY-SA 4.0, credit "The StreetWide contributors" |
-| `fixtures/world/` | One real tile (17/68646/45903: Grossmünster, Münsterbrücke) built by the ingest | Per asset, as stated in its manifest: swisstopo terms for terrain and swissBUILDINGS3D shells; ODbL 1.0 AND swisstopo terms for the OSM-derived assets |
+| `fixtures/world/` | One real tile (17/68646/45903: Grossmünster, Münsterbrücke, the Limmat) built by the ingest | Per asset, as stated in its manifest: swisstopo terms for terrain and swissBUILDINGS3D shells; ODbL 1.0 AND swisstopo terms for the OSM-derived assets (roads, paths, bridges, water and one OSM fallback building) |
 | `worlds/*.json` `places` | Positions of named squares and streets for the client's travel keys, taken from OpenStreetMap | ODbL 1.0, © OpenStreetMap contributors |
 
 ## Third-party software

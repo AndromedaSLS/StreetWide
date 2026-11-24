@@ -712,3 +712,120 @@ simulation are unchanged.
 provider. After it come the world repository, the merge bot, a CI workflow
 running the gate on contribution pull requests, and an HTTP-backed store
 for the client. For realism, the next step is water: options in ADR-0012.
+
+### Water for the Limmat (2026-11-24, branch water, RFC 0003 Draft)
+
+[RFC 0003](../rfcs/0003-water-layer.md) (*Draft*) adds a `water` layer,
+and [ADR-0014](adr/0014-water-areas-from-openstreetmap.md) (*Proposed*)
+takes water areas from OpenStreetMap and places them as level surfaces.
+Both are implemented on the `water` branch while they are open for
+comment, as RFC 0001 and RFC 0002 were. The simulation is unchanged.
+
+- **Format:**
+  - `water` is the eighth layer: one asset per tile (`tile:17/x/y`), palette
+    material `water`, sorted after `transport`;
+  - a water asset must have `collider: none`. This is checked in the
+    asset-manifest and tile-index schemas, in `op_world`'s manifest and
+    tile-index checks, and in the Python tools;
+  - the gate (now 0.1.1) fails contributed water with "fix it in the
+    source (OpenStreetMap)", and sends a baseline refresh by
+    `streetwide:ingest` to review;
+  - `contract_version` stays 0.1.0; RFC 0003 leaves a bump to 0.2.0 to the
+    maintainer.
+- **Ingest:**
+  - a second Overpass query, for water areas, with its own cache file. The
+    existing query and its cached answers are unchanged;
+  - fountains, drinking water, reflecting pools, basins, and covered or
+    underground water are left out;
+  - multipolygon relations become polygons with holes, nested as deep as
+    they are mapped (a pond on an island in a lake is water). A relation
+    that reaches the area but gives no area stops the ingest, naming it:
+    rings that do not close, a member way without geometry or with a role
+    other than outer or inner, or no area at all;
+  - outlines are buffered by 1 m. Each water body gets one level per
+    swissALTI3D tile: the median terrain height at 2 m grid points at least
+    3 m inside the outline, plus 3 cm. Water with no such grid point in a
+    terrain tile gets no level there and is not drawn; the report lists it
+    under `not_drawn`;
+  - the report gives the water area per tile, each level with its spread,
+    and the area hidden under terrain: the share of grid points where the
+    terrain is more than 10 cm above the water, times the area.
+- **Client:**
+  - an opaque water material: dark green-blue, water's reflectance (F0
+    0.02), low roughness, and a procedural ripple normal map that drifts
+    slowly;
+  - flat terrain under the water as mapped is drawn 10 cm below the water:
+    only at least 1 m inside the water surface, so not on the 1 m strip the
+    ingest adds round the shore (across a tile's edge the next tile's water
+    carries on). Banks stay as they are, and so do surfaces more than 1.6 m
+    above the water (bridges and quays);
+  - landings at places and from the map avoid water. A water mesh that
+    cannot be loaded counts as dry, as the scene then draws the terrain as
+    it is;
+  - the help panel shows the OpenStreetMap credit and the ODbL link.
+- **Fixtures regenerated** (see [fixtures/README.md](../fixtures/README.md)):
+  - `fixtures/world`: 45 assets. The new one is the Limmat (285
+    triangles, level 405.743 m). Apart from the tile index, all 88 objects
+    it had before are byte-identical: `world.json` and the tile index
+    changed, and the water's mesh and manifest were added.
+  - `fixtures/replays/sample.oprep`: recorded again. Its 1,200 inputs and
+    20 checkpoints are byte-identical; only the world id in its header
+    changed.
+  - `fixtures/changes/facade-sample`: the facade mesh and manifest are
+    byte-identical. `base_world_id`, the change id and the report (ids,
+    gate version 0.1.1) changed; every check outcome is the same.
+- **The district** (`--world zurich-altstadt`, plus one 0.2 MB Overpass
+  answer): 8 water assets, 69,533 m² of water as mapped.
+  - **The Limmat:** 405.743 m in swissALTI3D tile 2683-1247, as in the
+    fixture. Of the 16,358 terrain samples under it, the 10th percentile
+    is 405.692 m; the 90th, 406.620 m, shows the false ramp.
+  - **A 15 m² pond** (way 1132023270, `natural=water`) is not drawn: none
+    of its grid points lies 3 m inside it.
+  - **Hidden water:** 18,584 m² lies under terrain more than 10 cm above
+    the water. 12,474 m² of it is in tile 17/68646/45901, all of that
+    tile's water: the false ramp, which the client's lowered terrain
+    shows.
+  - **Lowered terrain:** the client draws 25,009 terrain vertices below the
+    water. The highest lies 1.33 m above it, on the false ramp. No flat
+    terrain under the water as mapped lies between that and 2.68 m (the
+    Rathausbrücke). Bank tops on the 1 m strip, such as the Schipfe
+    walkway 1.7 m above the water, stay.
+  - 2,988 of the 2,996 objects of the district built before water are
+    byte-identical; the other 8 are tile indexes.
+
+| Check | Result |
+|---|---|
+| `cargo fmt --all --check`, `cargo clippy --workspace --all-targets --locked -- -D warnings` | pass |
+| `cargo test --workspace --locked` | 126 passed (20 new: water in the schemas, the gate and the fixture; the client's water surface, lowered terrain, ripples and landings) |
+| `python -m pytest` | 153 passed (62 new: water selection, assembly, levels, report and meshes on synthetic data; the Overpass water query and its cache; the schema rules; the fixture's water asset) |
+| Mutation checks after review | each of 13 mutations of the kinds reviewers found (a mean for the median, a kept `water` value dropped, member ways skipped, no repair, no nesting, hidden area per grid point, the old level fallback, the water query and its cache) fails a Python test; undoing either client fix fails its new test |
+| Fixture regenerated from cache after review | byte-identical, same world id; the sample replay and the facade sample regenerate byte for byte |
+| `op_replay check fixtures/replays/sample.oprep`, debug twice and release once | 20/20 checkpoints, final `212bd353…`, unchanged |
+| The old sample replay in a copy of the old fixture world, with this build | 20/20 checkpoints |
+| Rapier canary (release) | pass, unchanged |
+| `op_world validate fixtures/world` | 1 tile, 45 assets, 42,512 triangles, 0 errors |
+| Sample facade, `op_world check-change` | passes, report `857c786a…` (G6 left to review, as before) |
+| Tool-made facade, `op_replay check-change --replay sample.oprep` | passes the gate |
+| Khronos glTF validator | 48/48 glb files valid; the water mesh has 0 errors and 0 warnings |
+| `python tools/ci/check_deps.py` | pass |
+| `op_world validate data/world/zurich-altstadt` | 30 tiles, 1,491 assets, 1,078,342 triangles, 0 errors |
+
+**Known limits** (ADR-0014):
+- players still walk on the river, because the terrain is the collision
+  surface;
+- along the false ramp the water is drawn correctly, but collision follows
+  the ramp, up to 1.3 m above the visible water;
+- reflections show the sky but not the buildings;
+- the ripples drift in one direction everywhere.
+
+**Open:**
+- RFC 0003 (comment period until at least 2026-12-01) and ADR-0014 wait
+  for the maintainer, including the choice between keeping contract
+  0.1.0 and bumping to 0.2.0.
+- Water with no grid point 3 m inside it in a terrain tile is left out, as
+  ADR-0014 now says. A fallback level for such narrow water (ponds under
+  about 6 m across, slivers at terrain tile edges) would need an amendment,
+  for the maintainer.
+- Walks recorded in a local zurich-altstadt world built before water no
+  longer match the rebuilt one; check them against a copy of the old
+  world.

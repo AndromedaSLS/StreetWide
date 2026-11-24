@@ -27,7 +27,9 @@ use crate::tile::{TileAsset, TileIndex};
 use crate::validate::validate_store;
 use crate::{Error, Result};
 
-pub const GATE_VERSION: &str = "0.1.0";
+/// Bumped whenever the gate's output for some change set changes (0.1.1:
+/// the water layer, RFC 0003).
+pub const GATE_VERSION: &str = "0.1.1";
 
 /// Licence of contributed content (ADR-0001).
 pub const CONTRIBUTION_LICENSE: &str = "CC-BY-SA-4.0";
@@ -366,20 +368,26 @@ fn check_policy(
                 format!("{what}: baseline refresh by {INGEST_AUTHOR}; a maintainer reviews it"),
             );
         } else {
+            // The collider a contribution to this layer must have, or why the
+            // layer takes no contributions (RFC 0002 section 3).
             let expected = match c.layer {
-                Layer::Facade => Some(Collider::None),
-                Layer::Shell | Layer::Terrain => Some(Collider::Trimesh),
-                _ => None,
-            };
-            match expected {
-                None => checks.g(3).note(
-                    Outcome::Fail,
-                    format!(
+                Layer::Facade => Ok(Collider::None),
+                Layer::Shell | Layer::Terrain => Ok(Collider::Trimesh),
+                // Water comes from open data (RFC 0003): errors are fixed
+                // there, and the next baseline refresh brings the fixes in.
+                Layer::Water => Err(format!(
+                    "{what}: the water layer does not accept contributions; fix it in the source (OpenStreetMap), and the next baseline refresh brings the fix in"
+                )),
+                Layer::Furniture | Layer::Interactivity | Layer::Interior | Layer::Transport => {
+                    Err(format!(
                         "{what}: the {} layer does not accept contributions yet",
                         c.layer.as_str()
-                    ),
-                ),
-                Some(collider) => {
+                    ))
+                }
+            };
+            match expected {
+                Err(why) => checks.g(3).note(Outcome::Fail, why),
+                Ok(collider) => {
                     if current
                         .get(&i)
                         .is_some_and(|a| a.license.contains("ODbL-1.0"))
@@ -595,7 +603,12 @@ fn check_budgets_and_placement(
         let limit = match c.layer {
             Layer::Facade => Some((FACADE_MAX_TRIANGLES, Some(FACADE_MAX_BYTES))),
             Layer::Shell => Some((SHELL_MAX_TRIANGLES, None)),
-            _ => None,
+            Layer::Furniture
+            | Layer::Interactivity
+            | Layer::Interior
+            | Layer::Terrain
+            | Layer::Transport
+            | Layer::Water => None,
         };
         match limit {
             Some((tris, _)) if triangles > tris => checks.g(7).note(
@@ -677,7 +690,12 @@ fn check_budgets_and_placement(
                     format!("{what}: new terrain; reviewers check the evidence"),
                 ),
             },
-            _ => {}
+            // No placement rule.
+            Layer::Furniture
+            | Layer::Interactivity
+            | Layer::Interior
+            | Layer::Transport
+            | Layer::Water => {}
         }
     }
     // G7 per affected tile.

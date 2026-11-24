@@ -19,10 +19,12 @@ pub enum Layer {
     Shell,
     Terrain,
     Transport,
+    /// Water surfaces (RFC 0003).
+    Water,
 }
 
 impl Layer {
-    pub const ALL: [Layer; 7] = [
+    pub const ALL: [Layer; 8] = [
         Layer::Facade,
         Layer::Furniture,
         Layer::Interactivity,
@@ -30,6 +32,7 @@ impl Layer {
         Layer::Shell,
         Layer::Terrain,
         Layer::Transport,
+        Layer::Water,
     ];
 
     pub fn as_str(self) -> &'static str {
@@ -41,12 +44,20 @@ impl Layer {
             Layer::Shell => "shell",
             Layer::Terrain => "terrain",
             Layer::Transport => "transport",
+            Layer::Water => "water",
         }
     }
 
     /// Private by design: these layers must always be fictional.
     pub fn must_be_fictional(self) -> bool {
         matches!(self, Layer::Interior | Layer::Furniture)
+    }
+
+    /// Visual only (RFC 0003): these layers must have `collider: none`, so
+    /// the simulation never sees them and the terrain stays the surface
+    /// players stand on.
+    pub fn must_not_collide(self) -> bool {
+        matches!(self, Layer::Water)
     }
 }
 
@@ -206,6 +217,12 @@ impl AssetManifest {
                 self.layer.as_str()
             ));
         }
+        if self.layer.must_not_collide() && self.physics.collider != Collider::None {
+            p.push(format!(
+                "{} assets must have collider none (visual only)",
+                self.layer.as_str()
+            ));
+        }
         p.extend(self.provenance.problems());
         p
     }
@@ -254,5 +271,23 @@ impl Provenance {
             p.push("provenance.generator needs a name and a version".into());
         }
         p
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn layers_are_declared_in_byte_order_of_their_names() {
+        // Tile indexes sort by layer name; the derived order must agree, so
+        // a new layer goes where its name sorts (water after transport).
+        let mut by_name = Layer::ALL;
+        by_name.sort_by_key(|l| l.as_str().as_bytes());
+        assert_eq!(by_name, Layer::ALL);
+        assert!(Layer::ALL.windows(2).all(|w| w[0] < w[1]));
+        for l in Layer::ALL {
+            assert_eq!(serde_json::to_value(l).unwrap(), l.as_str());
+        }
     }
 }

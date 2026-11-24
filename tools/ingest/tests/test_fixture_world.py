@@ -2,6 +2,8 @@
 document: canonical bytes, hashes, schemas, references and licences.
 (`op_world validate` checks the same store independently in Rust.)"""
 
+import json
+import struct
 from pathlib import Path
 
 import pytest
@@ -58,5 +60,29 @@ def test_licences_follow_the_sources(world):
             assert m["provenance"]["license"] == SWISSTOPO_LICENSE
             assert m["provenance"]["attribution"] == [SWISSTOPO_CREDIT]
         assert m["fictional"] is False and m["parent_version_id"] is None
-        expected_collider = "none" if (m["layer"], m["feature_id"][:5]) == ("transport", "tile:") else "trimesh"
-        assert m["physics"]["collider"] == expected_collider
+        # Visual only: street ribbons (one asset per tile) and water (RFC 0003).
+        visual = m["layer"] == "water" or (m["layer"], m["feature_id"][:5]) == ("transport", "tile:")
+        assert m["physics"]["collider"] == ("none" if visual else "trimesh")
+
+
+def test_the_limmat_is_the_tiles_one_water_asset(world):
+    """RFC 0003 and ADR-0014: one water asset per tile, visual only, from
+    the Limmat's relation and placed by swissALTI3D heights."""
+    _, index, manifests = world
+    water = [(entry, m) for entry, m in manifests.values() if m["layer"] == "water"]
+    assert len(water) == 1
+    entry, m = water[0]
+    assert entry["feature_id"] == m["feature_id"] == f"tile:{index['tile']}"
+    # Water sorts after every other layer, so it comes last.
+    assert index["assets"][-1] == entry
+    assert entry["collider"] == m["physics"]["collider"] == "none"
+    assert entry["license"] == m["provenance"]["license"] == OSM_ON_TERRAIN_LICENSE
+    osm, terrain = m["provenance"]["sources"]
+    assert (osm["dataset"], terrain["dataset"]) == ("OpenStreetMap", "swissALTI3D")
+    assert "relation/1598599" in osm["source_ids"]
+    # Every primitive uses the palette material `water`: the glb lists only
+    # the materials it uses.
+    data = STORE.read_object(m["content_id"], "glb")
+    length, _ = struct.unpack_from("<II", data, 12)
+    gltf = json.loads(data[20:20 + length])
+    assert [mat["name"] for mat in gltf["materials"]] == ["water"]

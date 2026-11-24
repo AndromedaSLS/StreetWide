@@ -146,9 +146,13 @@ spoke of one query per area; with this ADR there are two.
 **Assembly.**
 - Ways and multipolygon relations become polygons with holes, in LV95,
   repaired if invalid.
-- If a relation that reaches the area does not form closed rings, the
-  ingest stops with an error naming it, rather than dropping the river
-  silently.
+- **Nested rings:** they count as deep as they are mapped. A pond on an
+  island in a lake is water.
+- **Relations that cannot be assembled:** a relation that reaches the area
+  but gives no area stops the ingest with an error naming it, rather than
+  dropping the river silently. That covers rings that do not close, a
+  member way without geometry or with a role other than outer or inner,
+  and rings that enclose nothing.
 
 **Placement.**
 - **Outline:** buffered by 1 m, so the shoreline tucks under the banks,
@@ -157,7 +161,13 @@ spoke of one query per area; with this ADR there are two.
   the median terrain height at 2 m grid points at least 3 m inside the
   outline, within that terrain tile, plus 3 cm. It depends only on the
   body and the terrain tile, not on the area being ingested, so the
-  fixture tile and the same tile in zurich-altstadt get the same water.
+  fixture tile and the same tile in zurich-altstadt get the same level.
+  Their meshes match except within a millimetre of where the area's edge
+  cuts the tile.
+- **Water too narrow for a level:** water with no such grid point in a
+  terrain tile (narrower than about 6 m there) has no level and is not
+  drawn. The report lists it. In zurich-altstadt that leaves out one
+  15 m² pond.
 - **Rivers across terrain tiles:** a river that crosses into another
   terrain tile gets a separate level there, so the surface can step at
   that 1 km boundary.
@@ -187,10 +197,21 @@ exactly at its border, and needs its own ADR.
   - low roughness;
   - a procedural ripple normal map that drifts slowly;
   - it reflects the sky.
-- **Terrain under water:** drawn 10 cm below the water surface where the
-  terrain is flat. Banks stay as they are. This shows the river along the
-  false ramp. Collision is unchanged.
-- **Travel:** landings at named places and from the map avoid water.
+- **Terrain under water:** drawn 10 cm below the water surface, for
+  display only, where all three hold:
+  - it is flat (within 10 degrees of horizontal);
+  - the water surface reaches at least 1 m beyond it in every direction
+    (the ingest's buffer), so it lies inside the mapped outline;
+  - it is at most 1.6 m above the water.
+
+  Banks stay as they are. This shows the river along the false ramp
+  (flat terrain up to 1.33 m above the water in zurich-altstadt). Terrain
+  higher than 1.6 m over water is a bridge or a quay: the terrain model
+  carries the Rathausbrücke, 2.68 m or more above the water, as ground.
+  Collision is unchanged.
+- **Travel:** landings at named places and from the map avoid water,
+  meaning points inside the water whose highest surface is at most 1.6 m
+  above it. A water mesh that fails to load counts as dry.
 - **Credit:** the help panel shows the OpenStreetMap credit and the ODbL
   link.
 
@@ -206,6 +227,8 @@ exactly at its border, and needs its own ADR.
 - **Known limits:**
   - players still walk on the river: the terrain is the collision
     surface;
+  - the 1.6 m bridge-or-quay limit is measured in Zurich; a river whose
+    terrain model rises higher above its water stays partly hidden;
   - along the false ramp the water is drawn correctly, but collision
     follows the ramp, up to 1.3 m above the visible water;
   - reflections show the sky but not the buildings; reflecting the

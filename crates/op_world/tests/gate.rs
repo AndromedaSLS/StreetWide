@@ -7,10 +7,11 @@ mod common;
 use std::path::{Path, PathBuf};
 
 use op_world::contrib::{
-    Change, ChangeSet, CheckReport, Decision, MergeRecord, Op, Outcome, Review, Verdict, verify_log,
+    Change, ChangeSet, CheckReport, Decision, INGEST_AUTHOR, MergeRecord, Op, Outcome, Review,
+    Verdict, verify_log,
 };
 use op_world::gate;
-use op_world::glb::{f32_to_mm, mm_to_f32};
+use op_world::glb::{Material, f32_to_mm, mm_to_f32};
 use op_world::manifest::{Collider, Layer, Source};
 use op_world::sample_change::{Draft, sample_draft, write_bundle};
 use op_world::{ContentId, ObjectKind, Store, TileIndex};
@@ -133,6 +134,74 @@ fn g3_rejects_closed_layers_and_wrong_colliders() {
         d.manifest.fictional = true;
     });
     assert_fails(&r, "G3");
+}
+
+/// The manifest id of the fixture's water in `tile` (the Limmat).
+fn fixture_water(tile: op_world::TileKey) -> ContentId {
+    let store = Store::new(world());
+    let (_, w) = store.read_world().unwrap();
+    let wt = w.tiles.iter().find(|t| t.tile == tile).unwrap();
+    let index =
+        TileIndex::from_bytes(&store.read_object(&wt.tile_id, ObjectKind::Json).unwrap()).unwrap();
+    index
+        .assets
+        .iter()
+        .find(|a| a.layer == Layer::Water)
+        .expect("the fixture tile has water")
+        .manifest_id
+}
+
+/// The sample turned into a new version of its tile's water surface (RFC
+/// 0003): feature id `tile:<key>`, palette material `water`, no collider,
+/// replacing the fixture's water.
+fn as_water(d: &mut Draft) {
+    let feature_id = format!("tile:{}", d.change.changes[0].tile);
+    let parent = Some(fixture_water(d.change.changes[0].tile));
+    d.change.changes[0].op = Op::Replace;
+    d.change.changes[0].parent_version_id = parent;
+    d.change.changes[0].layer = Layer::Water;
+    d.change.changes[0].feature_id = feature_id.clone();
+    d.manifest.parent_version_id = parent;
+    d.manifest.layer = Layer::Water;
+    d.manifest.feature_id = feature_id.clone();
+    d.manifest.physics.collider = Collider::None;
+    let node = &mut d.mesh.nodes[0];
+    node.name = feature_id;
+    for p in &mut node.primitives {
+        p.material = Material::Water;
+    }
+}
+
+#[test]
+fn g3_sends_water_fixes_to_the_source() {
+    let r = variant("g3-water", as_water);
+    assert_fails(&r, "G3");
+    let g3 = r.checks.iter().find(|c| c.id == "G3").unwrap();
+    assert!(
+        g3.details
+            .iter()
+            .any(|d| d.contains("fix it in the source (OpenStreetMap)")),
+        "{g3:#?}"
+    );
+    assert_eq!(outcome(&r, "G1"), Outcome::Pass, "{r:#?}");
+    assert_eq!(outcome(&r, "G2"), Outcome::Pass, "{r:#?}");
+    assert_eq!(
+        outcome(&r, "G9"),
+        Outcome::NotApplicable,
+        "water never reaches the simulation"
+    );
+}
+
+#[test]
+fn a_baseline_refresh_with_water_is_reviewed() {
+    let r = variant("g3-water-baseline", |d| {
+        as_water(d);
+        d.change.author = INGEST_AUTHOR.into();
+    });
+    assert_eq!(outcome(&r, "G3"), Outcome::Review, "{r:#?}");
+    assert_eq!(outcome(&r, "G1"), Outcome::Pass, "{r:#?}");
+    assert_eq!(outcome(&r, "G2"), Outcome::Pass, "{r:#?}");
+    assert!(r.passed, "{r:#?}");
 }
 
 #[test]

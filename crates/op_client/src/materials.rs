@@ -2,8 +2,9 @@
 //!
 //! Two looks, switched with F2:
 //! - **detailed** (default): procedural textures from [`crate::texgen`]
-//!   mapped in world space, a colour and window style per building, and
-//!   windows on walls of buildings that have no contributed facade;
+//!   mapped in world space, a colour and window style per building,
+//!   windows on walls of buildings that have no contributed facade, and
+//!   water that mirrors the sky through drifting ripples (ADR-0014);
 //! - **plain**: the world format's palette colours, exactly as the data
 //!   describes the surfaces.
 //!
@@ -30,6 +31,20 @@ const MIN_WINDOWED_WALL_M: f64 = 1.6;
 /// Open ground flatter than this is paved; steeper ground is grass and
 /// soil (cosine of 12 degrees).
 const PAVED_MIN_NORMAL_Y: f64 = 0.978;
+
+/// Water's base colour (linear RGB): a dark green-blue. Water swallows
+/// most of the light that enters it, so what you see of it is mostly the
+/// sky it reflects (ADR-0014).
+const WATER_COLOR: [f32; 3] = [0.012, 0.030, 0.028];
+/// Water's index of refraction: it reflects ((n - 1) / (n + 1))², about
+/// 2 %, of the light that meets it head-on.
+const WATER_IOR: f32 = 1.333;
+/// Smooth water (Bevy clamps perceptual roughness at 0.089).
+const WATER_ROUGHNESS: f32 = 0.09;
+/// How fast the ripples drift (m/s, along x and z): a few centimetres a
+/// second, northwards and a little west. Water areas carry no flow
+/// direction, so it is the same everywhere (ADR-0014).
+const RIPPLE_DRIFT_M_PER_S: [f64; 2] = [-0.008, -0.03];
 
 /// Facade colours of the old town (sRGB): white, cream, ochre, pink,
 /// grey, pale green, sand, blue-grey.
@@ -72,8 +87,8 @@ pub enum Surface {
 }
 
 impl Surface {
-    fn pattern(self) -> Option<Pattern> {
-        Some(match self {
+    fn pattern(self) -> Pattern {
+        match self {
             Surface::Facade(s) => Pattern::Facade(FACADES[s]),
             Surface::GroundFloor(s) => Pattern::GroundFloor(s),
             Surface::Plaster => Pattern::Plaster,
@@ -85,8 +100,8 @@ impl Surface {
             Surface::Road => Pattern::Asphalt,
             Surface::Path => Pattern::Cobbles,
             Surface::Bridge => Pattern::Stone,
-            Surface::Water => return None,
-        })
+            Surface::Water => Pattern::Ripples,
+        }
     }
 }
 
@@ -209,7 +224,7 @@ fn terrain(prim: &Primitive, origin: [f64; 3]) -> Vec<(Surface, Part)> {
         .into_iter()
         .filter(|(_, idx)| !idx.is_empty())
         .map(|(surface, idx)| {
-            let period = surface.pattern().map_or([1.0, 1.0], Pattern::period_m);
+            let period = surface.pattern().period_m();
             // Keep only the vertices these triangles use.
             let mut remap = BTreeMap::new();
             let mut sub_prim = Primitive {
@@ -488,10 +503,7 @@ pub fn parts(
     look: &AssetLook,
     ground: GroundFn,
 ) -> Vec<(Surface, Part)> {
-    let top_with = |s: Surface| {
-        let period = s.pattern().map_or([1.0, 1.0], Pattern::period_m);
-        vec![(s, top(prim, origin, period))]
-    };
+    let top_with = |s: Surface| vec![(s, top(prim, origin, s.pattern().period_m()))];
     match prim.material {
         Palette::Wall => walls(prim, origin, look, ground),
         Palette::Roof => roofs(prim, origin),
@@ -560,6 +572,58 @@ impl MaterialSet {
         } else {
             looks.plain.clone()
         }
+    }
+
+    /// The detailed look's water, whose ripples drift.
+    pub fn water(&self) -> Option<&Handle<StandardMaterial>> {
+        self.detailed.get(&(Surface::Water, 0))
+    }
+}
+
+/// The detailed look's water (ADR-0014): opaque and dark, with water's
+/// reflectance and little roughness, so it mirrors the sky; the ripples'
+/// normal map breaks the reflection up.
+fn water_material(ripples: Handle<Image>) -> StandardMaterial {
+    let r = (WATER_IOR - 1.0) / (WATER_IOR + 1.0);
+    StandardMaterial {
+        base_color: Color::linear_rgb(WATER_COLOR[0], WATER_COLOR[1], WATER_COLOR[2]),
+        normal_map_texture: Some(ripples),
+        perceptual_roughness: WATER_ROUGHNESS,
+        metallic: 0.0,
+        // Bevy reflects 0.16 × reflectance² head-on; water reflects r².
+        reflectance: (r * r / 0.16).sqrt(),
+        double_sided: true,
+        cull_mode: None,
+        ..default()
+    }
+}
+
+/// The ripples' texture offset `seconds` after start: the drift, wrapped
+/// to one repeat. The texture repeats, so the wrap does not show, and the
+/// offset keeps its precision however long the client runs.
+pub fn ripple_offset(seconds: f64) -> Vec2 {
+    let repeat = Surface::Water.pattern().period_m();
+    // Moving the texture coordinates one way moves the pattern the other.
+    let at = |k: usize| {
+        (-RIPPLE_DRIFT_M_PER_S[k] * seconds / f64::from(repeat[k])).rem_euclid(1.0) as f32
+    };
+    Vec2::new(at(0), at(1))
+}
+
+/// Drifts the detailed water's ripples: one material update a frame, and
+/// none while the plain look is on.
+pub fn drift_ripples(
+    time: Res<Time>,
+    set: Res<MaterialSet>,
+    mut materials: ResMut<Assets<StandardMaterial>>,
+) {
+    if !set.detailed_on {
+        return;
+    }
+    if let Some(water) = set.water()
+        && let Some(mut material) = materials.get_mut(water)
+    {
+        material.uv_transform.translation = ripple_offset(time.elapsed_secs_f64());
     }
 }
 
@@ -655,7 +719,7 @@ pub fn setup(
     let started = std::time::Instant::now();
     let mut detailed = BTreeMap::new();
     for surface in surfaces {
-        let pattern = surface.pattern().expect("textured surface");
+        let pattern = surface.pattern();
         let levels =
             texgen::mip_chain(&texgen::generate(pattern, TEXTURE_SIZE), pattern.period_m());
         let albedo = images.add(texture(&levels, |l| &l.albedo, true));
@@ -683,9 +747,15 @@ pub fn setup(
             detailed.insert((surface, i), handle);
         }
     }
+    // Water has one colour and smoothness everywhere: only its ripples are
+    // a texture.
+    let pattern = Surface::Water.pattern();
+    let levels = texgen::mip_chain(&texgen::generate(pattern, TEXTURE_SIZE), pattern.period_m());
+    let ripples = images.add(texture(&levels, |l| &l.normal, false));
+    detailed.insert((Surface::Water, 0), materials.add(water_material(ripples)));
     info!(
         "generated {} surface textures in {:.0} ms",
-        surfaces.len(),
+        surfaces.len() + 1,
         started.elapsed().as_secs_f64() * 1000.0
     );
     commands.insert_resource(MaterialSet {
@@ -889,5 +959,73 @@ mod tests {
             (b.style, b.tint, b.roof_tint)
         );
         assert!(a.style.is_some());
+    }
+
+    #[test]
+    fn water_is_dark_smooth_and_reflects_like_water() {
+        let m = water_material(Handle::default());
+        let c = m.base_color.to_linear();
+        assert!(
+            (c.red - 0.012).abs() < 1e-6
+                && (c.green - 0.030).abs() < 1e-6
+                && (c.blue - 0.028).abs() < 1e-6
+                && c.alpha == 1.0,
+            "{c:?}"
+        );
+        // Bevy's head-on reflectance is 0.16 × reflectance²: water's 2 %.
+        let f0 = 0.16 * m.reflectance * m.reflectance;
+        assert!((f0 - 0.02).abs() < 0.001, "{f0}");
+        assert!((m.reflectance - 0.357).abs() < 0.001, "{}", m.reflectance);
+        assert!((0.089..0.1).contains(&m.perceptual_roughness));
+        assert_eq!(m.metallic, 0.0);
+        assert!(matches!(m.alpha_mode, AlphaMode::Opaque));
+        assert!(m.normal_map_texture.is_some());
+        assert!(m.double_sided && m.cull_mode.is_none());
+        // Water is drawn with its ripples, mapped like the other surfaces.
+        let prim = Primitive {
+            material: Palette::Water,
+            positions: vec![[0.0, 0.0, 0.0], [4.0, 0.0, 0.0], [4.0, 0.0, 4.0]],
+            normals: vec![[0.0, 1.0, 0.0]; 3],
+            indices: vec![0, 2, 1],
+        };
+        let out = parts(
+            &prim,
+            [8.0, 400.0, -2.0],
+            &AssetLook::plain(),
+            &mut |_, _| None,
+        );
+        assert_eq!(out.len(), 1);
+        assert_eq!(out[0].0, Surface::Water);
+        // One repeat is 4 m: the vertex at x = 4 of the tile at x = 8 is at
+        // u = 12 / 4.
+        assert!(
+            (out[0].1.uvs[1][0] - 3.0).abs() < 1e-6,
+            "{:?}",
+            out[0].1.uvs
+        );
+    }
+
+    #[test]
+    fn ripples_drift_slowly_and_wrap() {
+        assert_eq!(ripple_offset(0.0), Vec2::ZERO);
+        // The pattern drifts north (-z) and a little west, so the texture
+        // coordinates move the other way: about 3 cm a second, one repeat
+        // being 4 m.
+        let step = ripple_offset(1.0);
+        assert!(
+            (step.x * 4.0 - 0.008).abs() < 1e-6 && (step.y * 4.0 - 0.03).abs() < 1e-6,
+            "{step}"
+        );
+        // Four months later the offset still moves smoothly, within one
+        // repeat.
+        let t = 1e7;
+        let (a, b) = (ripple_offset(t), ripple_offset(t + 1.0 / 60.0));
+        assert!(
+            (0.0..=1.0).contains(&a.x) && (0.0..=1.0).contains(&a.y),
+            "{a}"
+        );
+        let across_wrap = |d: f32| d - d.round();
+        let moved = Vec2::new(across_wrap(b.x - a.x), across_wrap(b.y - a.y));
+        assert!((moved - step / 60.0).abs().max_element() < 1e-6, "{moved}");
     }
 }

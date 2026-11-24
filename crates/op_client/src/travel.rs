@@ -21,6 +21,7 @@ use crate::controls::{Look, yaw_to_turn16};
 use crate::scene::PlayerCamera;
 use crate::session::Session;
 use crate::sky::Clock;
+use crate::water;
 
 /// Flying speed limits and default (m/s).
 const FLY_SPEED: (f32, f32, f32) = (2.0, 400.0, 25.0);
@@ -84,11 +85,11 @@ pub struct Trip {
 /// Where exactly a trip ends.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub enum Landing {
-    /// On the highest surface below this height (region frame, m), roof
-    /// or not: "land below" while flying.
+    /// On the highest surface below this height (region frame, m), roof,
+    /// water or not: "land below" while flying.
     Below(f64),
     /// On the nearest open ground (terrain, streets, squares, bridges)
-    /// rather than on a building: places and the map.
+    /// rather than on a building or in water: places and the map.
     OpenGround,
 }
 
@@ -207,15 +208,15 @@ pub fn find_landing(streamer: &Streamer, x: f64, z: f64, landing: Landing) -> Ar
                 r += 2.0;
             }
             for (i, (cx, cz)) in candidates.into_iter().enumerate() {
-                match probe_ground(streamer, cx, cz, None) {
-                    Probe::Found { y, building: false } => {
+                match probe_open(streamer, cx, cz) {
+                    Open::At(y) => {
                         if i == 0 {
                             return Arrival::At { x: cx, y, z: cz };
                         }
                         return step_clear(streamer, (x, z), (cx, cz), y);
                     }
-                    Probe::Loading => return Arrival::Loading,
-                    Probe::Found { building: true, .. } | Probe::Nothing => {}
+                    Open::Loading => return Arrival::Loading,
+                    Open::No => {}
                 }
             }
             Arrival::Nothing
@@ -223,9 +224,9 @@ pub fn find_landing(streamer: &Streamer, x: f64, z: f64, landing: Landing) -> Ar
     }
 }
 
-/// Moves on from the first open ground found beside a building, away from
-/// it, while the ground stays open: up to [`CLEARANCE_M`] further, so the
-/// arrival does not face a wall at arm's length.
+/// Moves on from the first open ground found beside a building or water,
+/// away from it, while the ground stays open: up to [`CLEARANCE_M`]
+/// further, so the arrival does not face a wall at arm's length.
 fn step_clear(streamer: &Streamer, from: (f64, f64), found: (f64, f64), y: f64) -> Arrival {
     let (dx, dz) = (found.0 - from.0, found.1 - from.1);
     let l = dx.hypot(dz);
@@ -234,10 +235,10 @@ fn step_clear(streamer: &Streamer, from: (f64, f64), found: (f64, f64), y: f64) 
     let mut s = 1.0;
     while s <= CLEARANCE_M {
         let (cx, cz) = (found.0 + ux * s, found.1 + uz * s);
-        match probe_ground(streamer, cx, cz, None) {
-            Probe::Found { y, building: false } => best = (cx, y, cz),
-            Probe::Loading => return Arrival::Loading,
-            _ => break,
+        match probe_open(streamer, cx, cz) {
+            Open::At(y) => best = (cx, y, cz),
+            Open::Loading => return Arrival::Loading,
+            Open::No => break,
         }
         s += 1.0;
     }
@@ -245,6 +246,82 @@ fn step_clear(streamer: &Streamer, from: (f64, f64), found: (f64, f64), y: f64) 
         x: best.0,
         y: best.1,
         z: best.2,
+    }
+}
+
+/// Whether a trip may end at a point.
+#[derive(Clone, Copy, Debug, PartialEq)]
+enum Open {
+    /// Open ground at this height (region frame, m).
+    At(f64),
+    /// A building, water, or nothing to stand on.
+    No,
+    Loading,
+}
+
+/// Open ground at a point: terrain, a street, a square or a bridge, but
+/// not water (ADR-0014). The terrain model's surface of a river counts as
+/// water, even where it lies above the water's level, as the client draws
+/// it as water; a bridge or a quay well above the water does not (see
+/// [`water::counts_as_water`]).
+fn probe_open(streamer: &Streamer, x: f64, z: f64) -> Open {
+    match probe_ground(streamer, x, z, None) {
+        Probe::Found { y, building: false } => match water_level(streamer, x, z) {
+            Water::Loading => Open::Loading,
+            Water::At(level) if water::counts_as_water(y, level) => Open::No,
+            Water::At(_) | Water::Dry => Open::At(y),
+        },
+        Probe::Loading => Open::Loading,
+        Probe::Found { building: true, .. } | Probe::Nothing => Open::No,
+    }
+}
+
+/// The water at a point.
+#[derive(Clone, Copy, Debug, PartialEq)]
+enum Water {
+    /// The water surface's height (region frame, m).
+    At(f64),
+    Dry,
+    /// A water mesh there is still loading.
+    Loading,
+}
+
+/// The water level at a region-frame point, from the water assets (visual
+/// only, never colliders). Loads the meshes it needs. Water is decoration:
+/// where its mesh cannot be loaded, the scene draws the terrain as it is,
+/// and the point counts as dry rather than holding up the trip.
+fn water_level(streamer: &Streamer, x: f64, z: f64) -> Water {
+    let mut best: Option<f64> = None;
+    let mut loading = false;
+    for tile in streamer.index().tiles() {
+        let o = tile.origin_mm.map(|v| v as f64 / 1000.0);
+        let (lx, lz) = (x - o[0], z - o[2]);
+        for a in tile.assets.iter().filter(|a| a.layer == Layer::Water) {
+            let b = a.bounds_mm;
+            let inside = |k: usize, v: f64| {
+                v >= b.min[k] as f64 / 1000.0 - water::EDGE_TOLERANCE_M
+                    && v <= b.max[k] as f64 / 1000.0 + water::EDGE_TOLERANCE_M
+            };
+            if !inside(0, lx) || !inside(2, lz) {
+                continue;
+            }
+            let Some(mesh) = streamer.get(&a.content_id) else {
+                if streamer.error(&a.content_id).is_none() {
+                    streamer.request(&a.content_id);
+                    loading = true;
+                }
+                continue;
+            };
+            if let Some(level) = water::level_in_mesh(&mesh, lx, lz) {
+                let level = level + o[1];
+                best = Some(best.map_or(level, |b| b.max(level)));
+            }
+        }
+    }
+    match (loading, best) {
+        (true, _) => Water::Loading,
+        (false, Some(level)) => Water::At(level),
+        (false, None) => Water::Dry,
     }
 }
 
@@ -721,5 +798,307 @@ mod tests {
                 ..
             }
         ));
+    }
+
+    /// A one-tile world with water, in a new temporary directory (made up,
+    /// so that its heights are exact). In the tile frame: ground at 400 m;
+    /// a river from x = -10 to 10 m whose water is at 400.03 m, with the
+    /// terrain model raised to 401 m north of z = -20 m (a false ramp); and
+    /// a bridge deck at 403 m from z = -3 to 3 m. The streamer reads only
+    /// tile indexes and meshes, so the assets have no manifests.
+    struct RiverWorld {
+        dir: PathBuf,
+        streamer: Option<Streamer>,
+    }
+
+    impl RiverWorld {
+        const TILE: &str = "17/68646/45903";
+        const ORIGIN_MM: [i64; 3] = [-1_970_770, 0, -103_736];
+
+        fn new(name: &str) -> RiverWorld {
+            Self::build(name, false)
+        }
+
+        /// The same world, with its water object damaged on disk, so the
+        /// water mesh cannot be loaded.
+        fn with_broken_water(name: &str) -> RiverWorld {
+            Self::build(name, true)
+        }
+
+        fn build(name: &str, broken_water: bool) -> RiverWorld {
+            use op_world::glb::{self, GlbMesh, Material, Node, Primitive, snap_m};
+            use op_world::world::{AnchorE9, Region, Spawn, WorldTile};
+            use op_world::{
+                CONTRACT_VERSION, ContentId, ObjectKind, Store, TileAsset, TileIndex, TileKey,
+                WorldManifest,
+            };
+
+            let dir = std::env::temp_dir()
+                .join(format!("streetwide-river-{name}-{}", std::process::id()));
+            std::fs::remove_dir_all(&dir).ok();
+            let store = Store::new(&dir);
+            let tile = TileKey::parse(Self::TILE).unwrap();
+            // Horizontal rectangles facing up (x range, z range, height),
+            // in one node.
+            let mesh = |name: &str, material, rects: &[([f64; 2], [f64; 2], f64)]| {
+                let mut prim = Primitive {
+                    material,
+                    positions: Vec::new(),
+                    normals: Vec::new(),
+                    indices: Vec::new(),
+                };
+                for &([x0, x1], [z0, z1], y) in rects {
+                    let first = prim.positions.len() as u32;
+                    prim.positions.extend(
+                        [[x0, z0], [x1, z0], [x1, z1], [x0, z1]]
+                            .map(|[x, z]| [snap_m(x), snap_m(y), snap_m(z)]),
+                    );
+                    prim.normals.extend([[0.0, 1.0, 0.0]; 4]);
+                    // Counter-clockwise seen from above (x east, z south).
+                    prim.indices.extend([0, 2, 1, 0, 3, 2].map(|i| first + i));
+                }
+                GlbMesh {
+                    nodes: vec![Node {
+                        name: name.into(),
+                        primitives: vec![prim],
+                    }],
+                }
+            };
+            let per_tile = format!("tile:{tile}");
+            let bridge = "streetwide:test-bridge";
+            let layers = [
+                (
+                    Layer::Terrain,
+                    Collider::Trimesh,
+                    mesh(
+                        &per_tile,
+                        Material::Terrain,
+                        &[
+                            ([-50.0, 50.0], [-50.0, 50.0], 400.0),
+                            ([-10.0, 10.0], [-50.0, -20.0], 401.0),
+                        ],
+                    ),
+                ),
+                (
+                    Layer::Transport,
+                    Collider::Trimesh,
+                    mesh(
+                        bridge,
+                        Material::Bridge,
+                        &[([-12.0, 12.0], [-3.0, 3.0], 403.0)],
+                    ),
+                ),
+                (
+                    Layer::Water,
+                    Collider::None,
+                    mesh(
+                        &per_tile,
+                        Material::Water,
+                        &[([-10.0, 10.0], [-50.0, 50.0], 400.03)],
+                    ),
+                ),
+            ];
+            let mut assets: Vec<TileAsset> = layers
+                .into_iter()
+                .map(|(layer, collider, mesh)| {
+                    let feature_id = mesh.nodes[0].name.clone();
+                    TileAsset {
+                        layer,
+                        manifest_id: ContentId::of(feature_id.as_bytes()),
+                        feature_id,
+                        content_id: store
+                            .write_object(&glb::write(&mesh).unwrap(), ObjectKind::Glb)
+                            .unwrap(),
+                        license: "CC0-1.0".into(),
+                        collider,
+                        bounds_mm: mesh.bounds_mm().unwrap(),
+                    }
+                })
+                .collect();
+            assets.sort_by(|a, b| (a.layer, &a.feature_id).cmp(&(b.layer, &b.feature_id)));
+            if broken_water {
+                let water = assets.iter().find(|a| a.layer == Layer::Water).unwrap();
+                // Bytes that no longer hash to the object's id.
+                std::fs::write(
+                    store.object_path(&water.content_id, ObjectKind::Glb),
+                    b"not a mesh",
+                )
+                .unwrap();
+            }
+            let index = TileIndex {
+                format: TileIndex::FORMAT.into(),
+                contract_version: CONTRACT_VERSION.into(),
+                tile,
+                region: tile.region(),
+                origin_mm: Self::ORIGIN_MM,
+                assets,
+            };
+            let bounds_mm = index.bounds().unwrap();
+            let tile_id = store
+                .write_object(&index.to_bytes().unwrap(), ObjectKind::Json)
+                .unwrap();
+            let o = Self::ORIGIN_MM;
+            store
+                .write_world(&WorldManifest {
+                    format: WorldManifest::FORMAT.into(),
+                    contract_version: CONTRACT_VERSION.into(),
+                    name: "river-test".into(),
+                    region: Region {
+                        key: tile.region(),
+                        anchor_e9: AnchorE9 {
+                            lat: 47_368_594_345,
+                            lon: 8_569_335_938,
+                        },
+                    },
+                    attribution: vec!["The StreetWide contributors".into()],
+                    spawn: Spawn {
+                        position_mm: [o[0] + 30_000, 401_000, o[2]],
+                        yaw: 0,
+                    },
+                    tiles: vec![WorldTile {
+                        tile,
+                        tile_id,
+                        origin_mm: o,
+                        bounds_mm,
+                    }],
+                })
+                .unwrap();
+            RiverWorld {
+                streamer: Some(Streamer::open(&dir, 2, 64 << 20).unwrap()),
+                dir,
+            }
+        }
+
+        fn streamer(&self) -> &Streamer {
+            self.streamer.as_ref().unwrap()
+        }
+
+        /// The region-frame point at tile-frame x and z.
+        fn at(x: f64, z: f64) -> (f64, f64) {
+            let o = Self::ORIGIN_MM.map(|v| v as f64 / 1000.0);
+            (o[0] + x, o[2] + z)
+        }
+
+        /// The tile-frame x of a region-frame x.
+        fn local_x(x: f64) -> f64 {
+            x - Self::ORIGIN_MM[0] as f64 / 1000.0
+        }
+    }
+
+    impl Drop for RiverWorld {
+        fn drop(&mut self) {
+            // Stop the loader threads before deleting their files.
+            self.streamer = None;
+            std::fs::remove_dir_all(&self.dir).ok();
+        }
+    }
+
+    /// Places and the map do not land in water, whether the terrain model
+    /// lies under the water or rises above it: they land on the nearest
+    /// bank instead, and stepping clear of the water stays on it.
+    #[test]
+    fn open_ground_landings_avoid_water() {
+        let world = RiverWorld::new("open-ground");
+        let streamer = world.streamer();
+        for (z, ground) in [(20.0, 400.0), (-35.0, 401.0)] {
+            let (x, z) = RiverWorld::at(0.0, z);
+            let Arrival::At { y, .. } = landing(streamer, x, z, Landing::Below(1e9)) else {
+                panic!()
+            };
+            assert!((y - ground).abs() < 1e-6, "{y}");
+            let Arrival::At { x: lx, y, z: lz } = landing(streamer, x, z, Landing::OpenGround)
+            else {
+                panic!()
+            };
+            // The first ring clear of the water is 12 m out; then up to
+            // 4 m further away from it.
+            let east = RiverWorld::local_x(lx);
+            assert!(east > 10.0 && east <= 12.0 + CLEARANCE_M + 1e-6, "{east}");
+            assert!(
+                (lz - z).abs() < 1e-6 && (y - 400.0).abs() < 1e-6,
+                "{lz} {y}"
+            );
+            assert_eq!(water_level(streamer, lx, lz), Water::Dry);
+        }
+    }
+
+    /// A bridge well above the water is open ground; flying and landing
+    /// below lands on whatever is there, water or not.
+    #[test]
+    fn bridges_over_water_are_open_ground() {
+        let world = RiverWorld::new("bridge");
+        let streamer = world.streamer();
+        let (x, z) = RiverWorld::at(0.0, 0.0);
+        let Arrival::At { x: lx, y, z: lz } = landing(streamer, x, z, Landing::OpenGround) else {
+            panic!()
+        };
+        assert_eq!((lx, lz), (x, z));
+        assert!((y - 403.0).abs() < 1e-6, "{y}");
+        // 400.03 m to the nearest f32.
+        assert!(matches!(water_level(streamer, x, z), Water::At(w) if (w - 400.03).abs() < 1e-4));
+        let Arrival::At { y, .. } = landing(streamer, x, z, Landing::Below(402.0)) else {
+            panic!()
+        };
+        assert!((y - 400.0).abs() < 1e-6, "{y}");
+    }
+
+    /// Open ground waits for the water there: once the ground has loaded,
+    /// a landing still waits until the water mesh has.
+    #[test]
+    fn landings_wait_for_the_water() {
+        let world = RiverWorld::new("loading");
+        let streamer = world.streamer();
+        let (x, z) = RiverWorld::at(0.0, 20.0);
+        let mut ground = probe_ground(streamer, x, z, None);
+        for _ in 0..4000 {
+            if ground != Probe::Loading {
+                break;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(5));
+            ground = probe_ground(streamer, x, z, None);
+        }
+        assert!(
+            matches!(
+                ground,
+                Probe::Found {
+                    building: false,
+                    ..
+                }
+            ),
+            "{ground:?}"
+        );
+        // Only the terrain has been asked for so far.
+        assert_eq!(
+            find_landing(streamer, x, z, Landing::OpenGround),
+            Arrival::Loading
+        );
+        assert!(matches!(
+            landing(streamer, x, z, Landing::OpenGround),
+            Arrival::At { .. }
+        ));
+    }
+
+    /// Water is decoration: a water mesh that cannot be loaded does not hold
+    /// up a trip until it times out. The river counts as dry, as the scene
+    /// then draws the terrain there as it is.
+    #[test]
+    fn landings_do_not_wait_for_water_that_cannot_load() {
+        let world = RiverWorld::with_broken_water("broken-water");
+        let streamer = world.streamer();
+        let (x, z) = RiverWorld::at(0.0, 20.0);
+        let Arrival::At { x: lx, y, z: lz } = landing(streamer, x, z, Landing::OpenGround) else {
+            panic!()
+        };
+        assert_eq!((lx, lz), (x, z));
+        assert!((y - 400.0).abs() < 1e-6, "{y}");
+        let water = streamer
+            .index()
+            .tiles()
+            .iter()
+            .flat_map(|t| &t.assets)
+            .find(|a| a.layer == Layer::Water)
+            .unwrap();
+        assert!(streamer.error(&water.content_id).is_some());
+        assert_eq!(water_level(streamer, x, z), Water::Dry);
     }
 }

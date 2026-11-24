@@ -210,6 +210,13 @@ fn help_text(session: &Session, travel: &Travel) -> String {
     }
     lines.push("VIEW    T, Shift+T: time of day ±30 min · F2: detailed or plain look".into());
     lines.push("        F4: graphics high or fast · F3: details · F1: hide this help".into());
+    // OpenStreetMap data (streets, water) comes with its licence and where
+    // to read it (ADR-0014).
+    let attribution = &session.streamer().index().world().attribution;
+    if attribution.iter().any(|a| a.contains("OpenStreetMap")) {
+        lines.push("DATA    © OpenStreetMap contributors, under the Open Database".into());
+        lines.push("        Licence (ODbL): openstreetmap.org/copyright".into());
+    }
     if session.is_playback() {
         lines.push("(replay: travel and saving are off)".into());
     }
@@ -426,5 +433,37 @@ fn finish(
             }
         }
         Some(n) => state.frames_left = Some(n - 1),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::path::PathBuf;
+
+    use super::*;
+
+    /// A world built from OpenStreetMap credits it in the help panel, with
+    /// its licence and where to read it.
+    #[test]
+    fn help_credits_openstreetmap_and_its_licence() {
+        let world = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../fixtures/world");
+        let session = Session::start(&Options {
+            world: Some(world),
+            ..Options::default()
+        })
+        .unwrap();
+        let travel = Travel {
+            view: View::Walk,
+            fly_speed: 25.0,
+            places: Vec::new(),
+            pending: None,
+            cut: false,
+        };
+        let text = help_text(&session, &travel);
+        assert!(text.contains("© OpenStreetMap contributors"), "{text}");
+        assert!(
+            text.contains("(ODbL)") && text.contains("openstreetmap.org/copyright"),
+            "{text}"
+        );
     }
 }

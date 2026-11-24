@@ -78,9 +78,21 @@ fn change_sets() {
     let mut d = doc.clone();
     d["note"] = json!("x");
     mutations.push(("an unknown field", d));
+    let mut d = doc.clone();
+    d["changes"][0]["layer"] = json!("river");
+    mutations.push(("an unknown layer", d));
     for (what, m) in &mutations {
         both_reject(&v, m, rust, what);
     }
+
+    // A change to the water layer is well formed: a baseline refresh makes
+    // such changes, and the gate (G3) refuses contributed ones.
+    let mut d = doc.clone();
+    let tile = d["changes"][0]["tile"].as_str().unwrap().to_string();
+    d["changes"][0]["layer"] = json!("water");
+    d["changes"][0]["feature_id"] = json!(format!("tile:{tile}"));
+    assert!(v.is_valid(&d));
+    assert!(rust(&cjson::to_vec(&d).unwrap()));
 }
 
 #[test]

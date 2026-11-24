@@ -27,7 +27,19 @@
           "license": { "$ref": "urn:streetwide:schema:common:0.1#/$defs/license" },
           "collider": { "$ref": "urn:streetwide:schema:common:0.1#/$defs/collider" },
           "bounds_mm": { "$ref": "urn:streetwide:schema:common:0.1#/$defs/boundsMm" }
-        }
+        },
+        "allOf": [
+          {
+            "description": "Visual only (RFC 0003): water never collides. Checked here as well as in the manifest, because the simulation reads colliders from tile indexes and never opens manifests.",
+            "if": {
+              "required": ["layer"],
+              "properties": { "layer": { "const": "water" } }
+            },
+            "then": {
+              "properties": { "collider": { "const": "none" } }
+            }
+          }
+        ]
       }
     }
   }
