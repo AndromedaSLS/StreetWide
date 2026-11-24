@@ -54,16 +54,17 @@ def test_the_water_query_bounds_each_statement_and_asks_for_geometry():
     )
 
 
-@pytest.mark.parametrize("world,key,water_key", [
-    ("fixture-grossmuenster", "4f5fa21e50160d37", "84b7261f56959038"),
-    ("zurich-altstadt", "d279ef51243f68a4", "22f0c68c602e83ea"),
-])
-def test_the_committed_worlds_keep_their_cache_files(world, key, water_key):
+def test_the_district_keeps_its_cache_files():
     """The cache file names hash the queries: these are the answers the
-    fixture world and the district were built from (`--offline`)."""
-    bbox = _bbox(world)
-    assert overpass._key(overpass.query(bbox)) == key
-    assert overpass._key(overpass.water_query(bbox)) == water_key
+    district was built from (`--offline`). Only the district is pinned:
+    its bbox is written in its world definition, whereas the fixture's
+    comes from tile maths whose last bits differ between platforms
+    (ADR-0006, section 9), so its keys do too. The query text itself is
+    pinned above for every bbox."""
+    bbox = _bbox("zurich-altstadt")
+    assert bbox == DISTRICT
+    assert overpass._key(overpass.query(bbox)) == "d279ef51243f68a4"
+    assert overpass._key(overpass.water_query(bbox)) == "22f0c68c602e83ea"
 
 
 def _answer(timestamp, *elements):
@@ -71,19 +72,22 @@ def _answer(timestamp, *elements):
 
 
 def test_water_answers_have_their_own_cache_file(tmp_path):
-    bbox = _bbox("fixture-grossmuenster")
+    bbox = DISTRICT
+    roads_key = overpass._key(overpass.query(bbox))
+    water_key = overpass._key(overpass.water_query(bbox))
+    assert roads_key != water_key
     osm = tmp_path / "osm"
     osm.mkdir()
     roads = _answer("2026-11-23T08:22:35Z", {"type": "way", "id": 1, "tags": {"highway": "footway"}})
-    (osm / "overpass-4f5fa21e50160d37.json").write_text(json.dumps(roads), encoding="utf-8")
+    (osm / f"overpass-{roads_key}.json").write_text(json.dumps(roads), encoding="utf-8")
     # The roads-and-buildings answer is never taken for the water answer.
     with pytest.raises(RuntimeError, match="the Overpass water response is not cached and --offline is set"):
         overpass.fetch_water(bbox, tmp_path, offline=True, refresh=False)
     water = _answer("2026-11-24T12:44:49Z", {"type": "relation", "id": 1598599, "tags": {"natural": "water"}})
-    (osm / "overpass-water-84b7261f56959038.json").write_text(json.dumps(water), encoding="utf-8")
+    (osm / f"overpass-water-{water_key}.json").write_text(json.dumps(water), encoding="utf-8")
     assert overpass.fetch_water(bbox, tmp_path, offline=True, refresh=False) == water
     assert overpass.fetch(bbox, tmp_path, offline=True, refresh=False) == roads
     # Nor the other way round.
-    (osm / "overpass-4f5fa21e50160d37.json").unlink()
+    (osm / f"overpass-{roads_key}.json").unlink()
     with pytest.raises(RuntimeError, match="the Overpass response is not cached and --offline is set"):
         overpass.fetch(bbox, tmp_path, offline=True, refresh=False)
