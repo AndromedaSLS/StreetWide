@@ -1104,9 +1104,9 @@ refused links in the download cache.
 | Long campaigns, final code | Rust at 20 times the CI budget (`STREETWIDE_FUZZ_ITERS=40000`) on two seeds, 2.1 million inputs each; Python at 10 times on Windows and Linux (20 times after the first review); no failure |
 | `git diff --check`, CR scan | clean |
 
-**Not run here:** Windows cannot run the Linux-only Rust tests (the child
-process's memory check, its self-test, and the link tests). The first
-Linux CI run is their real test.
+**Linux-only Rust tests** (the child process's memory check, its
+self-test, and the link tests) cannot run on Windows. They passed in the
+branch's first Linux CI run, with all 12 jobs green.
 
 **For the maintainer:**
 1. **JSON size limits** ([RFC 0001](../rfcs/0001-world-format.md),
