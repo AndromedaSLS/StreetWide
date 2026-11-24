@@ -879,3 +879,22 @@ recommendation. **Nothing is decided;** the maintainer decides each one.
 4. RFC 0004 with RFC 0003 (one contract-version choice), then ADR-0015
    and ADR-0016.
 5. ADR-0018, including who buys or lends the reference card.
+
+### Water and the M2 drafts merged into main (2026-11-24)
+
+At the maintainer's request, the two open pull requests were merged into
+`main` with merge commits, as PR #1 was:
+- **#2** (`water`): RFC 0003 (a water layer) and ADR-0014 (water areas
+  from OpenStreetMap), with their implementation;
+- **#3** (`m2-decisions`): RFC 0004 and ADR-0015 to ADR-0019, retargeted
+  to `main` after #2.
+
+Merging is not accepting: RFC 0003 and RFC 0004 stay *Draft*, and ADR-0014
+to ADR-0019 stay *Proposed*, until the maintainer decides. Both branches
+already contained `main`, so `main` now holds exactly the commit that the
+pull requests' CI tested (`0a9de73`, 12/12 jobs). The roadmap's "Now" and
+section 8 no longer point at branches.
+
+**For local worlds:** `main` now reads worlds with water. A
+`zurich-altstadt` world built before water still opens; walks recorded in
+it check against that old world, not a rebuilt one.
