@@ -11,6 +11,8 @@ use std::f64::consts::FRAC_1_SQRT_2;
 
 use op_world::glb::{GlbMesh, Material, Primitive};
 
+use crate::grid::ColumnGrid;
+
 /// Terrain under water is drawn this far below the water surface (m).
 pub const SINK_M: f64 = 0.10;
 
@@ -37,9 +39,6 @@ pub const EDGE_TOLERANCE_M: f64 = 0.01;
 /// Terrain whose normal is within 10 degrees of vertical lies under the
 /// water; steeper terrain is a bank and stays (cosine of 10 degrees).
 const FLAT_MIN_NORMAL_Y: f64 = 0.984_807_753;
-
-/// Grid cell size for lookups (m).
-const CELL_M: f64 = 4.0;
 
 /// Where to look for the shore around a point: every 45 degrees.
 const AROUND: [[f64; 2]; 8] = [
@@ -116,16 +115,12 @@ pub fn level_in_mesh(mesh: &GlbMesh, x: f64, z: f64) -> Option<f64> {
         .reduce(f64::max)
 }
 
-/// Triangles sorted into a grid of cells seen from above, so a lookup tests
-/// a handful of them. Coordinates are in a tile's frame.
+/// Triangles sorted into a grid of cells seen from above (`grid`), so a
+/// lookup tests a handful of them. Coordinates are in a tile's frame.
 struct TriangleGrid {
     tris: Vec<[[f64; 3]; 3]>,
-    /// x, z of the grid's corner.
-    min: [f64; 2],
-    cols: usize,
-    rows: usize,
     /// Per cell: the triangles within [`EDGE_TOLERANCE_M`] of it.
-    cells: Vec<Vec<u32>>,
+    columns: ColumnGrid,
 }
 
 impl TriangleGrid {
@@ -141,49 +136,17 @@ impl TriangleGrid {
                 })
             })
             .collect();
-        let (mut min, mut max) = ([f64::MAX; 2], [f64::MIN; 2]);
-        for e in &extents {
-            for k in 0..2 {
-                min[k] = min[k].min(e[k][0]);
-                max[k] = max[k].max(e[k][1]);
-            }
-        }
-        let count = |k: usize| {
-            if tris.is_empty() {
-                0
-            } else {
-                (((max[k] - min[k]) / CELL_M).ceil() as usize).max(1)
-            }
-        };
-        let (cols, rows) = (count(0), count(1));
-        let mut cells = vec![Vec::new(); cols * rows];
-        let cell =
-            |v: f64, lo: f64, n: usize| (((v - lo) / CELL_M).floor().max(0.0) as usize).min(n - 1);
-        for (i, e) in extents.iter().enumerate() {
-            for r in cell(e[1][0], min[1], rows)..=cell(e[1][1], min[1], rows) {
-                for c in cell(e[0][0], min[0], cols)..=cell(e[0][1], min[0], cols) {
-                    cells[r * cols + c].push(i as u32);
-                }
-            }
-        }
         TriangleGrid {
+            columns: ColumnGrid::new(&extents),
             tris,
-            min,
-            cols,
-            rows,
-            cells,
         }
     }
 
     /// The height at (x, z) of the highest triangle the point lies on, seen
     /// from above (within [`EDGE_TOLERANCE_M`]).
     fn height(&self, x: f64, z: f64) -> Option<f64> {
-        let c = ((x - self.min[0]) / CELL_M).floor();
-        let r = ((z - self.min[1]) / CELL_M).floor();
-        if c < 0.0 || r < 0.0 || c as usize >= self.cols || r as usize >= self.rows {
-            return None;
-        }
-        self.cells[r as usize * self.cols + c as usize]
+        self.columns
+            .at(x, z)?
             .iter()
             .filter_map(|&i| level_in_triangle(&self.tris[i as usize], x, z))
             .reduce(f64::max)

@@ -8,6 +8,10 @@
 # Replays recorded by the client (fixtures live in fixtures/replays/)
 /replays/
 
+# Building shells exported to model facades on (python -m tools.contrib
+# reference, docs/contributing/facades.md)
+/contrib/
+
 # Python
 /.venv/
 __pycache__/

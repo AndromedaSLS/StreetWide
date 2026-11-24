@@ -14,6 +14,8 @@ pull request.
 **Now:**
 - **M1** waits on three decisions: hosting (ADR-0010), how the published
   world meets the ODbL (ADR-0019) and the licence allowlist (ADR-0017).
+  Work that needs no decision goes on: the client's inspect mode, which
+  marks improvable buildings and gives the facade command, is on `main`.
 - **M2** has started with water for the Limmat: RFC 0003 (a water layer,
   Draft) and ADR-0014 (water areas from OpenStreetMap, Proposed) are
   implemented on `main` while they are open for comment, as RFC 0001 and

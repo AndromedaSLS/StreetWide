@@ -51,7 +51,25 @@ On Windows, write `.venv\Scripts\python` where this guide says
 
 ## 1. Pick a building and get its reference
 
-Find the building's coordinates, for example on
+**In the game.** Walk or fly to the building, press **I** and point the
+crosshair at it:
+- **amber** means it has no facade yet: it is yours to model;
+- **blue** means someone has contributed one. A better facade can still
+  replace it.
+
+The panel shows the building's id (`swisstopo:swissbuildings3d:…`), who
+made it and its licence. Click (once more if the first click captured the
+mouse): the terminal you started the client from prints the same, and the
+exact command for this step with your world's path. Run it in the
+repository's folder; if you started the client elsewhere, it says where
+that is. On Windows the client prints the PowerShell form, or the Git Bash
+form if you started it from Git Bash. For example:
+
+```sh
+.venv/bin/python -m tools.contrib reference --world 'data/world/zurich-altstadt' --building 'swisstopo:swissbuildings3d:000f609c-4003-495f-9426-b43e3d770167'
+```
+
+**From coordinates.** Find the building's coordinates, for example on
 [openstreetmap.org](https://www.openstreetmap.org): right-click it and
 choose "Show address". Then:
 
@@ -59,9 +77,15 @@ choose "Show address". Then:
 .venv/bin/python -m tools.contrib reference --world data/world/zurich-altstadt --at 8.54397,47.37017
 ```
 
-This prints the building's id (`swisstopo:swissbuildings3d:…`) and writes
+Either way, this prints the building's id and writes
 `contrib/<id>-shell.glb`: the building's walls and roof, exactly where they
 are in the world.
+
+A few buildings come from OpenStreetMap, where swissBUILDINGS3D has none;
+the panel says so. If their outline or height is wrong, fix it in
+OpenStreetMap. Model their facade from your own observations: their shell
+is under the ODbL, so use it only to place your facade, and don't copy its
+geometry (in step 4, never `--derived-from-shell`).
 
 ## 2. Model the facade
 
@@ -135,6 +159,9 @@ cargo run --release -p op_client -- --world preview-world
 ```
 
 (On Windows PowerShell, `Copy-Item -Recurse data\world\zurich-altstadt preview-world`.)
+
+Press I and point at your building: it turns blue, and the panel names you
+as the author of its facade, with its licence and credits.
 
 The review you give yourself here only lets the local merge through. In
 the shared world, reviewers decide.

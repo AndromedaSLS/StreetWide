@@ -146,6 +146,8 @@ world. F1 shows and hides the controls in the client.
 | F2 | Detailed look, or the plain colours of the world data |
 | F3 | Details: frame rate, position, sun |
 | F4 | Graphics: high, or fast for slower GPUs |
+| **Contributing** | |
+| I | Inspect: names what the crosshair is on (a building, street, bridge, water or terrain), who made it and its licence. Amber buildings are improvable, blue ones have a contribution. A click prints the details to the terminal, and for a building the facade tool's command. Paused on the map; works in replays |
 
 The simulation runs at a fixed 60 Hz, whatever your frame rate. Buildings
 and terrain stream in around you; "Loading…" means the simulation is waiting
@@ -155,13 +157,16 @@ Going somewhere (a place, the map, landing from flight) starts a new session
 there, so F9 saves the walk since you arrived
 ([ADR-0013](docs/adr/0013-travel-by-starting-new-sessions.md)). You can also
 start somewhere: `--place Grossmünsterplatz` (or a number), `--at <lon>,<lat>`,
-`--time 19:30`, `--date 2026-06-21`, `--view map`.
+`--pitch -20` (looking down), `--time 19:30`, `--date 2026-06-21`,
+`--view map`, `--inspect`.
 
 The windows, doors, roof tiles and paving are drawn by the client, not
 taken from the world data
 ([ADR-0012](docs/adr/0012-client-realism-from-procedural-detail.md)); F2
 shows the data alone. Real facades come from contributions
-([docs/contributing/facades.md](docs/contributing/facades.md)).
+([docs/contributing/facades.md](docs/contributing/facades.md)). Press I and
+point at a building to see whether it has one, and to get the command that
+starts yours.
 
 ### 5. Check and watch your replay
 

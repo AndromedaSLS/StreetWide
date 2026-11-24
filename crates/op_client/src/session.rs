@@ -56,6 +56,8 @@ pub struct Session {
     sim: Sim,
     source: StreamSource,
     streamer: Arc<Streamer>,
+    /// The world's directory, as given or found.
+    world_dir: PathBuf,
     /// Where this session started, and the world's own spawn point.
     spawn: Spawn,
     world_spawn: Spawn,
@@ -137,6 +139,7 @@ impl Session {
             playback: replay.as_ref().map(|_| Playback::Running),
             replay,
             streamer,
+            world_dir,
             spawn,
             world_spawn,
             seed,
@@ -161,6 +164,11 @@ impl Session {
 
     pub fn streamer(&self) -> &Arc<Streamer> {
         &self.streamer
+    }
+
+    /// The world's directory, as given with `--world` or found.
+    pub fn world_dir(&self) -> &Path {
+        &self.world_dir
     }
 
     pub fn sim(&self) -> &Sim {

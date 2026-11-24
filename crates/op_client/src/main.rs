@@ -2,8 +2,9 @@
 //!
 //! ```text
 //! cargo run -p op_client [-- --world <dir>] [--seed <n>]
-//!     [--place <name or number> | --at <lon>,<lat>[,<heading>]]
+//!     [--place <name or number> | --at <lon>,<lat>[,<heading>]] [--pitch <degrees>]
 //!     [--time <HH:MM>] [--date <YYYY-MM-DD>] [--view walk|fly|map] [--details]
+//!     [--inspect]
 //! cargo run -p op_client -- --replay <file.oprep> [--world <dir>] [--exit-when-done]
 //!     [--screenshot <file.png> [--screenshot-tick <n>]]
 //! ```
@@ -15,13 +16,17 @@
 //! colliders from (`op_stream`).
 //!
 //! Press F1 in the client for the controls: walking, flying, the map, named
-//! places, the time of day and graphics settings.
+//! places, the time of day, graphics settings and inspect mode (I: who made
+//! what is under the crosshair, and how to improve it).
 
 mod controls;
 mod geo;
+mod grid;
 mod heights;
 mod hud;
+mod inspect;
 mod materials;
+mod pick;
 mod scene;
 mod session;
 mod sky;
@@ -48,6 +53,8 @@ pub struct Options {
     pub place: Option<String>,
     /// Start at a longitude, latitude and heading (degrees).
     pub at: Option<(f64, f64, f64)>,
+    /// Start looking up (positive) or down (degrees).
+    pub pitch: Option<f64>,
     /// Time of day (minutes after midnight, Swiss time) and date.
     pub time: Option<u32>,
     pub date: Option<(i32, u32, u32)>,
@@ -55,9 +62,11 @@ pub struct Options {
     pub view: Option<String>,
     /// Open the details panel (F3) at start.
     pub details: bool,
+    /// Start in inspect mode (I).
+    pub inspect: bool,
 }
 
-const USAGE: &str = "usage: op_client [--world <dir>] [--seed <n>] [--place <name|number> | --at <lon>,<lat>[,<heading>]] [--time <HH:MM>] [--date <YYYY-MM-DD>] [--view walk|fly|map] [--details] [--replay <file.oprep>] [--exit-when-done] [--screenshot <file.png> [--screenshot-tick <n>]]";
+const USAGE: &str = "usage: op_client [--world <dir>] [--seed <n>] [--place <name|number> | --at <lon>,<lat>[,<heading>]] [--pitch <degrees>] [--time <HH:MM>] [--date <YYYY-MM-DD>] [--view walk|fly|map] [--details] [--inspect] [--replay <file.oprep>] [--exit-when-done] [--screenshot <file.png> [--screenshot-tick <n>]]";
 
 fn parse_time(text: &str) -> Option<u32> {
     let (h, m) = text.split_once(':')?;
@@ -104,6 +113,16 @@ fn parse_args() -> Result<Options, String> {
             }
             "--exit-when-done" => o.exit_when_done = true,
             "--details" => o.details = true,
+            "--inspect" => o.inspect = true,
+            "--pitch" => {
+                o.pitch = Some(
+                    value()?
+                        .parse()
+                        .ok()
+                        .filter(|p: &f64| (-90.0..=90.0).contains(p))
+                        .ok_or("--pitch needs degrees from -90 to 90")?,
+                )
+            }
             "--place" => o.place = Some(value()?),
             "--at" => o.at = Some(parse_at(&value()?).ok_or("--at needs <lon>,<lat>[,<heading>]")?),
             "--time" => o.time = Some(parse_time(&value()?).ok_or("--time needs HH:MM")?),
@@ -149,6 +168,7 @@ fn main() -> ExitCode {
         help: options.screenshot.is_none(),
         debug: options.details,
     };
+    let inspect = inspect::Inspect::new(options.inspect);
     let exit = App::new()
         .add_plugins(DefaultPlugins.set(WindowPlugin {
             primary_window: Some(Window { title, ..default() }),
@@ -158,12 +178,14 @@ fn main() -> ExitCode {
         .insert_resource(session)
         .insert_resource(clock)
         .insert_resource(panels)
+        .insert_resource(inspect)
         .add_plugins((
             session::SessionPlugin,
             controls::ControlsPlugin,
             sky::SkyPlugin,
             scene::ScenePlugin,
             travel::TravelPlugin,
+            inspect::InspectPlugin,
             hud::HudPlugin,
         ))
         .run();

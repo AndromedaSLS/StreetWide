@@ -117,7 +117,9 @@ jobs:
     # builds and tests it in the `tests` job; here it is compiled and tested
     # on Windows x86_64 and macOS arm64. No window opens: the tests cover
     # sessions and replays, travel and landing, terrain heights, textures,
-    # texture mapping and geography.
+    # texture mapping, geography, and inspect mode's picking and printed
+    # commands, which they run through PowerShell on Windows and sh
+    # elsewhere.
     name: client (${{ matrix.os }})
     strategy:
       fail-fast: false
