@@ -61,12 +61,16 @@ jobs:
         with:
           python-version: "3.13"
       - name: Contribution tool output passes the full gate
+        # The bundle goes to the runner's temporary directory: `target/` is
+        # restored from the cache, so a bundle left there by an earlier run
+        # would make the tool refuse a non-empty output directory.
         run: |
           python -m pip install -r tools/requirements.txt
           FEATURE=$(python -c "import json; print(json.load(open('fixtures/changes/facade-sample/change.json'))['changes'][0]['feature_id'])")
           MODEL=$(ls fixtures/changes/facade-sample/objects/*/*.glb)
-          python -m tools.contrib facade --world fixtures/world --building "$FEATURE" --model "$MODEL" --author github:ci --title "CI facade" --rationale "Tool-to-gate check in CI." --derived-from-shell --out target/ci-facade
-          cargo run -p op_replay --locked -- check-change fixtures/world target/ci-facade --replay fixtures/replays/sample.oprep
+          BUNDLE="$RUNNER_TEMP/ci-facade"
+          python -m tools.contrib facade --world fixtures/world --building "$FEATURE" --model "$MODEL" --author github:ci --title "CI facade" --rationale "Tool-to-gate check in CI." --derived-from-shell --out "$BUNDLE"
+          cargo run -p op_replay --locked -- check-change fixtures/world "$BUNDLE" --replay fixtures/replays/sample.oprep
 
   determinism:
     # Cross-platform determinism: the Rapier canary (golden digest), the
