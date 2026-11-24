@@ -16,6 +16,10 @@ pull request.
 - **M2** starts with water for the Limmat. RFC 0003 (a water layer) and
   ADR-0014 (water areas from OpenStreetMap) are drafted on the `water`
   branch.
+- **More drafts** are on the `m2-decisions` branch: for M1, ADR-0019 (how
+  the published world meets the ODbL) and ADR-0017 (licence allowlist);
+  for M2, RFC 0004 (trees and street lights), ADR-0015 (their Zurich
+  sources), ADR-0016 (measured heights) and ADR-0018 (performance tier).
 
 *Last reviewed: 2026-11-24.*
 
@@ -545,10 +549,14 @@ arrives) and servers per area for larger groups.
 | Hosting, provider and who pays | [ADR-0010](adr/0010-hosting-the-canonical-world.md) | Proposed; the maintainer chooses | M1 |
 | Corner fix, detailed look, fast travel | [ADR-0011](adr/0011-stop-corner-oscillation.md), [ADR-0012](adr/0012-client-realism-from-procedural-detail.md), [ADR-0013](adr/0013-travel-by-starting-new-sessions.md) | Proposed | closing M0 |
 | World format and contribution rules | [RFC 0001](../rfcs/0001-world-format.md), [RFC 0002](../rfcs/0002-contributions-and-merge-rules.md) | Draft | announcing (M1) |
-| How the published world meets the ODbL; the OSM fallback buildings | builds on ADR-0001 | to be drafted | publishing (M1) |
-| Licence allowlist | amends ADR-0001 | to be drafted | M1, new sources in M2 |
+| How the published world meets the ODbL; the OSM fallback buildings | [ADR-0019](adr/0019-odbl-and-the-published-world.md), building on ADR-0001 | Proposed, on the `m2-decisions` branch | publishing (M1) |
+| Licence allowlist | [ADR-0017](adr/0017-licence-allowlist.md), amending ADR-0001 | Proposed, on the `m2-decisions` branch; its gate and validation rules need an RFC | M1, new sources in M2 |
 | Water layer and water source | RFC 0003, ADR-0014 | drafted on the `water` branch | M2 |
-| Performance tier; pedestrians | ADRs | to be drafted | M2 |
+| Trees and street lights in the world format | [RFC 0004](../rfcs/0004-point-features.md) | Draft, on the `m2-decisions` branch; comments until at least 2026-12-01 | M2 |
+| Trees and lights from Zurich's open data; measured heights | [ADR-0015](adr/0015-zurich-trees-and-lights.md), [ADR-0016](adr/0016-swisssurface3d-heights.md) | Proposed, on the `m2-decisions` branch | M2 |
+| Performance tier | [ADR-0018](adr/0018-performance-tier.md) | Proposed, on the `m2-decisions` branch | M2 |
+| Pedestrians | ADR | to be drafted; RFC 0004 recommends deciding it first | M2 |
+| Navigation data; how the client draws trees, lamps and lit windows | an RFC after the pedestrian ADR; an ADR extending ADR-0012 | to be drafted | M2 |
 | Code of Conduct contact, branch protection, filing the issue drafts, announcing | tasks, see M1 | open | announcing (M1) |
 | Who owns costs and receives donations | with ADR-0010 | to be drafted | M1 |
 | Whether there is an in-game economy | none yet | not drafted | later |

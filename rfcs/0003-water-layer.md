@@ -149,6 +149,9 @@ The design above.
     changes the id of every manifest, tile index and world, including the
     golden ids in `fixtures/format`. It changes no mesh and no replay
     checkpoint.
+  - **One decision with RFC 0004:** [RFC 0004](0004-point-features.md)
+    amends the same format, and proposes choosing the version once for
+    both RFCs.
 - **Existing worlds:** a re-ingest adds water assets and new tile indexes,
   so world ids change. Existing assets stay byte-identical. Replays
   recorded in the old world no longer match its id and must be recorded

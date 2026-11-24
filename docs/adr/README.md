@@ -28,3 +28,8 @@ instead.
 | [0012](0012-client-realism-from-procedural-detail.md) | Client realism from procedural detail and physically based light | Proposed |
 | [0013](0013-travel-by-starting-new-sessions.md) | Travel in the client by starting new sessions | Proposed |
 | [0014](0014-water-areas-from-openstreetmap.md) | Water areas from OpenStreetMap, placed as level surfaces | Proposed |
+| [0015](0015-zurich-trees-and-lights.md) | Trees and lights in Zurich from Stadt Zürich open data | Proposed |
+| [0016](0016-swisssurface3d-heights.md) | swissSURFACE3D for measured heights | Proposed |
+| [0017](0017-licence-allowlist.md) | An allowlist of licences for world data and client assets | Proposed |
+| [0018](0018-performance-tier.md) | A performance tier and a benchmark route | Proposed |
+| [0019](0019-odbl-and-the-published-world.md) | How the published world meets the ODbL | Proposed |
