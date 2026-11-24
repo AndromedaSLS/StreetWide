@@ -1,30 +1,35 @@
-//! What you see: the first-person camera, sun and sky, and world meshes
+//! What you see: the camera and its rendering effects, and world meshes
 //! streamed in around the camera.
 //!
-//! The render frame is the simulation's sim frame (X east, Y up, Z south,
-//! metres): a mesh is placed at its tile origin minus the sim origin, so
-//! what you see is exactly where the simulation collides.
+//! The render frame is fixed for the run (see `session`): a mesh is placed
+//! at its tile origin minus the render origin, and the player at its sim
+//! position plus the sim origin's offset, so what you see is exactly where
+//! the simulation collides.
 
 use std::collections::{BTreeMap, BTreeSet};
+use std::time::{Duration, Instant};
 
-use bevy::asset::RenderAssetUsages;
-use bevy::light::{CascadeShadowConfigBuilder, GlobalAmbientLight};
-use bevy::mesh::{Indices, PrimitiveTopology};
-use bevy::pbr::{DistanceFog, FogFalloff};
+use bevy::anti_alias::taa::TemporalAntiAliasing;
+use bevy::camera::Exposure;
+use bevy::core_pipeline::tonemapping::Tonemapping;
+use bevy::light::{AtmosphereEnvironmentMapLight, ShadowFilteringMethod};
+use bevy::pbr::{AtmosphereSettings, ScreenSpaceAmbientOcclusion};
+use bevy::post_process::bloom::Bloom;
 use bevy::prelude::*;
-use op_world::ContentId;
-use op_world::glb::Material as Palette;
+use op_world::{ContentId, Layer};
 
 use crate::controls::{Look, turn16_to_yaw};
+use crate::heights::{Height, HeightIndex};
+use crate::materials::{self, AssetLook, MaterialSet};
 use crate::session::{EYE_HEIGHT, Session};
+use crate::travel::{Travel, View};
 
 /// Meshes within this distance of the camera are loaded and shown (m).
 pub const RENDER_RADIUS_M: f32 = 600.0;
 /// ... and dropped beyond this one.
 const UNLOAD_RADIUS_M: f32 = 700.0;
-/// New assets put into the scene per frame (avoids hitches).
-const SPAWNS_PER_FRAME: usize = 24;
-const SKY: Color = Color::srgb(0.62, 0.74, 0.88);
+/// Time per frame for turning loaded meshes into scene objects.
+const SPAWN_BUDGET: Duration = Duration::from_millis(6);
 
 #[derive(Component)]
 pub struct PlayerCamera;
@@ -38,16 +43,22 @@ struct Shown {
     entities: BTreeMap<AssetId, Vec<Entity>>,
 }
 
+/// Buildings that have a contributed facade: their walls get no
+/// client-drawn windows.
+#[derive(Resource, Default)]
+struct Facaded(BTreeSet<String>);
+
 /// An asset in range that is not in the scene yet.
 struct Wanted {
     distance: f32,
     id: AssetId,
     content_id: ContentId,
     offset: Vec3,
+    origin_m: [f64; 3],
+    look: AssetLook,
+    /// Region-frame centre (x, z) of the asset's bounds.
+    centre: (f64, f64),
 }
-
-#[derive(Resource)]
-struct Palettes(BTreeMap<&'static str, Handle<StandardMaterial>>);
 
 /// Streaming progress for the HUD.
 #[derive(Resource, Default)]
@@ -56,96 +67,140 @@ pub struct StreamStats {
     pub wanted: usize,
 }
 
+/// Rendering effects: `high` (default) or a lighter set for slower GPUs.
+#[derive(Resource, Clone, Copy, Debug, PartialEq, Eq)]
+pub struct Quality {
+    pub high: bool,
+}
+
 pub struct ScenePlugin;
 
 impl Plugin for ScenePlugin {
     fn build(&self, app: &mut App) {
-        app.insert_resource(ClearColor(SKY))
-            .insert_resource(GlobalAmbientLight {
-                color: Color::srgb(0.85, 0.9, 1.0),
-                brightness: 600.0,
-                ..default()
-            })
-            .init_resource::<Shown>()
+        app.init_resource::<Shown>()
             .init_resource::<StreamStats>()
-            .add_systems(Startup, setup)
-            .add_systems(Update, (follow_player, stream_meshes));
+            .init_resource::<HeightIndex>()
+            .insert_resource(Quality { high: true })
+            .add_systems(Startup, (materials::setup, setup_camera, find_facades))
+            .add_systems(
+                Update,
+                (
+                    scene_keys,
+                    apply_quality,
+                    materials::apply_look,
+                    follow_player,
+                    stream_meshes,
+                )
+                    .chain()
+                    .after(crate::travel::TravelSystems),
+            );
     }
 }
 
-fn setup(mut commands: Commands, mut materials: ResMut<Assets<StandardMaterial>>) {
-    let palettes = [
-        Palette::Roof,
-        Palette::Wall,
-        Palette::Ground,
-        Palette::Terrain,
-        Palette::Road,
-        Palette::Path,
-        Palette::Bridge,
-        Palette::Water,
-    ]
-    .into_iter()
-    .map(|m| {
-        let [r, g, b, a] = m.base_color_milli().map(|v| v as f32 / 1000.0);
-        let handle = materials.add(StandardMaterial {
-            base_color: Color::srgba(r, g, b, a),
-            perceptual_roughness: 1.0,
-            metallic: 0.0,
-            // A few source surfaces face inwards; draw both sides.
-            double_sided: true,
-            cull_mode: None,
-            ..default()
-        });
-        (m.name(), handle)
-    })
-    .collect();
-    commands.insert_resource(Palettes(palettes));
-
+fn setup_camera(mut commands: Commands) {
     commands.spawn((
         Camera3d::default(),
         Projection::Perspective(PerspectiveProjection {
             fov: 70f32.to_radians(),
             near: 0.1,
-            far: 2_000.0,
+            far: 8_000.0,
             ..default()
         }),
-        DistanceFog {
-            color: SKY,
-            falloff: FogFalloff::Linear {
-                start: 250.0,
-                end: RENDER_RADIUS_M,
-            },
-            ..default()
-        },
+        AtmosphereSettings::default(),
+        AtmosphereEnvironmentMapLight::default(),
+        Exposure { ev100: 13.5 },
+        // Compared with TonyMcMapface and AgX on the same street: the most
+        // contrast without clipping the white plaster.
+        Tonemapping::AcesFitted,
+        Bloom::NATURAL,
         PlayerCamera,
     ));
+}
 
-    // Afternoon sun from the south-west, 40 degrees high.
-    commands.spawn((
-        DirectionalLight {
-            illuminance: 12_000.0,
-            shadow_maps_enabled: true,
-            ..default()
-        },
-        Transform::from_xyz(-0.55, 0.64, 0.53).looking_at(Vec3::ZERO, Vec3::Y),
-        CascadeShadowConfigBuilder {
-            first_cascade_far_bound: 25.0,
-            maximum_distance: 350.0,
-            ..default()
-        }
-        .build(),
-    ));
+fn find_facades(mut commands: Commands, session: Res<Session>) {
+    let ids = session
+        .streamer()
+        .index()
+        .tiles()
+        .iter()
+        .flat_map(|t| &t.assets)
+        .filter(|a| a.layer == Layer::Facade)
+        .map(|a| a.feature_id.clone())
+        .collect();
+    commands.insert_resource(Facaded(ids));
+}
+
+/// F2: detailed or plain look. F4: rendering quality.
+fn scene_keys(
+    keys: Res<ButtonInput<KeyCode>>,
+    mut set: ResMut<MaterialSet>,
+    mut quality: ResMut<Quality>,
+    mut session: ResMut<Session>,
+) {
+    if keys.just_pressed(KeyCode::F2) {
+        set.detailed_on = !set.detailed_on;
+        session.message = Some((
+            if set.detailed_on {
+                "Detailed look (client-drawn textures and windows)".into()
+            } else {
+                "Plain look (the world data's palette colours)".into()
+            },
+            4.0,
+        ));
+    }
+    if keys.just_pressed(KeyCode::F4) {
+        quality.high = !quality.high;
+        session.message = Some((
+            format!("Graphics: {}", if quality.high { "high" } else { "fast" }),
+            3.0,
+        ));
+    }
+}
+
+/// Puts the quality's effects on the camera.
+fn apply_quality(
+    mut commands: Commands,
+    quality: Res<Quality>,
+    camera: Single<Entity, With<PlayerCamera>>,
+    mut shadow_map: ResMut<bevy::light::DirectionalLightShadowMap>,
+) {
+    if !quality.is_changed() {
+        return;
+    }
+    let mut cam = commands.entity(*camera);
+    if quality.high {
+        // Temporal anti-aliasing (and its soft shadow filtering) needs
+        // multisampling off; ambient occlusion darkens corners and the
+        // gaps between buildings.
+        cam.insert((
+            Msaa::Off,
+            TemporalAntiAliasing::default(),
+            ScreenSpaceAmbientOcclusion::default(),
+            ShadowFilteringMethod::Temporal,
+        ));
+        shadow_map.size = 4096;
+    } else {
+        cam.remove::<(TemporalAntiAliasing, ScreenSpaceAmbientOcclusion)>()
+            .insert((Msaa::Sample4, ShadowFilteringMethod::Gaussian));
+        shadow_map.size = 2048;
+    }
 }
 
 fn follow_player(
     session: Res<Session>,
     look: Res<Look>,
     time: Res<Time<Fixed>>,
-    mut camera: Single<&mut Transform, With<PlayerCamera>>,
+    mut travel: ResMut<Travel>,
+    camera: Single<(&mut Transform, Option<&mut TemporalAntiAliasing>), With<PlayerCamera>>,
 ) {
-    let t = time.overstep_fraction().clamp(0.0, 1.0);
-    let feet = session.prev_feet.lerp(session.curr_feet, t);
-    let (yaw, pitch) = if session.is_playback() {
+    let (mut transform, taa) = camera.into_inner();
+    if travel.cut {
+        if let Some(mut taa) = taa {
+            taa.reset = true;
+        }
+        travel.cut = false;
+    }
+    let (yaw, pitch) = if session.is_playback() && travel.view == View::Walk {
         let p = session.sim().player();
         (
             turn16_to_yaw(p.yaw),
@@ -154,21 +209,38 @@ fn follow_player(
     } else {
         (look.yaw, look.pitch)
     };
-    camera.translation = feet + Vec3::Y * EYE_HEIGHT;
     // Yaw is clockwise from north (-Z); Bevy's rotation about +Y is
     // counter-clockwise seen from above.
-    camera.rotation = Quat::from_rotation_y(-yaw) * Quat::from_rotation_x(pitch);
+    let rotation = Quat::from_rotation_y(-yaw) * Quat::from_rotation_x(pitch);
+    match travel.view {
+        View::Walk => {
+            let t = time.overstep_fraction().clamp(0.0, 1.0);
+            let feet = session.prev_feet.lerp(session.curr_feet, t);
+            transform.translation = feet + Vec3::Y * EYE_HEIGHT;
+            transform.rotation = rotation;
+        }
+        View::Fly { pos } => {
+            transform.translation = pos;
+            transform.rotation = rotation;
+        }
+        View::Map { centre, height } => {
+            *transform = Transform::from_translation(centre + Vec3::Y * height)
+                .looking_to(Vec3::NEG_Y, Vec3::NEG_Z);
+        }
+    }
 }
 
 #[allow(clippy::too_many_arguments)]
 fn stream_meshes(
     mut commands: Commands,
     session: Res<Session>,
-    palettes: Res<Palettes>,
+    set: Res<MaterialSet>,
+    facaded: Res<Facaded>,
     camera: Single<&Transform, With<PlayerCamera>>,
     mut meshes: ResMut<Assets<Mesh>>,
     mut shown: ResMut<Shown>,
     mut stats: ResMut<StreamStats>,
+    mut heights: ResMut<HeightIndex>,
 ) {
     let streamer = session.streamer();
     let eye = camera.translation;
@@ -176,6 +248,7 @@ fn stream_meshes(
     let mut keep = BTreeSet::new();
     for tile in streamer.index().tiles() {
         let offset = session.offset_m(tile.origin_mm);
+        let origin_m = tile.origin_mm.map(|v| v as f64 / 1000.0);
         for a in &tile.assets {
             let b = a.bounds_mm;
             let lo = offset + Vec3::new(b.min[0] as f32, b.min[1] as f32, b.min[2] as f32) / 1000.0;
@@ -194,11 +267,28 @@ fn stream_meshes(
                 keep.insert(key.clone());
             }
             if d < RENDER_RADIUS_M && !shown.entities.contains_key(&key) {
+                let height = (b.max[1] - b.min[1]) as f64 / 1000.0;
+                let look = match a.layer {
+                    Layer::Shell => AssetLook::for_building(
+                        &a.feature_id,
+                        height,
+                        facaded.0.contains(&a.feature_id),
+                    ),
+                    Layer::Facade => AssetLook::for_building(&a.feature_id, height, true),
+                    _ => AssetLook::plain(),
+                };
+                let centre = (
+                    origin_m[0] + (b.min[0] + b.max[0]) as f64 / 2000.0,
+                    origin_m[2] + (b.min[2] + b.max[2]) as f64 / 2000.0,
+                );
                 wanted.push(Wanted {
                     distance: d,
                     id: key,
                     content_id: a.content_id,
                     offset,
+                    origin_m,
+                    look,
+                    centre,
                 });
             }
         }
@@ -215,46 +305,45 @@ fn stream_meshes(
             commands.entity(e).despawn();
         }
     }
-    // Load and show the nearest missing assets first.
+    // Load and show the nearest missing assets first, within the budget.
     wanted.sort_by(|a, b| a.distance.total_cmp(&b.distance));
     stats.wanted = wanted.len();
-    let mut spawned = 0;
-    for Wanted {
-        id: key,
-        content_id: id,
-        offset,
-        ..
-    } in wanted
-    {
-        let Some(glb) = streamer.get(&id) else {
-            streamer.request(&id);
+    let start = Instant::now();
+    for w in wanted {
+        let Some(glb) = streamer.get(&w.content_id) else {
+            streamer.request(&w.content_id);
             continue;
         };
-        if spawned >= SPAWNS_PER_FRAME {
+        if start.elapsed() > SPAWN_BUDGET {
             continue;
         }
-        spawned += 1;
+        // Windowed walls count storeys from the terrain: wait for it.
+        if w.look.style.is_some()
+            && heights.ground(streamer, w.centre.0, w.centre.1) == Height::Loading
+        {
+            continue;
+        }
+        let mut ground = |x: f64, z: f64| match heights.ground(streamer, x, z) {
+            Height::At(y) => Some(y),
+            _ => None,
+        };
         let mut entities = Vec::new();
         for prim in glb.nodes.iter().flat_map(|n| &n.primitives) {
-            let mesh = Mesh::new(
-                PrimitiveTopology::TriangleList,
-                RenderAssetUsages::RENDER_WORLD,
-            )
-            .with_inserted_attribute(Mesh::ATTRIBUTE_POSITION, prim.positions.clone())
-            .with_inserted_attribute(Mesh::ATTRIBUTE_NORMAL, prim.normals.clone())
-            .with_inserted_indices(Indices::U32(prim.indices.clone()));
-            let material = palettes.0[prim.material.name()].clone();
-            entities.push(
-                commands
-                    .spawn((
-                        Mesh3d(meshes.add(mesh)),
-                        MeshMaterial3d(material),
-                        Transform::from_translation(offset),
-                    ))
-                    .id(),
-            );
+            for (surface, part) in materials::parts(prim, w.origin_m, &w.look, &mut ground) {
+                let looks = set.looks(surface, prim.material, &w.look);
+                entities.push(
+                    commands
+                        .spawn((
+                            Mesh3d(meshes.add(materials::mesh(part))),
+                            MeshMaterial3d(set.current(&looks)),
+                            looks,
+                            Transform::from_translation(w.offset),
+                        ))
+                        .id(),
+                );
+            }
         }
-        shown.entities.insert(key, entities);
+        shown.entities.insert(w.id, entities);
     }
     stats.shown = shown.entities.len();
 }

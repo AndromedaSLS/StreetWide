@@ -2,5 +2,17 @@
   "name": "zurich-altstadt",
   "description": "Zurich old town on both banks of the Limmat, about 0.98 x 0.97 km: the largest WGS84 rectangle inside the LV95 kilometre square E 2683-2684 / N 1247-1248, so it needs one swissBUILDINGS3D sheet and one swissALTI3D tile.",
   "bbox": [8.5377, 47.3687, 8.5507, 47.3774],
-  "spawn": {"lon": 8.5409, "lat": 47.3729, "yaw_deg": 90}
+  "spawn": {"lon": 8.5409, "lat": 47.3729, "yaw_deg": 90},
+  "places_source": "Positions from OpenStreetMap (c) OpenStreetMap contributors, ODbL: centres of the named squares and streets; Grossmuensterplatz is the fixture spawn on the square, facing the church. The client's travel keys 1-9 go to them in this order.",
+  "places": [
+    {"name": "Lindenhof", "lon": 8.54070, "lat": 47.37296, "yaw_deg": 90},
+    {"name": "Rennweg", "lon": 8.53949, "lat": 47.37313, "yaw_deg": 90},
+    {"name": "St. Peterhofstatt", "lon": 8.54070, "lat": 47.37141, "yaw_deg": 180},
+    {"name": "Münsterhof", "lon": 8.54110, "lat": 47.37008, "yaw_deg": 180},
+    {"name": "Rathausbrücke", "lon": 8.54237, "lat": 47.37174, "yaw_deg": 90},
+    {"name": "Grossmünsterplatz", "lon": 8.544082, "lat": 47.369816, "yaw_deg": 0},
+    {"name": "Hirschenplatz", "lon": 8.54374, "lat": 47.37338, "yaw_deg": 180},
+    {"name": "Neumarkt", "lon": 8.54599, "lat": 47.37265, "yaw_deg": 270},
+    {"name": "Central", "lon": 8.54382, "lat": 47.37675, "yaw_deg": 180}
+  ]
 }

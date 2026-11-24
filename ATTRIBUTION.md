@@ -62,6 +62,7 @@ Only small test data is committed. Full worlds are built locally with
 |---|---|---|
 | `fixtures/format/` | Hand-made fictional sample world | CC BY-SA 4.0, credit "The StreetWide contributors" |
 | `fixtures/world/` | One real tile (17/68646/45903: Grossmünster, Münsterbrücke) built by the ingest | Per asset, as stated in its manifest: swisstopo terms for terrain and swissBUILDINGS3D shells; ODbL 1.0 AND swisstopo terms for the OSM-derived assets |
+| `worlds/*.json` `places` | Positions of named squares and streets for the client's travel keys, taken from OpenStreetMap | ODbL 1.0, © OpenStreetMap contributors |
 
 ## Third-party software
 

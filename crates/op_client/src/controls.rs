@@ -2,7 +2,11 @@
 //!
 //! Mouse look turns the camera every frame with full precision; the
 //! simulation receives the heading quantised to 1/65536 turn in the input
-//! latched for the next tick.
+//! latched for the next tick. While flying or on the map (`travel`), the
+//! player gets no movement input and stands still.
+//!
+//! Movement uses key positions (W A S D on QWERTY, Z Q S D on AZERTY);
+//! letter shortcuts in `travel` use the letters printed on the keys.
 
 use std::f32::consts::{FRAC_PI_2, TAU};
 
@@ -13,6 +17,7 @@ use op_kernel::PlayerInput;
 use op_kernel::input::{PITCH_MAX, buttons};
 
 use crate::session::{LatchedInput, Session};
+use crate::travel::{Travel, View};
 
 /// Radians per pixel of mouse movement.
 const MOUSE_SENSITIVITY: f32 = 0.0025;
@@ -56,8 +61,10 @@ fn grab_cursor(
     mut cursor: Single<&mut CursorOptions, With<PrimaryWindow>>,
     mouse: Res<ButtonInput<MouseButton>>,
     keys: Res<ButtonInput<KeyCode>>,
+    travel: Res<Travel>,
 ) {
-    if mouse.just_pressed(MouseButton::Left) {
+    // On the map, clicks choose where to go.
+    if mouse.just_pressed(MouseButton::Left) && !matches!(travel.view, View::Map { .. }) {
         cursor.grab_mode = CursorGrabMode::Locked;
         cursor.visible = false;
     }
@@ -71,10 +78,26 @@ fn look_and_move(
     cursor: Single<&CursorOptions, With<PrimaryWindow>>,
     motion: Res<AccumulatedMouseMotion>,
     keys: Res<ButtonInput<KeyCode>>,
+    travel: Res<Travel>,
     mut look: ResMut<Look>,
     mut latched: ResMut<LatchedInput>,
 ) {
     let captured = cursor.grab_mode != CursorGrabMode::None;
+    if travel.view != View::Walk {
+        if captured {
+            look.yaw = (look.yaw + motion.delta.x * MOUSE_SENSITIVITY).rem_euclid(TAU);
+            look.pitch = (look.pitch - motion.delta.y * MOUSE_SENSITIVITY)
+                .clamp(-FRAC_PI_2 * 0.98, FRAC_PI_2 * 0.98);
+        }
+        // The player waits where it is.
+        latched.input = PlayerInput {
+            yaw: latched.input.yaw,
+            pitch: latched.input.pitch,
+            ..PlayerInput::default()
+        };
+        latched.jump_pending = false;
+        return;
+    }
     if captured {
         look.yaw = (look.yaw + motion.delta.x * MOUSE_SENSITIVITY).rem_euclid(TAU);
         look.pitch = (look.pitch - motion.delta.y * MOUSE_SENSITIVITY)
@@ -110,6 +133,7 @@ fn session_keys(
     keys: Res<ButtonInput<KeyCode>>,
     mut session: ResMut<Session>,
     mut look: ResMut<Look>,
+    mut travel: ResMut<Travel>,
 ) {
     if session.is_playback() {
         return;
@@ -126,6 +150,9 @@ fn session_keys(
         session.restart();
         look.yaw = turn16_to_yaw(session.spawn_yaw());
         look.pitch = 0.0;
+        travel.view = View::Walk;
+        travel.pending = None;
+        travel.cut = true;
         session.message = Some(("Back at the spawn point".into(), 3.0));
     }
 }

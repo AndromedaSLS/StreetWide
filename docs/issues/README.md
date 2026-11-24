@@ -23,8 +23,13 @@ When one is filed on GitHub, add the link here and delete the draft.
 These need a design discussion first: an RFC, or a simulation contract
 bump with re-recorded replays.
 
-- **Water.** The Limmat is walkable terrain at water level. Water needs a
-  layer or asset kind that RFC 0001 does not have yet.
+- **Water.** The Limmat is walkable terrain at water level, and the
+  client's detailed look now paves it like a square. Water needs data
+  (swissTLM3D or OpenStreetMap water areas) and a layer or asset kind that
+  RFC 0001 does not have yet (ADR-0012).
+- **Building types.** Churches get the client's house windows: the shells
+  carry no building type. A type from OpenStreetMap kept by the ingest
+  could choose styles (ADR-0012).
 - **Levels of detail** beyond the 600 m streaming radius (RFC 0001
   unresolved questions).
 - **Bridges that end at building doors** are anchored to the ground

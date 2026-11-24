@@ -3,5 +3,11 @@
   "description": "Test fixture: tile 17/68646/45903 (Grossmuenster, Muensterbruecke, the Limmat and the slope up to the church), cut to the zurich-altstadt bbox. Committed in fixtures/world; regenerate with: python -m tools.ingest --world fixture-grossmuenster --out fixtures/world",
   "tile": "17/68646/45903",
   "bbox": [8.5377, 47.3687, 8.5507, 47.3774],
-  "spawn": {"lon": 8.544082, "lat": 47.369816, "yaw_deg": 270}
+  "spawn": {"lon": 8.544082, "lat": 47.369816, "yaw_deg": 270},
+  "places_source": "Grossmuensterplatz: the spawn, facing the church. Muensterbruecke: position from OpenStreetMap (c) OpenStreetMap contributors, ODbL. The lane: on the path of fixtures/replays/sample.oprep, 11 m before the corner of ADR-0011.",
+  "places": [
+    {"name": "Grossmünsterplatz", "lon": 8.544082, "lat": 47.369816, "yaw_deg": 0},
+    {"name": "Lane to the corner (ADR-0011)", "lon": 8.544351, "lat": 47.369859, "yaw_deg": 0},
+    {"name": "Münsterbrücke", "lon": 8.54298, "lat": 47.37000, "yaw_deg": 270}
+  ]
 }

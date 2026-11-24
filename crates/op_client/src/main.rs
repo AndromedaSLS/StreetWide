@@ -2,6 +2,8 @@
 //!
 //! ```text
 //! cargo run -p op_client [-- --world <dir>] [--seed <n>]
+//!     [--place <name or number> | --at <lon>,<lat>[,<heading>]]
+//!     [--time <HH:MM>] [--date <YYYY-MM-DD>] [--view walk|fly|map] [--details]
 //! cargo run -p op_client -- --replay <file.oprep> [--world <dir>] [--exit-when-done]
 //!     [--screenshot <file.png> [--screenshot-tick <n>]]
 //! ```
@@ -12,14 +14,19 @@
 //! stream in around the camera from the same cache the simulation loads its
 //! colliders from (`op_stream`).
 //!
-//! Controls: click to capture the mouse, mouse to look, WASD to move, Shift
-//! to sprint, Space to jump, F9 to save a replay of the session, R to
-//! restart at the spawn point, Esc to release the mouse.
+//! Press F1 in the client for the controls: walking, flying, the map, named
+//! places, the time of day and graphics settings.
 
 mod controls;
+mod geo;
+mod heights;
 mod hud;
+mod materials;
 mod scene;
 mod session;
+mod sky;
+mod texgen;
+mod travel;
 
 use std::path::PathBuf;
 use std::process::ExitCode;
@@ -36,9 +43,46 @@ pub struct Options {
     pub screenshot: Option<PathBuf>,
     /// Take the screenshot after this many ticks instead of at the end.
     pub screenshot_tick: Option<u64>,
+    /// Start at a named place of the world (or its number).
+    pub place: Option<String>,
+    /// Start at a longitude, latitude and heading (degrees).
+    pub at: Option<(f64, f64, f64)>,
+    /// Time of day (minutes after midnight, Swiss time) and date.
+    pub time: Option<u32>,
+    pub date: Option<(i32, u32, u32)>,
+    /// Start flying or on the map.
+    pub view: Option<String>,
+    /// Open the details panel (F3) at start.
+    pub details: bool,
 }
 
-const USAGE: &str = "usage: op_client [--world <dir>] [--seed <n>] [--replay <file.oprep>] [--exit-when-done] [--screenshot <file.png> [--screenshot-tick <n>]]";
+const USAGE: &str = "usage: op_client [--world <dir>] [--seed <n>] [--place <name|number> | --at <lon>,<lat>[,<heading>]] [--time <HH:MM>] [--date <YYYY-MM-DD>] [--view walk|fly|map] [--details] [--replay <file.oprep>] [--exit-when-done] [--screenshot <file.png> [--screenshot-tick <n>]]";
+
+fn parse_time(text: &str) -> Option<u32> {
+    let (h, m) = text.split_once(':')?;
+    let (h, m): (u32, u32) = (h.parse().ok()?, m.parse().ok()?);
+    (h < 24 && m < 60).then_some(h * 60 + m)
+}
+
+fn parse_date(text: &str) -> Option<(i32, u32, u32)> {
+    let mut parts = text.split('-');
+    let y = parts.next()?.parse().ok()?;
+    let m = parts.next()?.parse().ok()?;
+    let d = parts.next()?.parse().ok()?;
+    (parts.next().is_none() && (1..=12).contains(&m) && (1..=31).contains(&d)).then_some((y, m, d))
+}
+
+fn parse_at(text: &str) -> Option<(f64, f64, f64)> {
+    let v: Vec<f64> = text
+        .split(',')
+        .map(|p| p.trim().parse().ok())
+        .collect::<Option<_>>()?;
+    match v[..] {
+        [lon, lat] => Some((lon, lat, 0.0)),
+        [lon, lat, heading] => Some((lon, lat, heading)),
+        _ => None,
+    }
+}
 
 fn parse_args() -> Result<Options, String> {
     let mut o = Options::default();
@@ -58,6 +102,18 @@ fn parse_args() -> Result<Options, String> {
                 )
             }
             "--exit-when-done" => o.exit_when_done = true,
+            "--details" => o.details = true,
+            "--place" => o.place = Some(value()?),
+            "--at" => o.at = Some(parse_at(&value()?).ok_or("--at needs <lon>,<lat>[,<heading>]")?),
+            "--time" => o.time = Some(parse_time(&value()?).ok_or("--time needs HH:MM")?),
+            "--date" => o.date = Some(parse_date(&value()?).ok_or("--date needs YYYY-MM-DD")?),
+            "--view" => {
+                let v = value()?;
+                if !["walk", "fly", "map"].contains(&v.as_str()) {
+                    return Err("--view needs walk, fly or map".into());
+                }
+                o.view = Some(v)
+            }
             "-h" | "--help" => return Err(USAGE.into()),
             other => return Err(format!("unknown argument {other}\n{USAGE}")),
         }
@@ -81,6 +137,17 @@ fn main() -> ExitCode {
         }
     };
     let title = format!("StreetWide - {}", session.world_name());
+    // Default: today at 14:00, Swiss time.
+    let mut clock = sky::Clock::today_at(options.time.unwrap_or(14 * 60));
+    if let Some((year, month, day)) = options.date {
+        clock.local.year = year;
+        clock.local.month = month;
+        clock.local.day = day;
+    }
+    let panels = hud::Panels {
+        help: options.screenshot.is_none(),
+        debug: options.details,
+    };
     let exit = App::new()
         .add_plugins(DefaultPlugins.set(WindowPlugin {
             primary_window: Some(Window { title, ..default() }),
@@ -88,10 +155,14 @@ fn main() -> ExitCode {
         }))
         .insert_resource(options)
         .insert_resource(session)
+        .insert_resource(clock)
+        .insert_resource(panels)
         .add_plugins((
             session::SessionPlugin,
             controls::ControlsPlugin,
+            sky::SkyPlugin,
             scene::ScenePlugin,
+            travel::TravelPlugin,
             hud::HudPlugin,
         ))
         .run();

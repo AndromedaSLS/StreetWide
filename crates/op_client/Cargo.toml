@@ -16,6 +16,7 @@ op_replay.workspace = true
 op_sim.workspace = true
 op_stream.workspace = true
 op_world.workspace = true
+serde_json.workspace = true
 
 [lints]
 workspace = true

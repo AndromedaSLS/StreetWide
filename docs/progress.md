@@ -618,7 +618,71 @@ ADR-0009 was accepted (option A, `op_replay`).
 | `python tools/ci/check_deps.py` | pass |
 | The 4 new tests with the rule disabled | the slope test and `corners` fail; the wedge and slide tests pass (they guard behaviour the rule must keep) |
 
+### Client: realism and fast travel (2026-11-24)
+
+**Realism**
+([ADR-0012](adr/0012-client-realism-from-procedural-detail.md),
+*Proposed*). Everything is drawn by the client; the world data and the
+simulation are unchanged.
+- **Light:**
+  - Bevy's physically based atmosphere: sky, sun disc, haze with distance,
+    sky light;
+  - the sun at its real position over Zurich for the date and Swiss time
+    (NOAA algorithm, tested against the solstices);
+  - exposure that follows the sun;
+  - ACES tonemapping, picked over TonyMcMapface and AgX on screenshots of
+    the same street;
+  - 4096-texel cascaded shadows, ambient occlusion and temporal
+    anti-aliasing.
+- **Surfaces:** 15 procedural textures generated at start-up (0.9 s), each
+  with mipmaps, a normal map and a roughness map; no image files.
+  - **Walls:** three window styles and three matching ground floors (shop
+    fronts, doors and windows, rusticated stone). Each wall gets a whole
+    number of bays, and storeys count from the terrain in front of the
+    wall, so ground floors sit at street level on slopes. Buildings with a
+    contributed facade get plain plaster.
+  - **Roofs and ground:**
+    - clay tiles in rows down the slope;
+    - granite setts on flat open ground, grass on slopes;
+    - cobbles on paths, asphalt on roads, stone on bridges.
+  - **Variety:** eight plaster colours and four roof variations, chosen
+    per building from its id.
+- **F2** shows the plain palette colours of the data; **F4** switches to
+  lighter effects for slower GPUs.
+
+**Fast travel**
+([ADR-0013](adr/0013-travel-by-starting-new-sessions.md), *Proposed*):
+- **V** flies. Speed is set with the mouse wheel; Enter lands below.
+- **M** shows the whole district from above; a click goes there.
+- **1 to 9** go to named places from `worlds/<name>.json`: nine squares and
+  streets of the old town, and three spots in the fixture, including the
+  lane to the ADR-0011 corner. Their positions come from OpenStreetMap
+  and are credited in ATTRIBUTION.md.
+- **Where you land:** places and map clicks land on open ground, up to
+  40 m from the point if it is inside a building, then up to 4 m clear of
+  the wall.
+- **Sessions:** each arrival starts a new simulation session there, so
+  replays stay valid.
+- **T, Shift+T** move the time of day; **F1** opens the help; **F3** shows
+  frame rate, position and sun.
+- **Command line:** `--place`, `--at`, `--time`, `--date`, `--view` and
+  `--details` start anywhere, and make scripted screenshots possible.
+
+| Check | Result |
+|---|---|
+| `cargo fmt --all --check`, `cargo clippy --workspace --all-targets -- -D warnings` | pass |
+| `cargo test --workspace` | 106 passed (22 new in `op_client`, e.g. the frame matches the ingest's PROJ result at the fixture spawn; ground floors at street level on a slope; a replay saved after travelling checks with `op_replay`) |
+| `python -m pytest` | 91 passed |
+| `op_replay check fixtures/replays/sample.oprep`, debug twice and release once | final `212bd353…`, unchanged |
+| `python tools/ci/check_deps.py` | pass |
+| Screenshots with `--screenshot` at Hirschenplatz, Grossmünsterplatz, Lindenhof (14:00 and 20:45 in June), the map and flight | as intended; Hirschenplatz at 169 fps (1280 × 720, RTX 3070, high) |
+
+**Known limits** (ADR-0012):
+- churches get house windows, because the shells have no building type;
+- the Limmat is terrain in the data and now looks paved; water needs
+  data and a world-format change.
+
 **Next:** ADR-0010 (hosting) is waiting for the maintainer's choice of
 provider. After it come the world repository, the merge bot, a CI workflow
 running the gate on contribution pull requests, and an HTTP-backed store
-for the client.
+for the client. For realism, the next step is water: options in ADR-0012.

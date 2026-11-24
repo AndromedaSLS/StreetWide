@@ -125,21 +125,42 @@ cargo run --release -p op_client
 The first release build takes about 5 minutes. You start on the Lindenhof,
 looking east over the Limmat. Without step 3, the client opens the one-tile
 test fixture by the Grossmünster instead. `--world <dir>` picks any other
-world.
+world. F1 shows and hides the controls in the client.
 
 | Key | Action |
 |---|---|
 | Click | Capture the mouse (Esc releases it) |
 | Mouse | Look around |
-| W A S D | Walk |
+| W A S D (Z Q S D on AZERTY) | Walk |
 | Shift | Sprint |
 | Space | Jump |
 | F9 | Save a replay of the session so far to `replays/` |
-| R | Restart at the spawn point |
+| R | Back to the start |
+| **Getting around** | |
+| V | Fly: W A S D, Space up, Ctrl down, Shift faster, mouse wheel for speed; Enter lands below you |
+| M | Map: W A S D to pan, wheel to zoom, click to go there |
+| 1 to 9 | Go to a named place (listed in the F1 help) |
+| **Viewing** | |
+| T, Shift+T | Time of day forward or back by 30 minutes |
+| F2 | Detailed look, or the plain colours of the world data |
+| F3 | Details: frame rate, position, sun |
+| F4 | Graphics: high, or fast for slower GPUs |
 
 The simulation runs at a fixed 60 Hz, whatever your frame rate. Buildings
 and terrain stream in around you; "Loading…" means the simulation is waiting
 for geometry it needs.
+
+Going somewhere (a place, the map, landing from flight) starts a new session
+there, so F9 saves the walk since you arrived
+([ADR-0013](docs/adr/0013-travel-by-starting-new-sessions.md)). You can also
+start somewhere: `--place Grossmünsterplatz` (or a number), `--at <lon>,<lat>`,
+`--time 19:30`, `--date 2026-06-21`, `--view map`.
+
+The windows, doors, roof tiles and paving are drawn by the client, not
+taken from the world data
+([ADR-0012](docs/adr/0012-client-realism-from-procedural-detail.md)); F2
+shows the data alone. Real facades come from contributions
+([docs/contributing/facades.md](docs/contributing/facades.md)).
 
 ### 5. Check and watch your replay
 

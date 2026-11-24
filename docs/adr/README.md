@@ -25,3 +25,5 @@ instead.
 | [0009](0009-simulation-based-gate-checks.md) | Where the simulation-based gate checks run | Accepted |
 | [0010](0010-hosting-the-canonical-world.md) | Hosting the canonical world store and world log | Proposed |
 | [0011](0011-stop-corner-oscillation.md) | Stop the player oscillating in concave corners | Proposed |
+| [0012](0012-client-realism-from-procedural-detail.md) | Client realism from procedural detail and physically based light | Proposed |
+| [0013](0013-travel-by-starting-new-sessions.md) | Travel in the client by starting new sessions | Proposed |

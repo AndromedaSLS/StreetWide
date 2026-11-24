@@ -1,18 +1,36 @@
-//! On-screen text: data credits (always shown), status, help, loading
-//! and replay results; and the end of `--replay --exit-when-done` runs.
+//! On-screen text: data credits (always shown), status, help (F1), debug
+//! details (F3), loading and replay results; and the end of
+//! `--replay --exit-when-done` runs.
 
 use bevy::prelude::*;
 use bevy::render::view::screenshot::{Screenshot, save_to_disk};
 
 use crate::Options;
-use crate::scene::StreamStats;
+use crate::controls::Look;
+use crate::materials::MaterialSet;
+use crate::scene::{PlayerCamera, Quality, StreamStats};
 use crate::session::{Playback, Session};
+use crate::sky::{Clock, SunState, exposure_ev100};
+use crate::travel::{Travel, View};
 
 #[derive(Component)]
 struct StatusText;
 
 #[derive(Component)]
 struct CenterText;
+
+#[derive(Component)]
+struct HelpText;
+
+#[derive(Component)]
+struct DebugText;
+
+/// Which panels are open.
+#[derive(Resource)]
+pub struct Panels {
+    pub help: bool,
+    pub debug: bool,
+}
 
 /// A system font with the glyphs the credits need (`©`, `·`); Bevy's
 /// built-in font covers ASCII only.
@@ -79,7 +97,10 @@ impl Plugin for HudPlugin {
         app.init_resource::<Finish>()
             .init_resource::<UiFont>()
             .add_systems(Startup, setup)
-            .add_systems(Update, (update_text, finish));
+            .add_systems(
+                Update,
+                (panel_keys, update_text, update_panels, finish).chain(),
+            );
     }
 }
 
@@ -130,36 +151,186 @@ fn setup(mut commands: Commands, session: Res<Session>, mut fonts: ResMut<Assets
         TextLayout::justify(Justify::Center),
         CenterText,
     ));
+    commands.spawn((
+        Text::new(""),
+        font.style(14.0),
+        BackgroundColor(Color::srgba(0.0, 0.0, 0.0, 0.5)),
+        Node {
+            position_type: PositionType::Absolute,
+            left: Val::Px(0.0),
+            top: Val::Px(48.0),
+            padding: UiRect::all(Val::Px(8.0)),
+            ..default()
+        },
+        HelpText,
+    ));
+    commands.spawn((
+        Text::new(""),
+        font.style(14.0),
+        BackgroundColor(Color::srgba(0.0, 0.0, 0.0, 0.5)),
+        Node {
+            position_type: PositionType::Absolute,
+            right: Val::Px(0.0),
+            top: Val::Px(0.0),
+            padding: UiRect::all(Val::Px(8.0)),
+            ..default()
+        },
+        DebugText,
+    ));
     commands.insert_resource(font);
 }
 
+fn panel_keys(keys: Res<ButtonInput<KeyCode>>, mut panels: ResMut<Panels>) {
+    if keys.just_pressed(KeyCode::F1) {
+        panels.help = !panels.help;
+    }
+    if keys.just_pressed(KeyCode::F3) {
+        panels.debug = !panels.debug;
+    }
+}
+
+fn help_text(session: &Session, travel: &Travel) -> String {
+    let mut lines = vec![
+        "WALK    mouse: look (click to capture, Esc to release)".to_string(),
+        "        W A S D (Z Q S D on AZERTY): move · Shift: sprint · Space: jump".into(),
+        "        R: back to the start · F9: save a replay of this session".into(),
+        "TRAVEL  V: fly (W A S D; Space up, Ctrl down; Shift faster;".into(),
+        "        wheel: speed) · Enter while flying: land below".into(),
+        "        M: map (W A S D to pan, wheel to zoom, click to go there)".into(),
+    ];
+    let places: Vec<String> = travel
+        .places
+        .iter()
+        .take(9)
+        .enumerate()
+        .map(|(i, p)| format!("{}: {}", i + 1, p.name))
+        .collect();
+    for row in places.chunks(3) {
+        lines.push(format!("        {}", row.join(" · ")));
+    }
+    lines.push("VIEW    T, Shift+T: time of day ±30 min · F2: detailed or plain look".into());
+    lines.push("        F4: graphics high or fast · F3: details · F1: hide this help".into());
+    if session.is_playback() {
+        lines.push("(replay: travel and saving are off)".into());
+    }
+    lines.join("\n")
+}
+
+#[allow(clippy::too_many_arguments, clippy::type_complexity)]
+fn update_panels(
+    time: Res<Time>,
+    font: Res<UiFont>,
+    panels: Res<Panels>,
+    session: Res<Session>,
+    travel: Res<Travel>,
+    clock: Res<Clock>,
+    sun: Res<SunState>,
+    look: Res<Look>,
+    quality: Res<Quality>,
+    set: Res<MaterialSet>,
+    stats: Res<StreamStats>,
+    camera: Single<&Transform, With<PlayerCamera>>,
+    mut help: Single<(&mut Text, &mut Visibility), (With<HelpText>, Without<DebugText>)>,
+    mut debug: Single<(&mut Text, &mut Visibility), (With<DebugText>, Without<HelpText>)>,
+    mut fps: Local<f32>,
+) {
+    let dt = time.delta_secs().max(1e-4);
+    *fps = if *fps == 0.0 {
+        1.0 / dt
+    } else {
+        *fps * 0.95 + 0.05 / dt
+    };
+    *help.1 = if panels.help {
+        Visibility::Inherited
+    } else {
+        Visibility::Hidden
+    };
+    *debug.1 = if panels.debug {
+        Visibility::Inherited
+    } else {
+        Visibility::Hidden
+    };
+    if panels.help {
+        help.0.0 = font.show(&help_text(&session, &travel));
+    }
+    if !panels.debug {
+        return;
+    }
+    let cam = session.render_to_region(camera.translation);
+    let (lon, lat, h) = session.frame().unproject(cam);
+    let sim = session.sim();
+    let [x, y, z] = sim.player().feet();
+    let view = match travel.view {
+        View::Walk => "walk".to_string(),
+        View::Fly { .. } => format!("fly, {:.0} m/s", travel.fly_speed),
+        View::Map { height, .. } => format!("map, {height:.0} m up"),
+    };
+    let d = clock.local;
+    let lines = [
+        format!("{:.0} fps ({:.1} ms)", *fps, 1000.0 / *fps),
+        format!("camera {lon:.6}, {lat:.6}, {h:.1} m"),
+        format!(
+            "heading {:.0}°, pitch {:.0}°",
+            look.yaw.to_degrees(),
+            look.pitch.to_degrees()
+        ),
+        format!("feet (sim frame) {x:.2}, {y:.2}, {z:.2}"),
+        format!("view {view}"),
+        format!(
+            "tick {}{} · colliders {}",
+            sim.ticks(),
+            if session.stalled { " (loading)" } else { "" },
+            sim.active_colliders()
+        ),
+        format!("meshes {} shown, {} to load", stats.shown, stats.wanted),
+        format!(
+            "{}-{:02}-{:02} {} Swiss time",
+            d.year,
+            d.month,
+            d.day,
+            clock.hhmm()
+        ),
+        format!(
+            "sun azimuth {:.0}°, elevation {:.1}°, EV100 {:.1}",
+            sun.azimuth,
+            sun.elevation,
+            exposure_ev100(sun.elevation)
+        ),
+        format!(
+            "graphics {} · look {}",
+            if quality.high { "high" } else { "fast" },
+            if set.detailed_on { "detailed" } else { "plain" }
+        ),
+    ];
+    debug.0.0 = font.show(&lines.join("\n"));
+}
+
+#[allow(clippy::too_many_arguments)]
 fn update_text(
     time: Res<Time>,
     font: Res<UiFont>,
     mut session: ResMut<Session>,
     stats: Res<StreamStats>,
+    travel: Res<Travel>,
+    clock: Res<Clock>,
     mut status: Single<&mut Text, (With<StatusText>, Without<CenterText>)>,
     mut center: Single<&mut Text, (With<CenterText>, Without<StatusText>)>,
 ) {
     let sim = session.sim();
-    let p = sim.player();
-    let [x, y, z] = p.feet();
     let mode = if session.is_playback() {
         "replay"
     } else {
         "live"
     };
     let mut s = format!(
-        "{} ({mode})  tick {}  feet ({x:.1}, {y:.1}, {z:.1})  colliders {}  meshes {}/{}\n",
+        "{} ({mode}) · {} · {} · tick {} · meshes {}/{} · F1: help",
         session.world_name(),
+        travel.view.name(),
+        clock.hhmm(),
         sim.ticks(),
-        sim.active_colliders(),
         stats.shown,
         stats.shown + stats.wanted,
     );
-    if !session.is_playback() {
-        s.push_str("click: look around · WASD: move · Shift: sprint · Space: jump · F9: save replay · R: restart · Esc: release mouse");
-    }
     if let Some((msg, left)) = &mut session.message {
         s.push('\n');
         s.push_str(msg);
@@ -192,9 +363,13 @@ fn finish(
     mut commands: Commands,
     options: Res<Options>,
     session: Res<Session>,
+    travel: Res<Travel>,
     mut state: ResMut<Finish>,
     mut exit: MessageWriter<AppExit>,
 ) {
+    if travel.pending.is_some() {
+        return;
+    }
     if let (Some(path), Some(at)) = (&options.screenshot, options.screenshot_tick)
         && !state.shot_taken
         && session.sim().ticks() >= at
