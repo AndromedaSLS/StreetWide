@@ -24,7 +24,7 @@ MAX_FILE_BYTES = 64 << 20
 (`op_world`'s MAX_ASSET_BYTES), far more than any JSON document needs."""
 
 
-def read_file(path: Path, limit: int = MAX_FILE_BYTES) -> bytes:
+def read_file(path: Path, limit: int = MAX_FILE_BYTES, *, follow_links: bool = False) -> bytes:
     """The bytes of a regular file of at most `limit` bytes.
 
     A crafted store can put a FIFO, a device such as /dev/zero or a link to
@@ -32,8 +32,13 @@ def read_file(path: Path, limit: int = MAX_FILE_BYTES) -> bytes:
     links), which would block, never end or read another file; those are
     refused (ValueError) before the file is opened. The path must name a
     regular file itself, as `op_world`'s `store::read_file` requires.
+
+    With `follow_links`, a symbolic link is followed, and the file it leads
+    to must be a regular file of at most `limit` bytes. That is for the
+    ingest's own download cache, which a user may share or manage with
+    links; world stores never follow them.
     """
-    info = path.lstat()
+    info = path.stat() if follow_links else path.lstat()
     if not stat.S_ISREG(info.st_mode):
         raise ValueError(f"{path} is not a regular file")
     if info.st_size > limit:

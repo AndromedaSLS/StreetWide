@@ -81,7 +81,7 @@ def _search(product: Product, bbox: BBox, cache: Path, offline: bool, refresh: b
     path = cache / "stac" / product.collection / f"search-{key}.json"
     if path.exists() and not refresh:
         try:
-            features = _json(read_file(path, _MAX_CACHED_SEARCH_BYTES), list)
+            features = _json(read_file(path, _MAX_CACHED_SEARCH_BYTES, follow_links=True), list)
         except (StacError, ValueError) as e:
             raise StacError(f"cached {path}: {e}; delete it and retry") from e
         return features

@@ -1,9 +1,10 @@
 """A small reader for glTF 2.0 binary files (.glb) as exported by 3D editors.
 
 It reads what a facade needs: every mesh primitive of the default scene
-drawn as triangles, with its node transforms applied (translation,
-rotation, scale or matrix, through the node hierarchy), and the name of
-its material. Textures, animations and other attributes are ignored.
+(in a file without scenes, of every node that is nobody's child) drawn as
+triangles, with its node transforms applied (translation, rotation, scale
+or matrix, through the node hierarchy), and the name of its material.
+Textures, animations and other attributes are ignored.
 
 The file comes from a contributor, so it is untrusted: every index, count,
 offset and number the reader uses is checked, the nodes must form trees (as
@@ -171,16 +172,27 @@ def _parse_json(chunk: bytes) -> dict:
     return _dict(doc, "the JSON chunk")
 
 
-def _check_trees(nodes: list) -> None:
+def _check_trees(nodes: list) -> list[bool]:
     """glTF nodes form disjoint trees: no node is the child of two nodes
-    (otherwise a small file could describe exponentially many paths)."""
+    (otherwise a small file could describe exponentially many paths) and
+    none is its own ancestor. Returns whether each node has a parent."""
     has_parent = [False] * len(nodes)
+    children = []
     for node in nodes:
-        for child in _list(_dict(node, "node").get("children", []), "node children"):
-            c = _index(child, len(nodes), "child node")
+        kids = [_index(c, len(nodes), "child node") for c in _list(_dict(node, "node").get("children", []), "node children")]
+        for c in kids:
             if has_parent[c]:
                 raise GltfError(f"node {c} is the child of more than one node")
             has_parent[c] = True
+        children.append(kids)
+    # With one parent at most, a node that no root reaches is in a loop.
+    reached, stack = 0, [i for i, p in enumerate(has_parent) if not p]
+    while stack:
+        reached += 1
+        stack.extend(children[stack.pop()])
+    if reached < len(nodes):
+        raise GltfError("the nodes form a loop: a node is its own ancestor")
+    return has_parent
 
 
 def read(data: bytes) -> list[Part]:
@@ -204,16 +216,21 @@ def read(data: bytes) -> list[Part]:
             binary = data[at + 8 : at + 8 + bin_len]
 
     nodes = _list(doc.get("nodes", []), "nodes")
-    _check_trees(nodes)
+    has_parent = _check_trees(nodes)
     materials = [_dict(m, "material") for m in _list(doc.get("materials", []), "materials")]
     if doc.get("scenes"):
         scenes = _list(doc["scenes"], "scenes")
         scene = _dict(scenes[_index(doc.get("scene", 0), len(scenes), "scene")], "scene")
+        roots = [_index(n, len(nodes), "scene node") for n in _list(scene.get("nodes", []), "scene nodes")]
+        if len(set(roots)) != len(roots):
+            raise GltfError("a scene lists a node twice")
+        # Its parent draws it already (the glTF validator's SCENE_NON_ROOT_NODE).
+        for n in roots:
+            if has_parent[n]:
+                raise GltfError(f"scene node {n} is the child of another node")
     else:
-        scene = {"nodes": list(range(len(nodes)))}
-    roots = [_index(n, len(nodes), "scene node") for n in _list(scene.get("nodes", []), "scene nodes")]
-    if len(set(roots)) != len(roots):
-        raise GltfError("a scene lists a node twice")
+        # No scene: every root, that is every node that is nobody's child.
+        roots = [i for i, p in enumerate(has_parent) if not p]
     parts: dict[str, list[np.ndarray]] = {}
     budget = _Budget()
     read_accessors: dict[int, np.ndarray] = {}

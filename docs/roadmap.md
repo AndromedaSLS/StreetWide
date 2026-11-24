@@ -16,6 +16,8 @@ pull request.
   world meets the ODbL (ADR-0019) and the licence allowlist (ADR-0017).
   Work that needs no decision goes on: the client's inspect mode, which
   marks improvable buildings and gives the facade command, is on `main`.
+  Every reader of untrusted files is now fuzzed, one of the steps before
+  announcing.
 - **M2** has started with water for the Limmat: RFC 0003 (a water layer,
   Draft) and ADR-0014 (water areas from OpenStreetMap, Proposed) are
   implemented on `main` while they are open for comment, as RFC 0001 and
@@ -88,7 +90,7 @@ wide in Zurich ([RFC 0001](../rfcs/0001-world-format.md)).
 | **Multiplayer** | None (determinism and per-tick state hashes are the groundwork) | Networking, accounts, moderation |
 | **Contributions** | A gate with ten checks, merges, takedowns and a facade tool, all working locally | Hosting ([ADR-0010](adr/0010-hosting-the-canonical-world.md)), submissions, reviewers, baseline refreshes, a first real contribution |
 | **Community** | One maintainer, no external contributors yet, 13 ADRs, 2 Draft RFCs | A second person who can merge, a Code of Conduct contact, an announcement, an owner for costs |
-| **Engineering** | About 14,600 lines of Rust and 4,200 of Python; 106 Rust and 91 Python tests; 12 CI jobs, including the client built and tested on Linux, Windows and macOS | GPU and performance tests, fuzzing of the file readers, releases |
+| **Engineering** | About 14,600 lines of Rust and 4,200 of Python; 106 Rust and 91 Python tests; 12 CI jobs, including the client built and tested on Linux, Windows and macOS; seeded fuzz tests of every reader of untrusted files | GPU and performance tests, releases |
 
 ## 3. Where you can help
 
@@ -295,7 +297,8 @@ drafts (section 8).
   - a Code of Conduct contact;
   - branch protection with the required checks;
   - fuzzing of the strict file readers (glb, canonical JSON, replays,
-    bundles);
+    bundles): done (see
+    [progress.md](progress.md#reader-fuzzing-2026-11-24));
   - dependency advisories in CI;
   - the issue drafts filed;
   - RFC 0001 and RFC 0002 decided.
@@ -536,7 +539,7 @@ arrives) and servers per area for larger groups.
 | Risk | Why it matters | What we do (status) |
 |---|---|---|
 | **Licences** | ODbL share-alike, mixed-source layers, licences that change between releases, non-commercial data | **In place:** a licence on every asset; forbidden sources in gate check G4. **M1:** the licence ADR and the allowlist; licences recorded at download |
-| **Security** | Untrusted bundles and downloads reach our file readers in CI and in clients; a merge bot holds write access | **In place:** strict readers; content ids checked on read. **M1:** fuzzing, dependency advisories, a gate without secrets, write access only after approval |
+| **Security** | Untrusted bundles and downloads reach our file readers in CI and in clients; a merge bot holds write access | **In place:** strict readers, fuzzed in CI; content ids checked on read. **M1:** dependency advisories, a gate without secrets, write access only after approval |
 | **One maintainer** | A single point of failure for reviews, decisions and knowledge | **M1:** a reviewer role and a second person with merge rights. **M6:** regional maintainers |
 | **Cost** | Delivering data to players dominates the bills | **M1:** a cost owner, with egress cost as a criterion in ADR-0010. **M3:** packed tiles, compression, levels of detail and a disk cache |
 | **Compiler quality and ingest scale** | A wrong baseline at scale; an ingest far too slow for a planet | **M3:** parallel ingest from regional extracts, with its speed measured in CI. **M6:** measured metrics, plausibility checks and review like an import |

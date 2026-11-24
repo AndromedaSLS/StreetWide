@@ -277,7 +277,8 @@ itself. Downloaded source data never lives here.
 A store may come from anyone (a downloaded world, a contributor's bundle),
 so readers take `world.json` and objects only as regular files, not
 symbolic links, devices or pipes, of at most 64 MiB, and refuse anything
-else before reading it.
+else before reading it. Whether JSON documents get smaller limits is an
+open question (see Unresolved questions).
 
 ## Options considered
 
@@ -355,3 +356,38 @@ assets with `parent_version_id` pointing at the old versions.
   profile version bump).
 - How contribution quality is scored for "beats what is there" (separate
   RFC).
+- **Size limits for JSON documents.** Readers take any file of up to
+  64 MiB (section 7), and parse a JSON document whole before any other
+  check: `op_world` builds a serde_json tree, `tools/worldfmt` a Python
+  one. The tree takes many times the size of the text. Measured with
+  serde_json (heap requested, release build): 16 bytes per byte of text
+  for `[0,0,…]`, 64 for arrays nested 127 deep, 83 for `[{"a":0},…]` and
+  105 for one-key objects nested 127 deep. A crafted 64 MiB document can
+  therefore take about 7 GB, and parsing it takes seconds. A review
+  measured 1.7 GB of private memory and 4.3 s for a 64 MiB `[0,0,…]`
+  read as an asset manifest. The gate reads every document of a bundle,
+  and CI runs it on pull requests. Valid documents are small. In the
+  Zurich district, asset manifests reach 4,108 bytes, tile indexes
+  59,148 and the world manifest 6,793 (30 tiles). A valid change set
+  stays under 64 KiB (50 changes, texts of at most 4,096 characters). A
+  world manifest lists at most the 1,024 tiles of its region, about
+  230 KB. The glb JSON chunk already has a limit of 1 MiB (section 6).
+  Options:
+  1. Limits per kind of document, checked before parsing, in both
+     implementations. For example: 1 MiB for asset manifests and merge
+     records; 8 MiB for change sets; 16 MiB for check reports (one
+     detail per finding) and tile indexes; no new limit for world
+     manifests, which grow with the world. A document at 1 MiB would
+     then take up to about 110 MB to parse, at 16 MiB about 1.7 GB.
+  2. A streaming canonical-JSON validator that checks the form and the
+     depth without building a tree, so that only documents of a known
+     shape are parsed. No new limits, but a second parser, to keep
+     identical in Rust and Python.
+  3. Leave it as it is: 64 MiB for every file, gigabytes for a crafted
+     document.
+
+  Recommendation: option 1, with each limit set from the largest valid
+  document of its kind and a wide margin, stated in section 7 next to
+  the 64 MiB rule and enforced by `tools/worldfmt` too. It is the remedy
+  already chosen for the glb JSON chunk, and it changes no valid
+  document.

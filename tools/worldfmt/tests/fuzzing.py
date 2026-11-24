@@ -5,9 +5,19 @@ A fuzz test mutates a corpus (the committed fixtures plus small hand-made
 edge cases) and checks that a reader either accepts the input or raises its
 documented error: never another exception, never a warning, never slowly
 and, for the readers whose output should stay proportional to their input,
-never with memory out of proportion (tracemalloc). Every case is derived
-from the seed, the test's name and the case number alone, so a failure
-names the case that reproduces it.
+never with memory out of proportion. Every case is derived from the seed,
+the test's name and the case number alone, so a failure names the case
+that reproduces it.
+
+What the memory check measures (see `reading`):
+- By default, on every system: tracemalloc, which counts the allocations
+  of Python and numpy. It cannot see C libraries that allocate memory
+  themselves, such as GEOS (shapely), PROJ (pyproj) and libtiff.
+- For the readers marked `native` (the Overpass, water and derived-cache
+  targets, which work in GEOS and PROJ), on Linux: the growth of the whole
+  process's peak resident memory, which counts every library. On other
+  systems they fall back to tracemalloc, so their GEOS and PROJ work is
+  bounded there only by SLOW_CASE_S and the readers' own limits.
 
     STREETWIDE_FUZZ_ITERS   scales every test, as for the Rust fuzz targets:
                             a test whose default is d runs ITERS x d / 2000
@@ -28,6 +38,7 @@ import math
 import os
 import re
 import sys
+import tempfile
 import time
 import tracemalloc
 import warnings
@@ -42,19 +53,78 @@ SLOW_CASE_S = 10.0
 GROWTH_BYTES = 1 << 20
 """About the most one mutation adds to a JSON document."""
 HANG_S = 300.0
+"""A test that makes no progress for this long dumps every thread's stack
+and ends the process (faulthandler), so a hang fails CI instead of stalling
+it. pytest captures the standard error and drops it when the process ends,
+so the stacks go to a file of their own in the temporary directory
+(tempfile.gettempdir()), named by HANG_FILE. CI prints it when the job
+fails."""
+HANG_FILE = "streetwide-fuzz-hang-{test}-{pid}.txt"
+"""The name of that file: the fuzz test's name (letters, digits, dots and
+dashes) and the process id. It is removed when the test ends normally."""
 MEMORY = (128, 16 << 20)
 """The memory allowance of the readers whose work is proportional to their
 input (see run_cases): 128 bytes per input byte (parsed Python objects take
 tens of times the text they come from) plus 16 MiB."""
 
-_readings: list[tuple[int, int]] = []
+_LINUX = sys.platform.startswith("linux")
+_STATUS = "/proc/self/status"
+_CLEAR_REFS = "/proc/self/clear_refs"
+_readings: list[tuple[int, int, str]] = []
+
+
+def _status_bytes(field: bytes) -> int | None:
+    """A memory field of /proc/self/status, such as b"VmHWM:", in bytes."""
+    try:
+        with open(_STATUS, "rb") as f:
+            for line in f:
+                if line.startswith(field):
+                    return int(line.split()[1]) * 1024  # given in kB
+    except (OSError, ValueError, IndexError):
+        pass
+    return None
+
+
+def _reset_peak() -> int | None:
+    """Resets the process's peak resident memory (VmHWM) to its current
+    resident memory and returns that, in bytes. None where the system does
+    not offer it (Linux 4.0 and later do)."""
+    if not _LINUX:
+        return None
+    try:
+        with open(_CLEAR_REFS, "wb", buffering=0) as f:
+            f.write(b"5")
+    except OSError:
+        return None
+    return _status_bytes(b"VmHWM:")
+
+
+RESIDENT = _reset_peak() is not None
+"""Whether `native` readings measure the peak resident memory (Linux)."""
 
 
 @contextlib.contextmanager
-def reading(size: int) -> Iterator[None]:
-    """Measures, with tracemalloc (which numpy reports to), the most memory
-    the code inside takes: a reader working on an input of `size` bytes. For
-    run_cases(memory=...), which checks every reading of a case."""
+def reading(size: int, *, native: bool = False) -> Iterator[None]:
+    """Measures the most memory the code inside takes: a reader working on an
+    input of `size` bytes. For run_cases(memory=...), which checks every
+    reading of a case.
+
+    By default it uses tracemalloc, which counts the allocations of Python
+    and numpy. A `native` reader works in C libraries that tracemalloc
+    cannot see, such as GEOS and PROJ. On Linux it is measured instead by
+    how much the process's peak resident memory grows: VmHWM in
+    /proc/self/status, after writing 5 to /proc/self/clear_refs just before
+    the reader starts, which resets the peak to the current resident memory.
+    That counts every library, but only memory the reader writes to. On
+    other systems a `native` reader falls back to tracemalloc."""
+    before = _reset_peak() if native and RESIDENT else None
+    if before is not None:
+        try:
+            yield
+        finally:
+            peak = _status_bytes(b"VmHWM:")
+            _readings.append((max(0, (peak or before) - before), size, "peak resident memory"))
+        return
     outer = tracemalloc.is_tracing()
     if outer:
         tracemalloc.reset_peak()
@@ -65,12 +135,16 @@ def reading(size: int) -> Iterator[None]:
     try:
         yield
     finally:
-        _readings.append((tracemalloc.get_traced_memory()[1] - before, size))
+        _readings.append((tracemalloc.get_traced_memory()[1] - before, size, "tracemalloc"))
         if not outer:
             tracemalloc.stop()
-"""A test that makes no progress for this long dumps every thread's stack
-and ends the process (faulthandler), so a hang fails CI instead of stalling
-it. Run pytest with -s to see the stacks."""
+
+
+def hang_file(name: str) -> str:
+    """The path of the file the stacks of a hang in fuzz test `name` go to,
+    from this process (see HANG_S)."""
+    test = re.sub(r"[^A-Za-z0-9.-]+", "-", name).strip("-") or "test"
+    return os.path.join(tempfile.gettempdir(), HANG_FILE.format(test=test, pid=os.getpid()))
 
 
 class Rng:
@@ -134,8 +208,15 @@ def run_cases(name: str, default: int, case: Callable[[Rng], None], *,
     or a count claims. Returns the number of cases run."""
     count = iterations(default)
     armed = -math.inf
-    watchdog = sys.__stderr__  # a real file descriptor, whatever pytest captures
-    worst = (0, 0)  # the most memory a reading took, and its input's length
+    # faulthandler writes to a file descriptor. pytest captures descriptor 2
+    # and drops what it holds when the process ends, so a hang's stacks go
+    # to a file of their own (see HANG_S).
+    path = hang_file(name)
+    try:
+        watchdog = open(path, "w")
+    except OSError:  # no writable temporary directory: no watchdog
+        watchdog = None
+    worst = (0, 0, "")  # the most memory a reading took, its input's length, the measure
     try:
         for i in range(count):
             start = time.perf_counter()
@@ -156,18 +237,22 @@ def run_cases(name: str, default: int, case: Callable[[Rng], None], *,
                 raise AssertionError(f"{name}: case {i} (STREETWIDE_FUZZ_SEED={base_seed():#x}) took {elapsed:.1f} s")
             if memory is not None:
                 assert _readings, f"{name}: case {i} did not measure its reader with reading()"
-                for used, size in _readings:
+                for used, size, measure in _readings:
                     allowed = memory[0] * size + memory[1]
                     if used > allowed:
                         raise AssertionError(
-                            f"{name}: case {i} (STREETWIDE_FUZZ_SEED={base_seed():#x}) took {used} bytes for an "
-                            f"input of {size} bytes, more than {allowed} ({memory[0]} per byte plus {memory[1]})"
+                            f"{name}: case {i} (STREETWIDE_FUZZ_SEED={base_seed():#x}) took {used} bytes ({measure}) "
+                            f"for an input of {size} bytes, more than {allowed} ({memory[0]} per byte plus {memory[1]})"
                         )
-                    worst = max(worst, (used, size))
+                    worst = max(worst, (used, size, measure))
     finally:
         faulthandler.cancel_dump_traceback_later()
+        if watchdog is not None:
+            watchdog.close()
+            with contextlib.suppress(OSError):
+                os.remove(path)
     if memory is not None:
-        print(f"{name}: {count} cases, most memory {worst[0]} bytes (input of {worst[1]} bytes)")
+        print(f"{name}: {count} cases, most memory {worst[0]} bytes ({worst[2]}, input of {worst[1]} bytes)")
     return count
 
 

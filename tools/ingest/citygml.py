@@ -11,13 +11,16 @@ building or its `BuildingPart`s). Only the typed surfaces are used.
 
 The sheet is a download and the derived cache a local file: a damaged or
 crafted one raises CityGmlError, and the parsed tree is pruned as it is
-read, so no sheet can make the reader hold more than a few buildings.
+read, so no sheet can make the reader hold more than a few buildings. A
+building of more than _MAX_BUILDING_BYTES of XML is dropped as it is read
+and counted, so those few buildings take a few hundred megabytes at most.
 """
 
 from __future__ import annotations
 
 import json
 import lzma
+import os
 import struct
 import zipfile
 import zlib
@@ -52,7 +55,11 @@ CACHE_VERSION = 2
 # Bounds on the XML, far above real sheets (which nest about 15 levels deep,
 # with buildings and texts of kilobytes).
 _MAX_DEPTH = 256
-_MAX_BUILDING_BYTES = 128 << 20
+_MAX_BUILDING_BYTES = 16 << 20
+"""Most XML in one building (the largest of the 11,304 in the Zurich sheet
+1091-41 has 4.5 MB). The reader keeps a building's elements until it ends,
+and tiny elements take about 23 times their XML in memory, so this bounds
+a building at about 400 MB. A larger building is skipped and counted."""
 _MAX_RUN_BYTES = 128 << 20
 """Most bytes between two tags: one text, or one tag with its attributes."""
 _CHUNK = 64 << 10
@@ -193,18 +200,21 @@ def _envelope_overlaps(el: Element, env: tuple[float, float, float, float]) -> b
     return False
 
 
-def _buildings(stream, name: str) -> Iterator[Element]:
-    """Every complete bldg:Building of a CityGML stream, in document order;
-    the caller may clear each one once it has read it.
+def _buildings(stream, name: str) -> Iterator[Element | None]:
+    """Every complete bldg:Building of a CityGML stream, in document order,
+    with None in place of a building of more than _MAX_BUILDING_BYTES; the
+    caller may clear each building once it has read it.
 
-    Elements outside buildings are dropped as soon as they end, and the
-    nesting depth, the size of a building and the bytes between two tags
-    are bounded, so memory stays small whatever the stream holds.
+    Elements outside buildings, or inside a building found too large, are
+    dropped as soon as they end, and the nesting depth, the size of a
+    building and the bytes between two tags are bounded, so memory stays
+    small whatever the stream holds.
     """
     building, material = f"{BLDG}Building", f"{APP}X3DMaterial"
     parser = XMLPullParser(events=("start", "end"))
     open_elements: list[Element] = []
     inside = 0  # open bldg:Building elements
+    too_large = False  # the open building has more than _MAX_BUILDING_BYTES
     fed = building_start = last_event = 0  # stream offsets, to the chunk
     while True:
         chunk = stream.read(_CHUNK)
@@ -228,17 +238,29 @@ def _buildings(stream, name: str) -> Iterator[Element]:
             open_elements.pop()
             if el.tag == building:
                 inside -= 1
-                yield el
+                if not too_large:
+                    yield el
+                elif not inside:
+                    too_large = False
+                    yield None
             elif el.tag == material:
                 el.clear()
-            if not inside:
+            if not inside or too_large:
                 el.clear()
                 if open_elements:
                     open_elements[-1].remove(el)
         if fed - last_event > _MAX_RUN_BYTES:
             raise CityGmlError(f"{name}: more than {_MAX_RUN_BYTES} bytes without a tag")
-        if inside and fed - building_start > _MAX_BUILDING_BYTES:
-            raise CityGmlError(f"{name}: a building larger than {_MAX_BUILDING_BYTES} bytes")
+        if inside and not too_large and fed - building_start > _MAX_BUILDING_BYTES:
+            # Drop what the building holds so far: each open element keeps
+            # only the next one, which the parser is still filling.
+            too_large = True
+            first = next(i for i, e in enumerate(open_elements) if e.tag == building)
+            chain = open_elements[first:]
+            for parent, child in zip(chain, chain[1:] + [None]):
+                del parent[:]
+                if child is not None:
+                    parent.append(child)
         if not chunk:
             return
 
@@ -259,7 +281,9 @@ def _reading(items: Iterator[Element], name: str) -> Iterator[Element]:
 
 
 def read_buildings(zip_path: Path, envelope: tuple[float, float, float, float], stats: dict[str, int]) -> list[Building]:
-    """Buildings with geometry inside the LV95 envelope, sorted by id."""
+    """Buildings with geometry inside the LV95 envelope, sorted by id. A
+    building of more than _MAX_BUILDING_BYTES of XML, anywhere in the sheet,
+    is skipped and counted as one "too large to read"."""
     out: list[Building] = []
     try:
         z = zipfile.ZipFile(zip_path)
@@ -276,6 +300,10 @@ def read_buildings(zip_path: Path, envelope: tuple[float, float, float, float], 
         with stream:
             for el in _reading(_buildings(stream, zip_path.name), zip_path.name):
                 stats["buildings in sheet"] = stats.get("buildings in sheet", 0) + 1
+                if el is None:  # more than _MAX_BUILDING_BYTES of XML
+                    key = "buildings in sheet too large to read"
+                    stats[key] = stats.get(key, 0) + 1
+                    continue
                 if _envelope_overlaps(el, envelope) and (b := _building(el, stats)) is not None:
                     out.append(b)
                 el.clear()
@@ -319,7 +347,7 @@ def load_buildings(
     path = cache / "derived" / f"{zip_path.stem}-v{CACHE_VERSION}-{key}.json"
     if path.exists():
         try:
-            doc = json.loads(read_file(path, _MAX_CACHE_BYTES))
+            doc = json.loads(read_file(path, _MAX_CACHE_BYTES, follow_links=True))
             if not isinstance(doc, dict) or not isinstance(doc.get("buildings"), list):
                 raise CityGmlError("not a cached extraction")
             cached_stats = doc.get("stats")
@@ -341,7 +369,18 @@ def load_buildings(
             for b in buildings
         ],
     }
-    part = path.with_name(path.name + ".part")
-    part.write_text(json.dumps(doc, separators=(",", ":")), encoding="utf-8")
-    part.replace(path)
+    # Through a part file of this process's own: ingests sharing the cache
+    # may extract the same sheet at once, and each writes the same bytes.
+    part = path.with_name(f"{path.name}.{os.getpid()}.part")
+    try:
+        part.write_text(json.dumps(doc, separators=(",", ":")), encoding="utf-8")
+        try:
+            os.replace(part, path)  # the last writer wins
+        except PermissionError:
+            # Windows refuses to replace a file that another process has
+            # open: one that has just written the same extraction.
+            if not path.exists():
+                raise
+    finally:
+        part.unlink(missing_ok=True)
     return buildings

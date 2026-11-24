@@ -29,7 +29,7 @@ use op_world::glb::{self, GlbMesh, Material, Node, Primitive, mm_to_f32};
 use op_world::keys::{RegionKey, TileKey};
 use op_world::rules;
 use op_world::sample::parse_mesh_specs;
-use op_world::validate::validate_store;
+use op_world::validate::{Report, validate_store};
 use op_world::{AssetManifest, ContentId, ObjectKind, Store, TileIndex, WorldManifest};
 use serde::Serialize;
 use serde::de::DeserializeOwned;
@@ -828,10 +828,21 @@ fn process_sizes_are_read_from_proc_status() {
     }
 }
 
+/// An input that makes a reader reserve what a length field claims: 1 GiB,
+/// never touched.
+fn reserve_1_gib(_: &mut Rng) -> Vec<u8> {
+    (1u32 << 30).to_le_bytes().to_vec()
+}
+
+fn reserve_claimed(input: &[u8]) {
+    let claimed = u32::from_le_bytes(input.try_into().expect("4 bytes")) as usize;
+    std::hint::black_box(Vec::<u8>::with_capacity(claimed));
+}
+
 /// The engine notices a reader reserving what a length field claims, where
 /// the kernel reports the process's size (Linux; found by review: it could
-/// not). The reservation is 1 GiB, never touched, so it stands out from
-/// what the tests running alongside hold.
+/// not). The reservation is 1 GiB, so it stands out from what the tests
+/// running alongside hold.
 #[test]
 fn the_memory_check_catches_what_a_length_field_reserves() {
     if fuzzing::address_space().is_none() {
@@ -840,14 +851,99 @@ fn the_memory_check_catches_what_a_length_field_reserves() {
     let caught = std::panic::catch_unwind(|| {
         fuzzing::run(
             Target::new("memory-check", 1).exactly(1).in_process(),
-            |_| (1u32 << 30).to_le_bytes().to_vec(),
-            |input| {
-                let claimed = u32::from_le_bytes(input.try_into().expect("4 bytes")) as usize;
-                std::hint::black_box(Vec::<u8>::with_capacity(claimed));
-            },
+            reserve_1_gib,
+            reserve_claimed,
         );
     });
     assert!(caught.is_err(), "a 1 GiB reservation went unnoticed");
+}
+
+/// The same through a child process, where every target runs on Linux: the
+/// reservation fails the run there, so the child's test fails, and so does
+/// the run that started it. Found by review: no test showed that the child
+/// processes measure anything. Where they do not run, nothing to show.
+#[test]
+fn the_memory_check_works_in_a_child_process() {
+    if fuzzing::address_space().is_none() || fuzzing::test_to_isolate().is_none() {
+        return;
+    }
+    let target = Target::new("memory-check-child", 1).exactly(1);
+    if fuzzing::in_child() {
+        // Here the run must fail: that is what the parent checks.
+        fuzzing::run(target, reserve_1_gib, reserve_claimed);
+        return;
+    }
+    let caught = std::panic::catch_unwind(|| fuzzing::run(target, reserve_1_gib, reserve_claimed));
+    let message = match &caught {
+        Err(payload) => payload
+            .downcast_ref::<String>()
+            .cloned()
+            .unwrap_or_default(),
+        Ok(()) => String::new(),
+    };
+    assert!(
+        message.contains("failed in its child process"),
+        "a 1 GiB reservation in a child process went unnoticed: {message:?}"
+    );
+}
+
+/// `STREETWIDE_FUZZ_ISOLATE` takes exactly 0, false or no, or 1, true or
+/// yes. Found by review: any value but `0` meant child processes.
+#[test]
+fn isolation_settings_are_strict() {
+    for (raw, setting) in [
+        ("0", Some(false)),
+        ("false", Some(false)),
+        ("no", Some(false)),
+        ("1", Some(true)),
+        ("true", Some(true)),
+        ("yes", Some(true)),
+        ("", None),
+        (" 0", None),
+        ("2", None),
+        ("off", None),
+        ("TRUE", None),
+    ] {
+        assert_eq!(fuzzing::parse_isolate(raw), setting, "{raw:?}");
+    }
+}
+
+/// The memory check runs only where nothing else shares the process: in a
+/// target's child process, or for the engine's own tests in the test
+/// process. Found by review: with `STREETWIDE_FUZZ_ISOLATE=0`, targets ran
+/// in the test process with the check on, where other tests' threads and
+/// allocator arenas move the process's size both ways.
+#[test]
+fn the_memory_check_needs_a_process_of_its_own() {
+    assert!(fuzzing::checks_memory(true, true, false), "a child process");
+    assert!(
+        fuzzing::checks_memory(true, false, true),
+        "the engine's tests"
+    );
+    assert!(
+        !fuzzing::checks_memory(true, false, false),
+        "a target in the test process"
+    );
+    assert!(
+        !fuzzing::checks_memory(false, true, true),
+        "where the kernel reports no size"
+    );
+}
+
+/// Writes `files` into a store of its own, `<dir>/s<n>`, validates it and
+/// deletes it. No input sees what another left, so an input that fails,
+/// once shrunk, fails again in a fresh store.
+fn validate_alone(dir: &Path, n: u64, files: &Files) -> Report {
+    let root = dir.join(format!("s{n}"));
+    std::fs::create_dir_all(&root).expect("store directory");
+    let store = Store::new(&root);
+    for (kind, bytes) in &files.objects {
+        store.write_object(bytes, *kind).expect("write object");
+    }
+    std::fs::write(store.world_path(), &files.world).expect("write world.json");
+    let report = validate_store(&store);
+    std::fs::remove_dir_all(&root).ok();
+    report
 }
 
 #[test]
@@ -855,25 +951,41 @@ fn world_store_validation() {
     let c = corpus();
     let base = format_world();
     let dir = common::temp_dir("fuzz-validate");
-    let store = Store::new(&dir);
+    let runs = AtomicU64::new(0);
     fuzzing::run(
-        Target::new("validate", 400)
-            .memory(64, 64 << 20)
-            .parts(files_split, files_join),
+        // Validation reads one object at a time, so what it holds follows
+        // the JSON it parses: the default allowance.
+        Target::new("validate", 400).parts(files_split, files_join),
         |rng| encode(&mutate_files(rng, &base, c, WorldManifest::FORMAT)),
         |input| {
             let Some(files) = decode(input) else {
                 return;
             };
-            for (kind, bytes) in &files.objects {
-                store.write_object(bytes, *kind).expect("write object");
-            }
-            std::fs::write(store.world_path(), &files.world).expect("write world.json");
-            let report = validate_store(&store);
+            let report = validate_alone(&dir, runs.fetch_add(1, Ordering::Relaxed), &files);
             if report.is_ok() {
                 assert_eq!(report.world_id, Some(ContentId::of(&files.world)));
             }
         },
+    );
+    std::fs::remove_dir_all(&dir).ok();
+}
+
+/// Found by review: the validate target wrote every input into one store,
+/// so a failing input, once shrunk, could rely on objects that earlier
+/// inputs had left there, and pass in a fresh store. Each input now gets a
+/// store of its own.
+#[test]
+fn validate_inputs_do_not_see_each_other() {
+    let dir = common::temp_dir("validate-alone");
+    let base = format_world();
+    assert!(validate_alone(&dir, 0, &base).is_ok());
+    let world_only = Files {
+        world: base.world.clone(),
+        objects: Vec::new(),
+    };
+    assert!(
+        !validate_alone(&dir, 1, &world_only).is_ok(),
+        "the objects of an earlier input were seen"
     );
     std::fs::remove_dir_all(&dir).ok();
 }
@@ -912,9 +1024,12 @@ fn contribution_bundles_through_the_gate() {
     let dir = common::temp_dir("fuzz-gate");
     let runs = AtomicU64::new(0);
     fuzzing::run(
-        // The gate reads the whole fixture world whatever the bundle holds.
+        // Besides the JSON it parses, the gate may list up to
+        // FACADE_MAX_GRID_STEPS four-byte triangle numbers in G8's grid:
+        // 80 MB, twice that while the lists grow. It reads the fixture world
+        // one object at a time; at CI size an input takes about 3.4 MB.
         Target::new("gate", 150)
-            .memory(64, 256 << 20)
+            .memory(160, gate::FACADE_MAX_GRID_STEPS * 8 + (16 << 20))
             .parts(files_split, files_join),
         |rng| encode(&mutate_files(rng, &base, c, ChangeSet::FORMAT)),
         |input| {
@@ -1074,36 +1189,56 @@ fn world_log() {
 //
 // Inputs that once broke a reader, minimised. Each must stay an error.
 
-/// One primitive whose POSITION and NORMAL are the same accessor: 24 bytes
-/// decoded from a 12-byte BIN chunk. Accessors that share data let a small
-/// file make the reader copy the same bytes again and again (a 37 KB file
-/// made it copy 786 MB; the copies grow with the product of the node,
-/// primitive and vertex counts until an allocation aborts the process).
-/// Found by review while writing the glb fuzz target.
-const GLB_SHARED_ACCESSOR: &[u8] = b"glTF\x02\x00\x00\x00\xb0\x01\x00\x00\x88\x01\x00\x00JSON{\
-        \"accessors\":[{\"bufferView\":0,\"componentType\":5126,\
-        \"count\":1,\"type\":\"VEC3\"},{\"bufferView\":1,\"componentType\":5125,\
-        \"count\":0,\"type\":\"SCALAR\"}],\"bufferViews\":[{\"byteLength\":12,\
-        \"byteOffset\":0},{\"byteLength\":0,\"byteOffset\":12}],\
-        \"materials\":[{\"name\":\"road\"}],\"meshes\":[{\"primitives\":[\
-        {\"attributes\":{\"NORMAL\":0,\"POSITION\":0},\"indices\":1,\
-        \"material\":0,\"mode\":4}]}],\"nodes\":[{\"mesh\":0,\
-        \"name\":\"a:b\"}]}\x20\x20\x0c\x00\x00\x00BIN\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00";
-
-/// Two nodes showing the same mesh: its data decoded once per node (found
-/// with the accessor case above).
-const GLB_SHARED_MESH: &[u8] = b"glTF\x02\x00\x00\x004\x02\x00\x00\x00\x02\x00\x00JSON{\
-        \"accessors\":[{\"bufferView\":0,\"componentType\":5126,\
-        \"count\":1,\"type\":\"VEC3\"},{\"bufferView\":1,\"componentType\":5126,\
-        \"count\":1,\"type\":\"VEC3\"},{\"bufferView\":2,\"componentType\":5125,\
-        \"count\":0,\"type\":\"SCALAR\"}],\"bufferViews\":[{\"byteLength\":12,\
-        \"byteOffset\":0},{\"byteLength\":12,\"byteOffset\":12},\
-        {\"byteLength\":0,\"byteOffset\":24}],\"materials\":[\
-        {\"name\":\"road\"}],\"meshes\":[{\"primitives\":[{\"attributes\":{\
-        \"NORMAL\":1,\"POSITION\":0},\"indices\":2,\"material\":0,\
-        \"mode\":4}]}],\"nodes\":[{\"mesh\":0,\"name\":\"a:b\"},\
-        {\"mesh\":0,\"name\":\"a:b\"}]}\x20\x20\x18\x00\x00\x00BIN\x00\
-        \x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00";
+/// A glb of `nodes` nodes, each showing one primitive of `vertices`
+/// vertices (at the origin) and one triangle, valid but for one kind of
+/// sharing. With `shared_mesh`, every node shows mesh 0. Otherwise every
+/// node has a mesh of its own, but all of them read one POSITION accessor,
+/// as their NORMAL too. Only the reader's guards refuse it: without them,
+/// it decodes the same data again for every node and attribute, and only
+/// then fails the canonical-form check. Found by review while writing the
+/// glb fuzz target: a 37 KB file made the reader copy 786 MB, and larger
+/// ones aborted the process.
+fn shared_glb(nodes: usize, vertices: usize, shared_mesh: bool) -> Vec<u8> {
+    use serde_json::json;
+    let floats = 12 * vertices;
+    let vec3 = |view: usize| json!({"bufferView": view, "componentType": 5126, "count": vertices, "type": "VEC3"});
+    let indices = |view: usize| json!({"bufferView": view, "componentType": 5125, "count": 3, "type": "SCALAR"});
+    let view = |offset: usize, length: usize| json!({"byteLength": length, "byteOffset": offset});
+    let mesh = |position: usize, normal: usize, index: usize| {
+        json!({"primitives": [{
+            "attributes": {"NORMAL": normal, "POSITION": position},
+            "indices": index,
+            "material": 0,
+            "mode": 4
+        }]})
+    };
+    let (accessors, views, meshes, bin) = if shared_mesh {
+        (
+            vec![vec3(0), vec3(1), indices(2)],
+            vec![view(0, floats), view(floats, floats), view(2 * floats, 12)],
+            vec![mesh(0, 1, 2)],
+            2 * floats + 12,
+        )
+    } else {
+        (
+            vec![vec3(0), indices(1)],
+            vec![view(0, floats), view(floats, 12)],
+            vec![mesh(0, 0, 1); nodes],
+            floats + 12,
+        )
+    };
+    let nodes: Vec<Value> = (0..nodes)
+        .map(|i| json!({"mesh": if shared_mesh { 0 } else { i }, "name": "a:b"}))
+        .collect();
+    let doc = json!({
+        "accessors": accessors,
+        "bufferViews": views,
+        "materials": [{"name": "road"}],
+        "meshes": meshes,
+        "nodes": nodes
+    });
+    fuzzing::glb_pack(&serde_json::to_vec(&doc).expect("JSON"), &vec![0; bin])
+}
 
 fn glb_error(bytes: &[u8]) -> String {
     match glb::read(bytes) {
@@ -1112,19 +1247,68 @@ fn glb_error(bytes: &[u8]) -> String {
     }
 }
 
+const SHARED_ACCESSOR: &str = "accessors read more data than the BIN chunk holds";
+const SHARED_MESH: &str = "node 1 must show mesh 1";
+
+/// One primitive whose POSITION and NORMAL are the same accessor: 24 bytes
+/// decoded from 12 bytes of positions.
 #[test]
 fn regression_glb_accessors_cannot_decode_the_bin_chunk_twice() {
-    assert_eq!(GLB_SHARED_ACCESSOR.len(), 432);
-    assert_eq!(
-        glb_error(GLB_SHARED_ACCESSOR),
-        "accessors read more data than the BIN chunk holds"
+    assert_eq!(glb_error(&shared_glb(1, 1, false)), SHARED_ACCESSOR);
+}
+
+/// Two nodes showing the same mesh: its data decoded once per node.
+#[test]
+fn regression_glb_nodes_cannot_share_a_mesh() {
+    assert_eq!(glb_error(&shared_glb(2, 1, true)), SHARED_MESH);
+}
+
+/// Both at scale, 5,000 nodes on 1,000 vertices: about 120 MB to decode
+/// without the guards. Where the memory check is available (Linux), the
+/// reader must refuse them taking little beyond their size.
+#[test]
+fn regression_glb_shared_accessors_at_scale() {
+    let input = shared_glb(5000, 1000, false);
+    assert!(input.len() < 1 << 20);
+    fuzzing::run(
+        Target::new("glb-shared-accessor", 1)
+            .exactly(1)
+            .memory(64, 1 << 20),
+        |_| input.clone(),
+        |bytes| assert_eq!(glb_error(bytes), SHARED_ACCESSOR),
     );
 }
 
 #[test]
-fn regression_glb_nodes_cannot_share_a_mesh() {
-    assert_eq!(GLB_SHARED_MESH.len(), 564);
-    assert_eq!(glb_error(GLB_SHARED_MESH), "node 1 must show mesh 1");
+fn regression_glb_shared_meshes_at_scale() {
+    let input = shared_glb(5000, 1000, true);
+    assert!(input.len() < 1 << 20);
+    fuzzing::run(
+        Target::new("glb-shared-mesh", 1)
+            .exactly(1)
+            .memory(64, 1 << 20),
+        |_| input.clone(),
+        |bytes| assert_eq!(glb_error(bytes), SHARED_MESH),
+    );
+}
+
+/// A canonical document of 1,400 chains of nested objects, 127 levels
+/// deep: parsing it takes about 112 bytes per input byte (a 632-byte map
+/// node for each `{"a":`), and the documents target must allow that. Found
+/// by review: at 64 bytes per input byte allowed, a long campaign reached
+/// 99% of the allowance with valid nesting, and a document like this one
+/// went over it.
+#[test]
+fn regression_parsing_nested_objects_fits_the_allowance() {
+    let chain = format!("{}0{}", "{\"a\":".repeat(126), "}".repeat(126));
+    let doc = format!("[{}]", vec![chain; 1400].join(","));
+    assert_eq!(doc.len(), 1_061_201);
+    assert!(cjson::from_canonical::<Value>(doc.as_bytes()).is_ok());
+    fuzzing::run(
+        Target::new("documents-nested", 1).exactly(1),
+        |_| doc.as_bytes().to_vec(),
+        check_documents,
+    );
 }
 
 /// A bundle whose `change.json` has one unknown, 5000-letter key. The
@@ -1226,6 +1410,66 @@ fn regression_store_reads_refuse_irregular_and_oversized_files() {
             assert_eq!(err.to_string(), "not a regular file", "{name}");
         }
     }
+    std::fs::remove_dir_all(&dir).ok();
+}
+
+/// Makes `link` a symbolic link to the file `target`.
+#[cfg(unix)]
+fn symlink_file(target: &Path, link: &Path) -> std::io::Result<()> {
+    std::os::unix::fs::symlink(target, link)
+}
+
+/// Makes `link` a symbolic link to the file `target` (Windows allows it
+/// only with developer mode or the right to make links).
+#[cfg(windows)]
+fn symlink_file(target: &Path, link: &Path) -> std::io::Result<()> {
+    std::os::windows::fs::symlink_file(target, link)
+}
+
+#[cfg(not(any(unix, windows)))]
+fn symlink_file(_: &Path, _: &Path) -> std::io::Result<()> {
+    Err(std::io::Error::from(std::io::ErrorKind::Unsupported))
+}
+
+/// A bundle can hold an object as a link (git keeps them). The layer lookup
+/// followed it, chose the bundle, and the read refused the link, so the
+/// world's regular copy of the same object was never read. A link is now
+/// passed over like a directory or a FIFO. Found by review. Runs where the
+/// platform lets a test make links (not on Windows without the right).
+#[test]
+fn regression_a_link_does_not_hide_an_object_below_it() {
+    let dir = common::temp_dir("regression-store-link");
+    let (bundle, world) = (dir.join("bundle"), dir.join("world"));
+    let bytes = b"{}".as_slice();
+    let id = Store::new(&world)
+        .write_object(bytes, ObjectKind::Json)
+        .expect("write object");
+    let link = Store::new(&bundle).object_path(&id, ObjectKind::Json);
+    std::fs::create_dir_all(link.parent().expect("parent")).expect("mkdir");
+    let target = Store::new(&world).object_path(&id, ObjectKind::Json);
+    if let Err(e) = symlink_file(&target, &link) {
+        println!("not run: cannot make a link here ({e})");
+        std::fs::remove_dir_all(&dir).ok();
+        return;
+    }
+    let layered = Store::layered(&bundle, vec![world.clone()]);
+    assert!(layered.has_object(&id, ObjectKind::Json));
+    assert!(
+        layered
+            .read_object(&id, ObjectKind::Json)
+            .expect("the world's copy")
+            == bytes
+    );
+    // With no regular copy, the link is refused, never followed.
+    let alone = Store::new(&bundle);
+    assert!(!alone.has_object(&id, ObjectKind::Json));
+    assert_eq!(
+        alone
+            .read_object(&id, ObjectKind::Json)
+            .expect_err("a link")
+            .to_string(),
+        format!("I/O error: object {id}: not a regular file")
+    );
     std::fs::remove_dir_all(&dir).ok();
 }
 

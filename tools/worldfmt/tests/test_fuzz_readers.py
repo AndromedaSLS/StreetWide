@@ -7,6 +7,8 @@ from __future__ import annotations
 
 import json
 import os
+import subprocess
+import sys
 import time
 from pathlib import Path
 
@@ -15,6 +17,7 @@ from jsonschema import Draft202012Validator
 
 from tools.worldfmt import cjson, ids, schemas
 from tools.worldfmt.store import Store, read_file
+from tools.worldfmt.tests import fuzzing
 from tools.worldfmt.tests.fuzzing import (
     MEMORY,
     Rng,
@@ -25,7 +28,8 @@ from tools.worldfmt.tests.fuzzing import (
     run_cases,
 )
 
-FIXTURES = Path(__file__).resolve().parents[3] / "fixtures"
+REPO = Path(__file__).resolve().parents[3]
+FIXTURES = REPO / "fixtures"
 JSON_FILES = sorted(
     p for p in FIXTURES.rglob("*.json") if "replays" not in p.parts
 )
@@ -64,16 +68,81 @@ def test_fuzz_canonical_json():
     run_cases("cjson.loads", 2000, case, memory=MEMORY)
 
 
-def test_the_memory_check_catches_what_a_length_field_reserves():
+@pytest.mark.parametrize("native", [False, True], ids=["tracemalloc", "native"])
+def test_the_memory_check_catches_what_a_length_field_reserves(native):
     # A reader that reserves what a 4-byte length field claims (100 MiB):
     # the harness itself must notice (found by review: it could not).
     def case(rng: Rng) -> None:
         data = (100 << 20).to_bytes(4, "little")
-        with reading(len(data)):
+        with reading(len(data), native=native):
             bytearray(int.from_bytes(data, "little"))
 
     with pytest.raises(AssertionError, match="for an input of 4 bytes"):
         run_cases("memory check", 1, case, memory=MEMORY)
+
+
+@pytest.mark.skipif(not sys.platform.startswith("linux"), reason="resident memory is measured on Linux only")
+def test_the_memory_check_sees_native_libraries():
+    # tracemalloc cannot see GEOS: a line of 4 million points, about 64 MB
+    # in GEOS, showed as under a kilobyte (found by review).
+    import numpy as np
+    import shapely
+
+    assert fuzzing.RESIDENT, "cannot reset the peak resident memory through /proc/self/clear_refs"
+    coords = np.arange(8_000_000, dtype=np.float64).reshape(-1, 2)  # made outside the reading
+
+    def case(rng: Rng) -> None:
+        with reading(4, native=True):
+            assert shapely.linestrings(coords).length > 0
+
+    with pytest.raises(AssertionError, match=r"\(peak resident memory\) for an input of 4 bytes"):
+        run_cases("native memory check", 1, case, memory=MEMORY)
+
+
+def test_native_readings_reset_and_read_the_peak(tmp_path, monkeypatch):
+    # The Linux path of reading(native=True), on made-up /proc files, so
+    # that it runs on every system.
+    status, clear_refs = tmp_path / "status", tmp_path / "clear_refs"
+
+    def peak(kib: int) -> None:
+        status.write_bytes(b"Name:\tpython\nVmHWM:\t%8d kB\nVmRSS:\t    1000 kB\n" % kib)
+
+    peak(1000)
+    monkeypatch.setattr(fuzzing, "_LINUX", True)
+    monkeypatch.setattr(fuzzing, "_STATUS", str(status))
+    monkeypatch.setattr(fuzzing, "_CLEAR_REFS", str(clear_refs))
+    monkeypatch.setattr(fuzzing, "RESIDENT", True)
+
+    def case(rng: Rng) -> None:
+        with reading(4, native=True):
+            assert clear_refs.read_bytes() == b"5"  # reset before the reader runs
+            peak(1000 + 20 * 1024)  # the reader takes 20 MiB
+
+    with pytest.raises(AssertionError, match=r"took 20971520 bytes \(peak resident memory\) for an input of 4 bytes"):
+        run_cases("native memory check", 1, case, memory=MEMORY)
+
+
+def test_a_hang_leaves_its_stacks_in_a_file(tmp_path):
+    # faulthandler wrote the stacks to the standard error, which pytest
+    # captures and drops when the process ends: CI showed only an exit
+    # code (found by review).
+    code = (
+        "import time\n"
+        "from tools.worldfmt.tests import fuzzing\n"
+        "fuzzing.HANG_S = 1.0\n"
+        "fuzzing.run_cases('hang check', 1, lambda rng: time.sleep(60))\n"
+    )
+    env = dict(os.environ, TMPDIR=str(tmp_path), TEMP=str(tmp_path), TMP=str(tmp_path))
+    child = subprocess.run([sys.executable, "-c", code], cwd=REPO, env=env, capture_output=True, timeout=60)
+    assert child.returncode == 1, child.stderr
+    (dump,) = tmp_path.glob("streetwide-fuzz-hang-hang-check-*.txt")
+    stacks = dump.read_text()
+    assert "Timeout" in stacks and "run_cases" in stacks
+
+
+def test_a_test_that_ends_removes_its_hang_file():
+    run_cases("hang file check", 2, lambda rng: None)
+    assert not os.path.exists(fuzzing.hang_file("hang file check"))
 
 
 def test_fuzz_schema_validation():
@@ -237,6 +306,32 @@ def test_store_reads_refuse_symbolic_links(tmp_path):
         pytest.skip("cannot create symbolic links here")
     with pytest.raises(ValueError, match="not a regular file"):
         Store(tmp_path).read_world()
+
+
+def test_read_file_follows_links_only_when_asked(tmp_path):
+    # For the ingest's own download cache, where links worked before (found
+    # by review). What a link leads to must still be a regular file within
+    # the limit.
+    (tmp_path / "target.json").write_bytes(b"{}")
+    (tmp_path / "big").write_bytes(b"x" * 11)
+    (tmp_path / "dir").mkdir()
+    try:
+        os.symlink(tmp_path / "target.json", tmp_path / "link.json")
+        os.symlink(tmp_path / "big", tmp_path / "big-link")
+        os.symlink(tmp_path / "dir", tmp_path / "dir-link", target_is_directory=True)
+    except (OSError, NotImplementedError):
+        pytest.skip("cannot create symbolic links here")
+    with pytest.raises(ValueError, match="not a regular file"):
+        read_file(tmp_path / "link.json")
+    assert read_file(tmp_path / "link.json", follow_links=True) == b"{}"
+    with pytest.raises(ValueError, match="larger than 10 bytes"):
+        read_file(tmp_path / "big-link", 10, follow_links=True)
+    with pytest.raises(ValueError, match="not a regular file"):
+        read_file(tmp_path / "dir-link", follow_links=True)
+    if os.path.exists("/dev/zero"):
+        os.symlink("/dev/zero", tmp_path / "zero-link")
+        with pytest.raises(ValueError, match="not a regular file"):
+            read_file(tmp_path / "zero-link", follow_links=True)
 
 
 @pytest.mark.skipif(not hasattr(os, "mkfifo"), reason="needs FIFOs")

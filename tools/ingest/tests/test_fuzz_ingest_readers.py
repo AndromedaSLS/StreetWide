@@ -6,8 +6,10 @@ the steps that use it. Regression tests replay the inputs that used to."""
 
 from __future__ import annotations
 
+import hashlib
 import io
 import json
+import os
 import struct
 import time
 import tracemalloc
@@ -121,7 +123,7 @@ def test_fuzz_overpass_answers():
     def case(rng: Rng) -> None:
         data = mutate_json_bytes(rng, ANSWER, [ANSWER], [ANSWER_BYTES]) if rng.chance(85) else mutate_bytes(rng, ANSWER_BYTES, [ANSWER_BYTES])
         try:
-            with reading(len(data)):
+            with reading(len(data), native=True):  # GEOS and PROJ
                 use_osm(parse_answer(data), {})
         except (OverpassError, OsmError):
             pass
@@ -173,7 +175,7 @@ def test_fuzz_overpass_water_answers():
         else:
             data = mutate_bytes(rng, WATER_ANSWER_BYTES, [WATER_ANSWER_BYTES])
         try:
-            with reading(len(data)):
+            with reading(len(data), native=True):  # GEOS and PROJ
                 use_water(parse_answer(data))
         except (OverpassError, OsmError, WaterError):
             pass
@@ -352,9 +354,13 @@ def mutate_xml(rng: Rng, text: str) -> str:
 
 
 def _entry(name: str) -> zipfile.ZipInfo:
-    # A fixed time: writestr(name, ...) stamps the current time, and every
-    # case must depend on the seed, the test and the case number alone.
-    return zipfile.ZipInfo(name, date_time=(1980, 1, 1, 0, 0, 0))
+    # Every case must depend on the seed, the test and the case number
+    # alone, on every system: writestr(name, ...) stamps the current time,
+    # and a ZipInfo records the system it is made on (0 on Windows, 3 on
+    # Linux and macOS) unless told.
+    info = zipfile.ZipInfo(name, date_time=(1980, 1, 1, 0, 0, 0))
+    info.create_system = 3
+    return info
 
 
 def zipped(xml: bytes, rng: Rng, names=("sheet.gml",)) -> bytes:
@@ -407,7 +413,7 @@ def test_fuzz_derived_cache(tmp_path):
         data = mutate_json_bytes(rng, doc, [doc], [original])
         cached.write_bytes(data)
         try:
-            with reading(len(data)):
+            with reading(len(data), native=True):  # GEOS
                 for b in load_buildings(sheet, ENVELOPE, cache, {}):
                     buildings.swiss_footprint(b)
         except CityGmlError:
@@ -829,6 +835,46 @@ def test_elements_outside_buildings_are_not_kept():
     assert peak < 16 << 20, peak
 
 
+def test_zips_are_the_same_on_every_system():
+    # A ZipInfo recorded the system it was made on, so Windows fuzzed other
+    # bytes than CI (found by review).
+    for data in SHEETS:
+        (info,) = zipfile.ZipFile(io.BytesIO(data)).infolist()
+        assert (info.create_system, info.date_time) == (3, (1980, 1, 1, 0, 0, 0))
+
+
+def test_a_building_of_too_much_xml_is_skipped_and_counted(tmp_path):
+    # 128 MiB of XML per building let one building take about 3 GB of
+    # parsed elements (found by review); the limit is now 16 MiB. Here the
+    # building is one 17 MiB text, quick to parse; the sheet goes on.
+    big = '<core:cityObjectMember><bldg:Building gml:id="ID_BIG"><x>' + "a" * (17 << 20) + "</x></bldg:Building></core:cityObjectMember>"
+    xml = HEADER + box_building("ID_A", 2683200, 1247200) + big + box_building("ID_B", 2683300, 1247300) + "</core:CityModel>"
+    stats = {}
+    assert [b.gml_id for b in read_buildings(_sheet(tmp_path, xml), ENVELOPE, stats)] == ["ID_A", "ID_B"]
+    assert stats == {"buildings in sheet": 3, "buildings in sheet too large to read": 1}
+
+
+def test_a_building_found_too_large_is_dropped_as_it_is_read(monkeypatch):
+    # The rest of it, a building nested in it included, must not pile up:
+    # these 131,072 tiny elements take about 13 MB when they are kept.
+    monkeypatch.setattr(citygml, "_MAX_BUILDING_BYTES", 64 << 10)
+    big = (
+        '<core:cityObjectMember><bldg:Building gml:id="ID_BIG"><bldg:boundedBy>' + "<a/>" * (1 << 17)
+        + '<bldg:Building gml:id="ID_IN"/></bldg:boundedBy></bldg:Building></core:cityObjectMember>'
+    )
+    xml = (HEADER + big + box_building("ID_A", 2683200, 1247200) + "</core:CityModel>").encode()
+    seen = []
+    tracemalloc.start()
+    try:
+        for el in _buildings(io.BytesIO(xml), "test"):
+            seen.append(None if el is None else el.get(f"{citygml.GML}id"))
+        peak = tracemalloc.get_traced_memory()[1]
+    finally:
+        tracemalloc.stop()
+    assert seen == [None, "ID_A"]
+    assert peak < 8 << 20, peak
+
+
 @pytest.mark.parametrize(
     "cached",
     [
@@ -846,6 +892,89 @@ def test_malformed_derived_cache(tmp_path, cached):
     path.write_bytes(cached)
     with pytest.raises(CityGmlError, match="delete it and retry"):
         load_buildings(sheet, ENVELOPE, tmp_path / "cache", {})
+
+
+def test_the_derived_cache_is_written_through_a_part_file_of_its_own(tmp_path, monkeypatch):
+    # Two ingests extracting the same sheet at once shared "<name>.part",
+    # and one of them crashed after minutes of parsing (found by review).
+    sheet = tmp_path / "sheet.citygml.zip"
+    sheet.write_bytes(SHEETS[0])
+    replaced = []
+    real_replace = os.replace
+
+    def replace(src, dst):
+        replaced.append((Path(src), Path(dst)))
+        real_replace(src, dst)
+
+    monkeypatch.setattr(os, "replace", replace)
+    load_buildings(sheet, ENVELOPE, tmp_path / "cache", {})
+    ((part, path),) = replaced
+    assert part == path.with_name(f"{path.name}.{os.getpid()}.part")
+    assert [p.name for p in path.parent.iterdir()] == [path.name]
+
+
+def test_a_derived_cache_another_process_has_open_is_kept(tmp_path, monkeypatch):
+    # Windows refuses to replace a file another process has open: one that
+    # has just written the same extraction. Without that file, it is an error.
+    sheet = tmp_path / "sheet.citygml.zip"
+    sheet.write_bytes(SHEETS[0])
+    cache = tmp_path / "cache"
+
+    def replace_in_use(src, dst):
+        raise PermissionError(13, "in use")
+
+    monkeypatch.setattr(os, "replace", replace_in_use)
+    with pytest.raises(PermissionError):
+        load_buildings(sheet, ENVELOPE, cache, {})
+    assert list((cache / "derived").iterdir()) == []
+
+    def written_meanwhile(src, dst):
+        Path(dst).write_bytes(Path(src).read_bytes())
+        raise PermissionError(13, "in use")
+
+    monkeypatch.setattr(os, "replace", written_meanwhile)
+    assert [b.gml_id for b in load_buildings(sheet, ENVELOPE, cache, {})] == ["ID_A", "ID_B"]
+    monkeypatch.undo()
+    assert [p.suffix for p in (cache / "derived").iterdir()] == [".json"]
+    assert [b.gml_id for b in load_buildings(sheet, ENVELOPE, cache, {})] == ["ID_A", "ID_B"]
+
+
+def test_the_download_cache_may_hold_links(tmp_path, monkeypatch):
+    # The ingest reads its own cache through store.read_file, which refuses
+    # symbolic links, as a world store must; a cache shared or managed with
+    # links (git-annex, DVC) worked before (found by review).
+    cache, elsewhere = tmp_path / "cache", tmp_path / "elsewhere"
+    elsewhere.mkdir()
+
+    def link(path: Path) -> None:
+        """Moves the cached file at `path` elsewhere and links it back."""
+        target = elsewhere / path.name
+        path.replace(target)
+        os.symlink(target, path)
+
+    bbox = BBox(8.54, 47.37, 8.55, 47.38)
+    osm = cache / "osm" / f"overpass-{hashlib.sha256(overpass.query(bbox).encode()).hexdigest()[:16]}.json"
+    osm.parent.mkdir(parents=True)
+    osm.write_bytes(ANSWER_BYTES)
+    try:
+        link(osm)
+    except (OSError, NotImplementedError):
+        pytest.skip("cannot create symbolic links here")
+    assert overpass.fetch(bbox, cache, offline=True, refresh=False) == ANSWER
+
+    pages = iter([json.dumps(dict(PAGE, links=[])).encode()])
+    monkeypatch.setattr(stac, "fetch_bytes", lambda url, max_bytes: next(pages))
+    features = stac._search(stac.SWISSALTI3D, BBOX, cache, offline=False, refresh=True)
+    (search,) = (cache / "stac").rglob("search-*.json")
+    link(search)
+    assert stac._search(stac.SWISSALTI3D, BBOX, cache, offline=True, refresh=False) == features
+
+    sheet = tmp_path / "sheet.citygml.zip"
+    sheet.write_bytes(SHEETS[0])
+    load_buildings(sheet, ENVELOPE, cache, {})
+    (derived,) = (cache / "derived").iterdir()
+    link(derived)
+    assert [b.gml_id for b in load_buildings(sheet, ENVELOPE, cache, {})] == ["ID_A", "ID_B"]
 
 
 def test_overpass_cache_refuses_damaged_files(tmp_path):

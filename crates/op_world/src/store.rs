@@ -35,24 +35,55 @@ pub const MAX_FILE_BYTES: u64 = MAX_ASSET_BYTES;
 /// are refused before anything is read: the path must name a regular file
 /// itself, not a link to one. The error does not name the path; callers
 /// say what was read.
+///
+/// The path is checked, then opened, and the open file is checked again, so
+/// a device or a larger file put in its place in between is refused too.
+/// Two such swaps get through: a link to a regular file put there in
+/// between is followed, and a FIFO makes the open itself block. Only
+/// someone who writes the store while it is read can do that, and they
+/// control its content anyway.
 pub fn read_file(path: &Path, limit: u64) -> io::Result<Vec<u8>> {
-    let refuse = |why: String| Err(io::Error::new(io::ErrorKind::InvalidData, why));
-    let meta = fs::symlink_metadata(path)?;
-    if !meta.is_file() {
-        return refuse("not a regular file".into());
-    }
-    if meta.len() > limit {
-        return refuse(format!("larger than {limit} bytes"));
-    }
+    read_file_opened_with(path, limit, |p| fs::File::open(p))
+}
+
+/// [`read_file`], opening the checked path with `open` (tests swap the
+/// file in between).
+fn read_file_opened_with(
+    path: &Path,
+    limit: u64,
+    open: impl FnOnce(&Path) -> io::Result<fs::File>,
+) -> io::Result<Vec<u8>> {
+    check_file(&fs::symlink_metadata(path)?, limit)?;
+    let file = open(path)?;
+    check_file(&file.metadata()?, limit)?;
     let mut bytes = Vec::new();
-    // `take` stops a file that grew after the check above.
-    fs::File::open(path)?
-        .take(limit.saturating_add(1))
-        .read_to_end(&mut bytes)?;
+    // `take` stops a file that grew after the checks above.
+    file.take(limit.saturating_add(1)).read_to_end(&mut bytes)?;
     if bytes.len() as u64 > limit {
-        return refuse(format!("larger than {limit} bytes"));
+        return Err(refused(format!("larger than {limit} bytes")));
     }
     Ok(bytes)
+}
+
+/// What [`read_file`] takes: a regular file of at most `limit` bytes.
+fn check_file(meta: &fs::Metadata, limit: u64) -> io::Result<()> {
+    if !meta.is_file() {
+        return Err(refused("not a regular file".into()));
+    }
+    if meta.len() > limit {
+        return Err(refused(format!("larger than {limit} bytes")));
+    }
+    Ok(())
+}
+
+fn refused(why: String) -> io::Error {
+    io::Error::new(io::ErrorKind::InvalidData, why)
+}
+
+/// Whether `path` names a regular file itself, as [`read_file`] requires. A
+/// link to one does not count, like a directory or a FIFO.
+fn is_regular_file(path: &Path) -> bool {
+    fs::symlink_metadata(path).is_ok_and(|m| m.is_file())
 }
 
 /// Kind of object, which decides its file extension.
@@ -112,20 +143,23 @@ impl Store {
         object_path_in(&self.root, id, kind)
     }
 
-    /// Whether the object exists in the root or a fallback.
+    /// Whether the object exists, as a regular file, in the root or a
+    /// fallback.
     pub fn has_object(&self, id: &ContentId, kind: ObjectKind) -> bool {
         std::iter::once(&self.root)
             .chain(&self.fallbacks)
-            .any(|dir| object_path_in(dir, id, kind).is_file())
+            .any(|dir| is_regular_file(&object_path_in(dir, id, kind)))
     }
 
-    /// Reads an object (from the root, else the first fallback that has it)
-    /// and verifies that its bytes hash to `id`.
+    /// Reads an object (from the root, else the first fallback that has it
+    /// as a regular file) and verifies that its bytes hash to `id`. A link,
+    /// a directory or a FIFO in one layer does not hide the object in the
+    /// next: objects are named by their hash, so any copy will do.
     pub fn read_object(&self, id: &ContentId, kind: ObjectKind) -> Result<Vec<u8>> {
         let path = std::iter::once(&self.root)
             .chain(&self.fallbacks)
             .map(|dir| object_path_in(dir, id, kind))
-            .find(|p| p.is_file())
+            .find(|p| is_regular_file(p))
             .unwrap_or_else(|| self.object_path(id, kind));
         let bytes =
             read_file(&path, MAX_FILE_BYTES).map_err(|e| Error::Io(format!("object {id}: {e}")))?;
@@ -182,4 +216,30 @@ fn write_atomically(path: &Path, bytes: &[u8]) -> Result<()> {
     fs::write(&tmp, bytes)?;
     fs::rename(&tmp, path)?;
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Found by review: the path was checked, then opened again, so a
+    /// device put in its place in between was read as if it were the file.
+    /// The open file is now checked too. Here the open finds the null
+    /// device, which reads as an empty file.
+    #[test]
+    fn a_device_put_in_place_after_the_check_is_refused() {
+        let dir = std::env::temp_dir().join(format!("op_world-store-swap-{}", std::process::id()));
+        fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("file");
+        fs::write(&path, b"12345").unwrap();
+        let null = if cfg!(windows) { "NUL" } else { "/dev/null" };
+        let err = read_file_opened_with(&path, 10, |_| fs::File::open(null))
+            .expect_err("the null device is not a regular file");
+        if cfg!(unix) {
+            // Windows gives no metadata for it at all.
+            assert_eq!(err.to_string(), "not a regular file");
+        }
+        assert_eq!(read_file(&path, 10).unwrap(), b"12345");
+        fs::remove_dir_all(&dir).ok();
+    }
 }

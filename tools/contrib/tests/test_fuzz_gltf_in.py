@@ -89,7 +89,7 @@ def editor_models() -> list[bytes]:
         "buffers": [{"byteLength": 124}],
     }
     two_bin = quad + bytes([0, 1, 2, 0, 2, 3]) + b"\0\0" + struct.pack("<9h", 0, 0, 0, 100, 0, 0, 0, 100, 0) + b"\0\0"
-    # No scene at all: every node is drawn as a root.
+    # No scene at all: every node that is nobody's child is drawn.
     loose = {
         "asset": {"version": "2.0"}, "nodes": [{"mesh": 0}, {"mesh": 0, "translation": [0, 3, 0]}],
         "meshes": [{"primitives": [{"attributes": {"POSITION": 0}}]}],
@@ -376,6 +376,50 @@ def test_instancing_is_bounded():
     doc = json.loads(b"{" + _BASE + b"," + _ACCESSOR + b"}")
     doc["nodes"] = [{"mesh": 0}] * 200_000
     with pytest.raises(GltfError, match="too large"):
+        read(glb(doc, TRIANGLE))
+
+
+def _facade_with_balcony(**fields) -> bytes:
+    """Node 0 draws a triangle 10 m east and holds node 1, which draws it
+    again 3 m above its parent."""
+    doc = json.loads(b"{" + _BASE + b"," + _ACCESSOR + b"}")
+    doc["nodes"] = [{"mesh": 0, "children": [1], "translation": [10, 0, 0]}, {"mesh": 0, "translation": [0, 3, 0]}]
+    return glb(dict(doc, **fields), TRIANGLE)
+
+
+def test_a_file_without_scenes_draws_each_node_once():
+    # Every node was taken as a root, so the balcony was drawn twice: under
+    # its parent, and alone at its own transform (found by review).
+    (part,) = read(_facade_with_balcony())
+    assert sorted(map(tuple, part.triangles[:, 0])) == [(10.0, 0.0, 0.0), (10.0, 3.0, 0.0)]
+
+
+def test_a_scene_cannot_list_a_child_node():
+    # A node listed in the scene and as a child was drawn twice; the glTF
+    # validator reports it (SCENE_NON_ROOT_NODE).
+    with pytest.raises(GltfError, match="scene node 1 is the child of another node"):
+        read(_facade_with_balcony(scene=0, scenes=[{"nodes": [0, 1]}]))
+    (part,) = read(_facade_with_balcony(scene=0, scenes=[{"nodes": [0]}]))
+    assert len(part.triangles) == 2
+
+
+@pytest.mark.parametrize(
+    "nodes,scenes",
+    [
+        ([{"mesh": 0, "children": [1]}, {"children": [0]}], None),  # no root: nothing was drawn
+        ([{"mesh": 0, "children": [0]}], None),
+        ([{"mesh": 0}, {"children": [2]}, {"mesh": 0, "children": [1]}], [{"nodes": [0]}]),  # outside the scene
+    ],
+    ids=["two-nodes", "own-child", "beside-the-scene"],
+)
+def test_nodes_cannot_form_a_loop(nodes, scenes):
+    # glTF nodes form trees. Without a scene, only roots are drawn now, so
+    # a loop would have been skipped silently (it used to hit the depth limit).
+    doc = json.loads(b"{" + _BASE + b"," + _ACCESSOR + b"}")
+    doc["nodes"] = nodes
+    if scenes is not None:
+        doc["scenes"] = scenes
+    with pytest.raises(GltfError, match="loop"):
         read(glb(doc, TRIANGLE))
 
 

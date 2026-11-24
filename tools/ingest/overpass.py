@@ -71,7 +71,7 @@ def _key(q: str) -> str:
 def _fetch(q: str, path: Path, what: str, offline: bool, refresh: bool) -> dict:
     if path.exists() and not refresh:
         try:
-            return parse_answer(read_file(path, _MAX_BYTES))
+            return parse_answer(read_file(path, _MAX_BYTES, follow_links=True))
         except ValueError as e:  # read_file refusing the file
             raise OverpassError(f"cached {path}: {e}") from e
         except OverpassError as e:

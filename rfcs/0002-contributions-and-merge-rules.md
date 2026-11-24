@@ -166,7 +166,7 @@ A change set **passes the gate** (`passed: true`) only if every outcome is
 | G5 | Provenance | Every new manifest lists its sources: a source entry `StreetWide contributions` whose `source_ids` contain the author's handle, plus every upstream dataset used. Its `generator` names the tool and version (including AI tools, see section 8). Its attribution includes `The StreetWide contributors` and every upstream credit. |
 | G6 | Privacy | `fictional: true` for interiors and furniture (already in RFC 0001). Facades show only what is visible from public ground, and never: people, vehicle number plates, name plates on doors, bells or letterboxes, or the inside of buildings. In format 0.1 meshes carry no textures, so for every added or replaced facade the outcome is `review`, backed by the automatic placement check (G8). |
 | G7 | Budgets | Per asset, by layer: facade ≤ 50,000 triangles and ≤ 4 MiB; shell ≤ 100,000 triangles. Per tile: ≤ 1,000,000 rendered triangles and ≤ 300,000 collider triangles after the change. |
-| G8 | Placement | **Facades:** every vertex is within 0.5 m of the building's shell in the candidate world (same feature id and tile) and at most 10 mm above the shell's highest point. Heights are compared in exact millimetres. A facade without a shell fails. A facade over its G7 budget, or whose shell is over the shell budget (meshes G7 refuses), is `not_run`, and a facade that would take more than 20,000,000 steps to measure (grid steps and vertex-to-shell distances; the sample takes about 3,600) fails as too complex to check, so that no mesh can keep the gate busy. **Shells:** a replaced shell keeps its footprint (horizontal bounds) within 1 m of the previous version's; a larger move, or a new building, is `review`. **Terrain:** a replaced terrain mesh keeps every vertex on the open edges of the previous mesh at exactly the same position, so neighbouring tiles still meet; new terrain is `review`. |
+| G8 | Placement | **Facades:** every vertex is within 0.5 m of the building's shell in the candidate world (same feature id and tile) and at most 10 mm above the shell's highest point. Heights are compared in exact millimetres. A facade without a shell fails. G8 does not measure what G7 refuses: a facade over its G7 budget, or on a shell that the same change set proposes over the shell budget, is `not_run`. Any other shell, such as a canonical one, is measured. Measuring is bounded, so that no mesh can keep the gate busy: a facade that would take more than 20,000,000 grid steps (each lists at most one shell triangle near the facade, which bounds the memory) or more than 100,000,000 vertex-to-triangle distances fails as too complex to check. The sample takes 2,627 grid steps and 455 distances; a facade at the G7 maximum on a roof of 76,800 triangles, about 440,000 and 1,100,000. **Shells:** a replaced shell keeps its footprint (horizontal bounds) within 1 m of the previous version's; a larger move, or a new building, is `review`. **Terrain:** a replaced terrain mesh keeps every vertex on the open edges of the previous mesh at exactly the same position, so neighbouring tiles still meet; new terrain is `review`. |
 | G9 | Walkability | Public space must stay walkable. On the transport ribbons within 2 m of the changed assets, the gate places the player capsule (ADR-0004) at probe points 1 to 2 m apart. A point is blocked if the capsule overlaps a collider, or if it is enclosed (rays in the four horizontal directions and up all hit within 30 m). A probe point that was free in the base world must still be free in the candidate world. This applies to collider changes only; facades are `none` in 0.1. Implemented in `op_replay` (ADR-0009). |
 | G10 | Simulation | Every recorded replay of the CI replay suite whose world is the base world, and whose path crosses an affected tile, is re-recorded on the candidate world. It must still reach its recorded waypoints. Hash equality is not expected: the world changed. |
 
@@ -410,9 +410,14 @@ To be built after acceptance:
 ## Unresolved questions
 
 1. **Hosting** of the canonical object store and the world log (an ADR).
-2. **Thresholds:** the budgets and tolerances in G7, G8 and the metric
-   tolerances. They will be tuned on real contributions; until then, the
-   numbers above.
+2. **Thresholds:** the budgets and tolerances in G7 and G8 (with G8's
+   step limits) and the metric tolerances. They will be tuned on real
+   contributions; until then, the numbers above. G8's step limits apply
+   per facade, about 2 s at most each, so a crafted change set of 50
+   facades can keep the gate busy for a minute or two. A step budget
+   shared by the whole change set would bound that, but would make one
+   facade's outcome depend on the others in its change set; until the
+   gate runs as a service, the per-facade limits are enough.
 3. **swissSURFACE3D** as the reference for shell and terrain metrics needs
    an ingest ADR and a licence entry. Abroad, other references will be
    needed.
@@ -426,3 +431,15 @@ To be built after acceptance:
 7. **Reviewers:** when the project moves from one maintainer review to
    two-reviewer approval, and how reviewer rights per layer are granted
    (GOVERNANCE.md).
+8. **Budgets for baseline data:** G7 checks only what a change set
+   proposes. A baseline shell has no triangle budget, and G8 measures
+   facades against it within its step limits. The largest shell in the
+   Zurich district has 3,810 triangles, far below the shell budget of
+   100,000. Options:
+   - leave it: the step limits refuse a facade whose shell is too complex
+     to measure;
+   - make the ingest refuse or simplify shells over the shell budget, so
+     that every shell a facade meets is within it, at the cost of an
+     ingest rule that drops or changes open data.
+
+   Recommendation: leave it until real data comes near the budget.

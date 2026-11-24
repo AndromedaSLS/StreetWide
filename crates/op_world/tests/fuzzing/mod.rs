@@ -27,18 +27,22 @@
 //! - `STREETWIDE_FUZZ_TRACE=1`: print every iteration number before it
 //!   runs, to find an input that aborts the process (a stack overflow
 //!   cannot be caught).
-//! - `STREETWIDE_FUZZ_ISOLATE`: `1` runs each target in a child process of
-//!   its own, `0` in the test process. The default is a child process
-//!   where the memory check below is available.
+//! - `STREETWIDE_FUZZ_ISOLATE`: `1`, `true` or `yes` runs each target in a
+//!   child process of its own; `0`, `false` or `no` in the test process,
+//!   without the memory check below. Any other value is an error. The
+//!   default is a child process where the memory check is available.
 //!
 //! Memory: where the kernel reports the process's peak size (Linux), each
 //! target runs in a child process of its own, so that no other test shares
 //! its address space, and every input that raises the peak may take at most
 //! the target's allowance beyond what the process held before it (by
-//! default 64 bytes per input byte plus 16 MiB). That catches a reader
-//! reserving memory for what a length field claims. Rust cannot count
-//! allocations here instead: a counting global allocator needs `unsafe`,
-//! which the workspace forbids.
+//! default 160 bytes per input byte plus 16 MiB). That catches a reader
+//! reserving memory for what a length field claims. The check runs only in
+//! such a child process (or for a target meant to run in the test process,
+//! as this engine's own tests are): in the test process, the threads and
+//! allocator arenas of other tests move the process's size. Rust cannot
+//! count allocations here instead: a counting global allocator needs
+//! `unsafe`, which the workspace forbids.
 //!
 //! On a panic the input is shrunk (keeping the same panic location), part by
 //! part for targets whose inputs carry lengths, printed as a Rust
@@ -189,13 +193,17 @@ pub struct Target {
 
 impl Target {
     /// A target that runs `default` iterations unless `STREETWIDE_FUZZ_ITERS`
-    /// scales them (see [`iterations`]). One input may take 64 bytes per
-    /// input byte plus 16 MiB.
+    /// scales them (see [`iterations`]). One input may take 160 bytes per
+    /// input byte plus 16 MiB: every reader parses JSON somewhere, and
+    /// serde_json takes up to about 112 bytes per input byte for documents
+    /// of small nested objects (a 632-byte map node for each `{"a":`, six
+    /// bytes of input). Found by review: with 64 bytes per input byte, a
+    /// long campaign of the documents target reached 99% of its allowance.
     pub fn new(name: &'static str, default: u64) -> Self {
         Target {
             name,
             iters: iterations(default),
-            per_byte: 64,
+            per_byte: 160,
             fixed: 16 << 20,
             parts: None,
             in_process: false,
@@ -274,25 +282,63 @@ fn excess_since(before: Option<(u64, u64)>) -> Option<u64> {
 
 /// Set in the child process that runs one fuzz test alone.
 const CHILD: &str = "STREETWIDE_FUZZ_CHILD";
+const ISOLATE: &str = "STREETWIDE_FUZZ_ISOLATE";
+
+/// Whether this is the child process that runs one fuzz test alone.
+pub fn in_child() -> bool {
+    std::env::var_os(CHILD).is_some()
+}
+
+/// A value of `STREETWIDE_FUZZ_ISOLATE`: `Some(true)` for child processes,
+/// `Some(false)` for the test process, `None` if it says neither.
+pub fn parse_isolate(raw: &str) -> Option<bool> {
+    match raw {
+        "1" | "true" | "yes" => Some(true),
+        "0" | "false" | "no" => Some(false),
+        _ => None,
+    }
+}
+
+/// Whether targets run in child processes: as `STREETWIDE_FUZZ_ISOLATE`
+/// says, else where the memory check is available.
+pub fn isolates() -> bool {
+    let Some(raw) = std::env::var_os(ISOLATE) else {
+        return address_space().is_some();
+    };
+    raw.to_str().and_then(parse_isolate).unwrap_or_else(|| {
+        panic!("{ISOLATE}={raw:?}: use 1, true or yes (child processes), or 0, false or no")
+    })
+}
+
+/// Whether a run checks the memory its inputs take: only where the kernel
+/// reports the process's size (`available`), and only in a process where
+/// nothing else runs: the child process of a target, or the test process
+/// for a target meant to run there (this engine's own tests).
+pub fn checks_memory(available: bool, child: bool, in_process: bool) -> bool {
+    available && (child || in_process)
+}
+
+/// The calling test's name, if it should run again in a child process:
+/// targets run in child processes, and libtest runs each test on a thread
+/// named after it.
+pub fn test_to_isolate() -> Option<String> {
+    let current = std::thread::current();
+    let name = current.name().filter(|n| *n != "main")?;
+    isolates().then(|| name.to_owned())
+}
 
 /// Runs the calling test again, alone, in a child process (see the module
 /// documentation), and checks that it passed. `false` if the target should
 /// run in this process instead.
 fn ran_in_child() -> bool {
-    if std::env::var_os(CHILD).is_some() {
+    if in_child() {
         return false;
     }
-    let isolate = match std::env::var("STREETWIDE_FUZZ_ISOLATE") {
-        Ok(v) => v.trim() != "0",
-        Err(_) => address_space().is_some(),
-    };
-    // libtest runs each test on a thread named after it.
-    let current = std::thread::current();
-    let Some(test) = current.name().filter(|n| isolate && *n != "main") else {
+    let Some(test) = test_to_isolate() else {
         return false;
     };
     let output = Command::new(std::env::current_exe().expect("the test binary"))
-        .args([test, "--exact", "--test-threads=1", "--nocapture"])
+        .args([test.as_str(), "--exact", "--test-threads=1", "--no-capture"])
         .env(CHILD, "1")
         // glibc: one heap that grows with brk, and every block of 128 KiB
         // or more mapped on its own (no adaptive threshold), so that the
@@ -371,7 +417,15 @@ where
     let seed = seed();
     let hang_secs = env_u64("STREETWIDE_FUZZ_HANG_SECS").unwrap_or(120).max(1);
     let trace = std::env::var_os("STREETWIDE_FUZZ_TRACE").is_some();
-    let measured = address_space().is_some();
+    let available = address_space().is_some();
+    let measured = checks_memory(available, in_child(), t.in_process);
+    if available && !measured {
+        println!(
+            "fuzz {}: memory not checked: the target runs in the test process, \
+             which other tests share ({ISOLATE}=0)",
+            t.name
+        );
+    }
     // The iteration running, and a heartbeat that shrinking a failing
     // input also advances (it calls the reader many times).
     let (progress, beats) = (AtomicU64::new(0), AtomicU64::new(0));
@@ -396,7 +450,7 @@ where
                             t.name
                         );
                     };
-                    let before = address_space();
+                    let before = if measured { address_space() } else { None };
                     if panic::catch_unwind(AssertUnwindSafe(|| check(&input))).is_err() {
                         fail(t, seed, i, &input, check, beats_ref);
                     }
@@ -1313,6 +1367,7 @@ const WORDS: &[&str] = &[
     "streetwide.replay",
     "0.1.0",
     "0.1.1",
+    "0.1.2",
     "0.2.0",
     "facade",
     "furniture",
