@@ -43,7 +43,7 @@
       "pattern": "^[a-z][a-z0-9_-]*:[!-~]+$"
     },
     "layer": {
-      "enum": ["shell", "facade", "interior", "furniture", "interactivity", "terrain", "transport"]
+      "enum": ["shell", "facade", "interior", "furniture", "interactivity", "terrain", "transport", "water"]
     },
     "collider": {
       "enum": ["trimesh", "none"]

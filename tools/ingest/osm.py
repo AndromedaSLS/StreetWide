@@ -100,6 +100,39 @@ def parse(doc: dict, stats: dict[str, int]) -> tuple[list[Way], list[Footprint]]
     return ways, footprints
 
 
+class RingError(ValueError):
+    """The member ways of a multipolygon do not join into closed rings."""
+
+
+def join_rings(lines: list[list[tuple[float, float]]]) -> list[list[tuple[float, float]]]:
+    """Joins ways that meet end to end into closed rings, as OSM multipolygon
+    relations are built. Points are compared exactly, so pass them as the
+    response gave them (lon, lat). Every ring comes back closed. Unlike the
+    building footprints above, which `polygonize` and so drop open chains,
+    this raises RingError if a chain of ways does not close."""
+    rings = [line for line in lines if len(line) >= 2 and line[0] == line[-1]]
+    chains = [line for line in lines if len(line) >= 2 and line[0] != line[-1]]
+    ends: dict[tuple[float, float], list[int]] = {}
+    for i, line in enumerate(chains):
+        ends.setdefault(line[0], []).append(i)
+        ends.setdefault(line[-1], []).append(i)
+    used = [False] * len(chains)
+    for start in range(len(chains)):
+        if used[start]:
+            continue
+        used[start] = True
+        ring = list(chains[start])
+        while ring[0] != ring[-1]:
+            nxt = next((i for i in ends[ring[-1]] if not used[i]), None)
+            if nxt is None:
+                raise RingError(f"a chain of ways from {ring[0]} to {ring[-1]} (lon, lat) does not close")
+            used[nxt] = True
+            line = chains[nxt]
+            ring.extend(line[1:] if line[0] == ring[-1] else line[-2::-1])
+        rings.append(ring)
+    return rings
+
+
 def parse_length_m(value: str | None) -> float | None:
     """Parses OSM lengths such as "3", "3.5", "3 m", "3,5"; None if unclear."""
     if not value:

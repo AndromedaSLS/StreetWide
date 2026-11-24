@@ -27,3 +27,4 @@ instead.
 | [0011](0011-stop-corner-oscillation.md) | Stop the player oscillating in concave corners | Proposed |
 | [0012](0012-client-realism-from-procedural-detail.md) | Client realism from procedural detail and physically based light | Proposed |
 | [0013](0013-travel-by-starting-new-sessions.md) | Travel in the client by starting new sessions | Proposed |
+| [0014](0014-water-areas-from-openstreetmap.md) | Water areas from OpenStreetMap, placed as level surfaces | Proposed |

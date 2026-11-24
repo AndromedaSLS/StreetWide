@@ -5,6 +5,7 @@
 mod common;
 
 use op_world::Store;
+use op_world::glb::{self, Material};
 use op_world::manifest::{AssetManifest, Collider, Layer};
 use op_world::store::ObjectKind;
 use op_world::tile::TileIndex;
@@ -51,6 +52,7 @@ fn ingest_fixture_has_every_ingested_layer_and_licence() {
     ));
     assert!(has(Layer::Transport, Collider::None, "tile:", osm));
     assert!(has(Layer::Transport, Collider::Trimesh, "osm:way:", osm));
+    assert!(has(Layer::Water, Collider::None, "tile:", osm));
 
     for a in &index.assets {
         let m = AssetManifest::from_bytes(
@@ -70,4 +72,71 @@ fn ingest_fixture_has_every_ingested_layer_and_licence() {
             a.feature_id
         );
     }
+}
+
+/// The Limmat (RFC 0003, ADR-0014): the tile's one water asset, visual
+/// only, from the OpenStreetMap relation and placed by swissALTI3D heights.
+#[test]
+fn ingest_fixture_has_the_limmat_as_one_level_water_asset() {
+    let store = store();
+    let (_, world) = store.read_world().expect("world.json");
+    let tile = &world.tiles[0];
+    let index = TileIndex::from_bytes(&store.read_object(&tile.tile_id, ObjectKind::Json).unwrap())
+        .unwrap();
+    let water: Vec<_> = index
+        .assets
+        .iter()
+        .filter(|a| a.layer == Layer::Water)
+        .collect();
+    let [entry] = water[..] else {
+        panic!("one water asset per tile: {water:#?}")
+    };
+    assert_eq!(entry.feature_id, format!("tile:{}", tile.tile));
+    assert_eq!(entry.collider, Collider::None);
+    assert_eq!(entry.license, "ODbL-1.0 AND LicenseRef-swisstopo-OGD");
+    // Water sorts after every other layer, so it comes last.
+    assert_eq!(index.assets.last(), Some(entry));
+
+    let m = AssetManifest::from_bytes(
+        &store
+            .read_object(&entry.manifest_id, ObjectKind::Json)
+            .unwrap(),
+    )
+    .unwrap();
+    assert_eq!(
+        (m.layer, m.tile, m.physics.collider),
+        (Layer::Water, tile.tile, Collider::None)
+    );
+    let datasets: Vec<&str> = m
+        .provenance
+        .sources
+        .iter()
+        .map(|s| s.dataset.as_str())
+        .collect();
+    assert_eq!(datasets, ["OpenStreetMap", "swissALTI3D"]);
+    assert!(
+        m.provenance.sources[0]
+            .source_ids
+            .contains(&"relation/1598599".to_string()),
+        "the Limmat's relation: {:?}",
+        m.provenance.sources[0]
+    );
+
+    // Flat water facing up. One level per water body and terrain tile; in
+    // the region frame the Earth's curvature bends it by a few centimetres.
+    let mesh = glb::read(
+        &store
+            .read_object(&entry.content_id, ObjectKind::Glb)
+            .unwrap(),
+    )
+    .unwrap();
+    let prims: Vec<_> = mesh.nodes.iter().flat_map(|n| &n.primitives).collect();
+    assert!(!prims.is_empty());
+    for p in prims {
+        assert_eq!(p.material, Material::Water);
+        assert!(!p.indices.is_empty());
+        assert!(p.normals.iter().all(|n| *n == [0.0, 1.0, 0.0]));
+    }
+    let b = entry.bounds_mm;
+    assert!(b.max[1] - b.min[1] < 100, "{b:?}");
 }

@@ -27,6 +27,7 @@ mod session;
 mod sky;
 mod texgen;
 mod travel;
+mod water;
 
 use std::path::PathBuf;
 use std::process::ExitCode;

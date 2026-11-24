@@ -67,7 +67,7 @@ fn baseline_merge_and_takedown_form_a_verifiable_log() {
     assert_eq!(store.read_world().unwrap().0, merged.record.world_after);
     let v = validate_store(&store);
     assert!(v.errors.is_empty(), "{:?}", v.errors);
-    assert_eq!(v.assets, 45, "the facade joined the 44 fixture assets");
+    assert_eq!(v.assets, 46, "the facade joined the 45 fixture assets");
 
     // Take the facade down again: the world returns to the baseline exactly.
     let (_, w) = store.read_world().unwrap();

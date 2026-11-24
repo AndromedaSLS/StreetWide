@@ -1,5 +1,5 @@
 //! Procedural surface textures: plaster with windows, roof tiles,
-//! cobblestones, asphalt, paving, gravel, stone and ground.
+//! cobblestones, asphalt, paving, gravel, stone, ground and water ripples.
 //!
 //! Everything is generated from code at start-up, so the client ships no
 //! image files: no downloads, and no licence beyond the code's own
@@ -10,6 +10,8 @@
 //! Output per pattern: linear albedo, height (m) and roughness per texel,
 //! turned into an sRGB albedo map, a tangent-space normal map and a
 //! roughness map, each with a full mip chain.
+
+use std::f32::consts::TAU;
 
 /// A facade style: one bay (window and the wall around it) of one storey.
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -78,6 +80,9 @@ pub enum Pattern {
     Ground,
     /// Stone slabs (bridges).
     Stone,
+    /// Water: ripples of several wavelengths and directions. Only its
+    /// normal map is used; water's colour and smoothness are uniform.
+    Ripples,
 }
 
 impl Pattern {
@@ -95,9 +100,29 @@ impl Pattern {
             Pattern::Setts => [2.4, 2.4],
             Pattern::Ground => [16.0, 16.0],
             Pattern::Stone => [2.0, 2.0],
+            Pattern::Ripples => [4.0, 4.0],
         }
     }
 }
+
+/// The ripples' waves: whole cycles per repeat along u and v, so the
+/// pattern tiles, and steepness (the largest slope). Wavelengths run from
+/// 2 m down to about 0.26 m. Most crests lie across v, at right angles to
+/// the way the ripples drift (see `materials`), so the drift moves them
+/// forwards.
+const RIPPLE_WAVES: [([i32; 2], f32); 11] = [
+    ([0, 2], 0.045),
+    ([1, 3], 0.042),
+    ([2, 3], 0.036),
+    ([-1, 4], 0.038),
+    ([2, 5], 0.036),
+    ([1, 7], 0.034),
+    ([4, 7], 0.030),
+    ([-1, 9], 0.032),
+    ([3, 11], 0.030),
+    ([-2, 13], 0.028),
+    ([6, 14], 0.028),
+];
 
 /// Generated texels, row 0 at the top (the "up" side of the pattern).
 pub struct Texels {
@@ -590,6 +615,29 @@ fn ground(u: f32, v: f32) -> Texel {
     }
 }
 
+/// Water ripples as a height field (m): the [`RIPPLE_WAVES`], their crests
+/// bent by two slowly varying phase fields so they do not run dead
+/// straight, and fine noise for the smallest ripples. Albedo and roughness
+/// are neutral; only the normal map is used.
+fn ripples(u: f32, v: f32) -> Texel {
+    // The repeat is square.
+    let repeat = Pattern::Ripples.period_m()[0];
+    let bend = [fbm(u, v, 3, 2, 101), fbm(u, v, 5, 2, 102)];
+    let mut height = 0.0;
+    for (i, &([ku, kv], steepness)) in RIPPLE_WAVES.iter().enumerate() {
+        let wavelength = repeat / ((ku * ku + kv * kv) as f32).sqrt();
+        let amplitude = steepness * wavelength / TAU;
+        let phase = TAU * (rand(i as i32, 0, 103) + ku as f32 * u + kv as f32 * v)
+            + 3.0 * (bend[i % 2] - 0.5);
+        height += amplitude * phase.sin();
+    }
+    Texel {
+        albedo: [1.0; 3],
+        height: height + 0.002 * fbm(u, v, 64, 2, 104),
+        roughness: 1.0,
+    }
+}
+
 /// Generates a pattern at `size` × `size` texels.
 pub fn generate(pattern: Pattern, size: usize) -> Texels {
     let n = size * size;
@@ -614,6 +662,7 @@ pub fn generate(pattern: Pattern, size: usize) -> Texels {
                 Pattern::Setts => setts(u, v),
                 Pattern::Ground => ground(u, v),
                 Pattern::Stone => stone(u, v),
+                Pattern::Ripples => ripples(u, v),
             };
             albedo.push(t.albedo);
             height.push(t.height);
@@ -734,7 +783,7 @@ pub fn mip_chain(t: &Texels, period_m: [f32; 2]) -> Vec<Level> {
 mod tests {
     use super::*;
 
-    const ALL: [Pattern; 15] = [
+    const ALL: [Pattern; 16] = [
         Pattern::Facade(FACADES[0]),
         Pattern::Facade(FACADES[1]),
         Pattern::Facade(FACADES[2]),
@@ -750,6 +799,7 @@ mod tests {
         Pattern::Setts,
         Pattern::Ground,
         Pattern::Stone,
+        Pattern::Ripples,
     ];
 
     #[test]
@@ -810,5 +860,53 @@ mod tests {
                 assert!(n[2] > 0.0);
             }
         }
+    }
+
+    #[test]
+    fn ripple_wavelengths_run_from_a_quarter_metre_to_two_metres() {
+        let repeat = Pattern::Ripples.period_m();
+        assert_eq!(repeat[0], repeat[1]);
+        for ([ku, kv], steepness) in RIPPLE_WAVES {
+            let wavelength = repeat[0] / ((ku * ku + kv * kv) as f32).sqrt();
+            assert!((0.25..=2.0).contains(&wavelength), "{ku} {kv}");
+            assert!(steepness > 0.0 && steepness < 0.1);
+        }
+    }
+
+    /// Whole cycles per repeat and wrapping noise: the height one repeat
+    /// further along u or v is the same, so the texture has no seam.
+    #[test]
+    fn ripples_tile_seamlessly() {
+        for (u, v) in [(0.0f32, 0.0f32), (0.13, 0.71), (0.5, 0.25), (0.97, 0.02)] {
+            let h = ripples(u, v).height;
+            for (du, dv) in [(1.0, 0.0), (0.0, 1.0), (1.0, 1.0)] {
+                let other = ripples(u + du, v + dv).height;
+                // f32 rounding only: a texel step is about 0.5 mm.
+                assert!((h - other).abs() < 1e-5, "{u} {v}: {h} {other}");
+            }
+        }
+    }
+
+    #[test]
+    fn ripple_normals_are_unit_and_tilted_like_water() {
+        let t = generate(Pattern::Ripples, 256);
+        let levels = mip_chain(&t, Pattern::Ripples.period_m());
+        assert_eq!(levels.len(), 9);
+        for l in &levels {
+            for px in l.normal.chunks(4) {
+                let n = [0, 1, 2].map(|i| px[i] as f32 / 255.0 * 2.0 - 1.0);
+                let len = (n[0] * n[0] + n[1] * n[1] + n[2] * n[2]).sqrt();
+                assert!((len - 1.0).abs() < 0.03, "{len}");
+                assert!(n[2] > 0.8, "{n:?}");
+            }
+        }
+        // Gentle ripples: a typical slope of a few percent to about 15 %,
+        // and no tilt on average.
+        let n = normals(&t, Pattern::Ripples.period_m());
+        let count = n.len() as f32;
+        let rms = (n.iter().map(|m| m[0] * m[0] + m[1] * m[1]).sum::<f32>() / count).sqrt();
+        assert!((0.05..0.15).contains(&rms), "{rms}");
+        let mean = [0, 1].map(|k| n.iter().map(|m| m[k]).sum::<f32>() / count);
+        assert!(mean.iter().all(|m| m.abs() < 0.005), "{mean:?}");
     }
 }

@@ -5,7 +5,7 @@
 mod common;
 
 use jsonschema::{Registry, Validator};
-use op_world::{AssetManifest, TileIndex, WorldManifest, cjson};
+use op_world::{AssetManifest, Layer, TileIndex, WorldManifest, cjson};
 use serde_json::{Value, json};
 
 const SCHEMAS: [(&str, &str); 4] = [
@@ -156,6 +156,9 @@ fn schema_and_rust_reject_the_same_mutations() {
         ("asset without licence", |t| {
             t["assets"][0].as_object_mut().unwrap().remove("license");
         }),
+        ("unknown layer", |t| {
+            t["assets"][1]["layer"] = json!("river")
+        }),
     ];
     let world_mutations: &[Mutation] = &[
         ("yaw out of range", |w| w["spawn"]["yaw"] = json!(70000)),
@@ -195,6 +198,59 @@ fn schema_and_rust_reject_the_same_mutations() {
                 !kind.rust_accepts(&doc),
                 "op_world accepts {kind:?}: {name}"
             );
+        }
+    }
+}
+
+/// The schemas' layer list is `Layer::ALL`.
+#[test]
+fn schema_layers_are_the_rust_layers() {
+    let common = load("common.schema.json");
+    let mut names: Vec<&str> = common["$defs"]["layer"]["enum"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|v| v.as_str().unwrap())
+        .collect();
+    names.sort_unstable();
+    let rust: Vec<&str> = Layer::ALL.iter().map(|l| l.as_str()).collect();
+    assert_eq!(names, rust);
+}
+
+/// Water is visual only (RFC 0003): both the schemas and `op_world` accept
+/// a water asset with `collider: none` and reject one with a trimesh, in
+/// manifests and in tile indexes.
+#[test]
+fn water_assets_never_collide() {
+    let mut asset = first(|k| matches!(k, Kind::Asset));
+    asset["layer"] = json!("water");
+    let mut tile = first(|k| matches!(k, Kind::Tile));
+    // The last entry, so that the entries stay sorted.
+    let last = tile["assets"].as_array().unwrap().len() - 1;
+    tile["assets"][last]["layer"] = json!("water");
+    for collider in ["none", "trimesh"] {
+        asset["physics"]["collider"] = json!(collider);
+        tile["assets"][last]["collider"] = json!(collider);
+        let ok = collider == "none";
+        for (kind, doc) in [(Kind::Asset, &asset), (Kind::Tile, &tile)] {
+            let errors: Vec<String> = validator(kind.schema())
+                .iter_errors(doc)
+                .map(|e| e.to_string())
+                .collect();
+            assert_eq!(
+                errors.is_empty(),
+                ok,
+                "{kind:?} schema, {collider}: {errors:#?}"
+            );
+            assert_eq!(kind.rust_accepts(doc), ok, "{kind:?} op_world, {collider}");
+        }
+        if !ok {
+            // op_world says why.
+            let manifest = AssetManifest::from_bytes(&cjson::to_vec(&asset).unwrap()).unwrap_err();
+            let index = TileIndex::from_bytes(&cjson::to_vec(&tile).unwrap()).unwrap_err();
+            for e in [manifest, index] {
+                assert!(e.to_string().contains("must have collider none"), "{e}");
+            }
         }
     }
 }

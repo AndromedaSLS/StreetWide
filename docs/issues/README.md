@@ -23,10 +23,14 @@ When one is filed on GitHub, add the link here and delete the draft.
 These need a design discussion first: an RFC, or a simulation contract
 bump with re-recorded replays.
 
-- **Water.** The Limmat is walkable terrain at water level, and the
-  client's detailed look now paves it like a square. Water needs data
-  (swissTLM3D or OpenStreetMap water areas) and a layer or asset kind that
-  RFC 0001 does not have yet (ADR-0012).
+- **Water.** Now proposed: [RFC 0003](../../rfcs/0003-water-layer.md)
+  (Draft) adds a visual-only `water` layer, and
+  [ADR-0014](../adr/0014-water-areas-from-openstreetmap.md) (Proposed)
+  takes water areas from OpenStreetMap and places them as level surfaces
+  that the client draws as water. Still open: players walk on the river at
+  water level, because entering water (swimming, or keeping players out)
+  needs a collider kind for water and a simulation contract change (RFC
+  0003 unresolved questions).
 - **Building types.** Churches get the client's house windows: the shells
   carry no building type. A type from OpenStreetMap kept by the ingest
   could choose styles (ADR-0012).

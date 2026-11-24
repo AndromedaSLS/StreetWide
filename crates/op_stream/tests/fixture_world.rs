@@ -4,7 +4,7 @@ use std::path::PathBuf;
 
 use op_kernel::geometry::sim_origin_mm;
 use op_kernel::{BoundsMm, Fetch, GeometrySource};
-use op_stream::StoreSource;
+use op_stream::{StoreSource, WorldIndex};
 
 fn fixture() -> PathBuf {
     PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../fixtures/world")
@@ -30,6 +30,19 @@ fn serves_every_collider_in_the_sim_frame() {
         keys.iter()
             .any(|k| k.layer == "transport" && k.feature_id.starts_with("osm:way:")),
         "bridge decks do"
+    );
+    // The fixture has the Limmat, but water is visual only (RFC 0003): it
+    // never reaches the simulation.
+    let index = WorldIndex::open(&fixture()).unwrap();
+    assert!(
+        index.tiles()[0]
+            .assets
+            .iter()
+            .any(|a| a.layer.as_str() == "water")
+    );
+    assert!(
+        !keys.iter().any(|k| k.layer == "water"),
+        "water has no collider"
     );
 
     // The spawn point is near the sim origin; its surroundings are served.

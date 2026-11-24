@@ -19,3 +19,4 @@ Process (see [GOVERNANCE.md](../GOVERNANCE.md)):
 |---|---|---|
 | [0001](0001-world-format.md) | World format | Draft |
 | [0002](0002-contributions-and-merge-rules.md) | Contributions and merge rules | Draft |
+| [0003](0003-water-layer.md) | A water layer | Draft |

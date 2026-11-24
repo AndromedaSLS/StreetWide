@@ -88,6 +88,16 @@
       "then": {
         "properties": { "fictional": { "const": true } }
       }
+    },
+    {
+      "description": "Visual only (RFC 0003): water never collides, so the simulation never sees it and the terrain stays the surface players stand on.",
+      "if": {
+        "required": ["layer"],
+        "properties": { "layer": { "const": "water" } }
+      },
+      "then": {
+        "properties": { "physics": { "properties": { "collider": { "const": "none" } } } }
+      }
     }
   ]
 }

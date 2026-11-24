@@ -120,6 +120,15 @@ impl TileIndex {
                     a.feature_id
                 ));
             }
+            // Checked here too: the simulation reads colliders from tile
+            // indexes and never opens manifests.
+            if a.layer.must_not_collide() && a.collider != Collider::None {
+                p.push(format!(
+                    "{} asset {:?} must have collider none (visual only)",
+                    a.layer.as_str(),
+                    a.feature_id
+                ));
+            }
         }
         p
     }

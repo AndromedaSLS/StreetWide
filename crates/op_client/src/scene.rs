@@ -4,7 +4,9 @@
 //! The render frame is fixed for the run (see `session`): a mesh is placed
 //! at its tile origin minus the render origin, and the player at its sim
 //! position plus the sim origin's offset, so what you see is exactly where
-//! the simulation collides.
+//! the simulation collides. The one exception is flat terrain under water,
+//! drawn just below the water so the water shows (see `water`); the
+//! simulation still collides with the terrain as it is.
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::time::{Duration, Instant};
@@ -12,7 +14,7 @@ use std::time::{Duration, Instant};
 use bevy::anti_alias::taa::TemporalAntiAliasing;
 use bevy::camera::Exposure;
 use bevy::core_pipeline::tonemapping::Tonemapping;
-use bevy::light::{AtmosphereEnvironmentMapLight, ShadowFilteringMethod};
+use bevy::light::{AtmosphereEnvironmentMapLight, NotShadowCaster, ShadowFilteringMethod};
 use bevy::pbr::{AtmosphereSettings, ScreenSpaceAmbientOcclusion};
 use bevy::post_process::bloom::Bloom;
 use bevy::prelude::*;
@@ -20,9 +22,10 @@ use op_world::{ContentId, Layer};
 
 use crate::controls::{Look, turn16_to_yaw};
 use crate::heights::{Height, HeightIndex};
-use crate::materials::{self, AssetLook, MaterialSet};
+use crate::materials::{self, AssetLook, MaterialSet, Surface};
 use crate::session::{EYE_HEIGHT, Session};
 use crate::travel::{Travel, View};
+use crate::water::{self, WaterSurface};
 
 /// Meshes within this distance of the camera are loaded and shown (m).
 pub const RENDER_RADIUS_M: f32 = 600.0;
@@ -58,6 +61,8 @@ struct Wanted {
     look: AssetLook,
     /// Region-frame centre (x, z) of the asset's bounds.
     centre: (f64, f64),
+    /// Terrain only: the water of its tile, under which it is drawn lower.
+    water: Option<ContentId>,
 }
 
 /// Streaming progress for the HUD.
@@ -88,6 +93,7 @@ impl Plugin for ScenePlugin {
                     scene_keys,
                     apply_quality,
                     materials::apply_look,
+                    materials::drift_ripples,
                     follow_player,
                     stream_meshes,
                 )
@@ -249,6 +255,12 @@ fn stream_meshes(
     for tile in streamer.index().tiles() {
         let offset = session.offset_m(tile.origin_mm);
         let origin_m = tile.origin_mm.map(|v| v as f64 / 1000.0);
+        // A tile has at most one water asset (RFC 0003).
+        let water = tile
+            .assets
+            .iter()
+            .find(|a| a.layer == Layer::Water)
+            .map(|a| a.content_id);
         for a in &tile.assets {
             let b = a.bounds_mm;
             let lo = offset + Vec3::new(b.min[0] as f32, b.min[1] as f32, b.min[2] as f32) / 1000.0;
@@ -289,6 +301,7 @@ fn stream_meshes(
                     origin_m,
                     look,
                     centre,
+                    water: water.filter(|_| a.layer == Layer::Terrain),
                 });
             }
         }
@@ -323,24 +336,41 @@ fn stream_meshes(
         {
             continue;
         }
+        // Terrain is drawn lower under water: wait for the tile's water. If
+        // that cannot be loaded, the terrain is drawn as it is.
+        let tile_water = match w.water {
+            Some(id) => match streamer.get(&id) {
+                Some(mesh) => Some(WaterSurface::new(&mesh)),
+                None if streamer.error(&id).is_some() => None,
+                None => {
+                    streamer.request(&id);
+                    continue;
+                }
+            },
+            None => None,
+        };
         let mut ground = |x: f64, z: f64| match heights.ground(streamer, x, z) {
             Height::At(y) => Some(y),
             _ => None,
         };
+        let sunk = tile_water.map(|surface| water::sink_terrain(&glb, &surface));
+        let mesh = sunk.as_ref().unwrap_or(&*glb);
         let mut entities = Vec::new();
-        for prim in glb.nodes.iter().flat_map(|n| &n.primitives) {
+        for prim in mesh.nodes.iter().flat_map(|n| &n.primitives) {
             for (surface, part) in materials::parts(prim, w.origin_m, &w.look, &mut ground) {
                 let looks = set.looks(surface, prim.material, &w.look);
-                entities.push(
-                    commands
-                        .spawn((
-                            Mesh3d(meshes.add(materials::mesh(part))),
-                            MeshMaterial3d(set.current(&looks)),
-                            looks,
-                            Transform::from_translation(w.offset),
-                        ))
-                        .id(),
-                );
+                let mut entity = commands.spawn((
+                    Mesh3d(meshes.add(materials::mesh(part))),
+                    MeshMaterial3d(set.current(&looks)),
+                    looks,
+                    Transform::from_translation(w.offset),
+                ));
+                // Water lies on the ground: its shadow would fall on
+                // nothing you see, so it stays out of the shadow maps.
+                if surface == Surface::Water {
+                    entity.insert(NotShadowCaster);
+                }
+                entities.push(entity.id());
             }
         }
         shown.entities.insert(w.id, entities);
