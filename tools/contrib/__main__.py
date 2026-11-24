@@ -7,6 +7,17 @@ import sys
 from pathlib import Path
 
 from tools.contrib.facade import ContributionError, export_reference, find_building, make_bundle
+from tools.contrib.gltf_in import MAX_BYTES
+
+
+def _read_model(path: Path) -> bytes:
+    """The model file, read no further than the glb reader accepts (it
+    refuses anything longer), so a huge or endless file is not loaded."""
+    try:
+        with path.open("rb") as f:
+            return f.read(MAX_BYTES + 1)
+    except OSError as e:
+        raise ContributionError(f"cannot read {path}: {e}") from e
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -49,7 +60,7 @@ def main(argv: list[str] | None = None) -> int:
             change_id = make_bundle(
                 args.world,
                 args.building,
-                args.model.read_bytes(),
+                _read_model(args.model),
                 args.out,
                 author=args.author,
                 title=args.title,

@@ -292,6 +292,27 @@ fn g8_keeps_facades_on_their_building() {
     assert_fails(&r, "G8");
 }
 
+/// G7 refuses a facade over its budget, so G8 does not spend time measuring
+/// it (found by review while fuzzing the readers: G8's work grows with the
+/// facade and the shell).
+#[test]
+fn g8_does_not_measure_a_facade_over_its_budget() {
+    let r = variant("g8-over-budget", |d| {
+        let p = &mut d.mesh.nodes[0].primitives[0];
+        let once = p.indices.clone();
+        while p.indices.len() / 3 <= gate::FACADE_MAX_TRIANGLES {
+            p.indices.extend_from_slice(&once);
+        }
+    });
+    assert_fails(&r, "G7");
+    assert_eq!(outcome(&r, "G8"), Outcome::NotRun);
+    let g8 = r.checks.iter().find(|c| c.id == "G8").unwrap();
+    assert!(
+        g8.details[0].ends_with("not checked, the facade is over its G7 budget"),
+        "{g8:?}"
+    );
+}
+
 #[test]
 fn collider_changes_cannot_pass_until_the_simulation_checks_exist() {
     // Remove the sample building's swisstopo shell.

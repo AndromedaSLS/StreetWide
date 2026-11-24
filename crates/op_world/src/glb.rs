@@ -5,9 +5,11 @@
 //! produces. [`read`] parses a file and then checks that writing the parsed
 //! mesh reproduces the input byte for byte.
 
+use std::cell::Cell;
+
 use serde_json::Value;
 
-use crate::cjson::write_string;
+use crate::cjson::{check_depth, write_string};
 use crate::manifest::BoundsMm;
 use crate::rules::is_feature_id;
 use crate::{Error, Result};
@@ -16,6 +18,12 @@ use crate::{Error, Result};
 pub const GENERATOR: &str = "StreetWide world format 0.1";
 /// Largest glb accepted by [`read`].
 pub const MAX_GLB_BYTES: usize = 64 * 1024 * 1024;
+/// Longest JSON chunk accepted by [`read`] and written by [`write`] (RFC
+/// 0001, section 6). An asset is one feature: its chunk takes about a
+/// kilobyte per primitive (2,236 bytes at most in the fixture worlds).
+/// Parsing JSON builds a tree up to about 20 times its size, so without
+/// this limit a crafted 64 MiB chunk would take over a gigabyte.
+pub const MAX_GLB_JSON_BYTES: usize = 1024 * 1024;
 
 const GLB_MAGIC: u32 = 0x4654_6C67; // "glTF"
 const GLB_VERSION: u32 = 2;
@@ -449,6 +457,11 @@ pub fn write(mesh: &GlbMesh) -> Result<Vec<u8>> {
     while !json.len().is_multiple_of(4) {
         json.push(b' ');
     }
+    if json.len() > MAX_GLB_JSON_BYTES {
+        return Err(Error::Glb(format!(
+            "mesh too large: its JSON chunk would be longer than {MAX_GLB_JSON_BYTES} bytes"
+        )));
+    }
     // All binary data is made of 4-byte values, so the BIN chunk is already
     // aligned; no padding is ever needed.
     debug_assert!(bin.len().is_multiple_of(4));
@@ -515,6 +528,9 @@ fn parse(bytes: &[u8]) -> Result<GlbMesh> {
     if u32_at(bytes, 16)? != CHUNK_JSON {
         return glb_err("first chunk must be JSON");
     }
+    if json_len > MAX_GLB_JSON_BYTES {
+        return glb_err(format!("JSON chunk longer than {MAX_GLB_JSON_BYTES} bytes"));
+    }
     let json = bytes
         .get(20..20 + json_len)
         .ok_or_else(|| Error::Glb("truncated JSON chunk".into()))?;
@@ -530,8 +546,13 @@ fn parse(bytes: &[u8]) -> Result<GlbMesh> {
         return glb_err("unexpected data after the BIN chunk");
     }
 
+    check_depth(json)?;
     let doc: Value = serde_json::from_slice(json)?;
-    let doc = Doc { doc: &doc, bin };
+    let doc = Doc {
+        doc: &doc,
+        bin,
+        unread: Cell::new(bin.len()),
+    };
 
     let materials: Vec<Material> = doc
         .array("materials")?
@@ -545,12 +566,18 @@ fn parse(bytes: &[u8]) -> Result<GlbMesh> {
         .collect::<Result<_>>()?;
 
     let mut nodes = Vec::new();
-    for node in doc.array("nodes")? {
+    for (i, node) in doc.array("nodes")?.iter().enumerate() {
         let name = node
             .get("name")
             .and_then(Value::as_str)
             .ok_or_else(|| Error::Glb("node without a name".into()))?
             .to_string();
+        // Node i shows mesh i, as the writer lays them out. Checking it here
+        // decodes each mesh once: nodes sharing a mesh would otherwise make
+        // a small file decode the same data again for every node.
+        if as_index(node.get("mesh")) != Some(i) {
+            return glb_err(format!("node {i} must show mesh {i}"));
+        }
         let mesh = doc.index_into("meshes", node.get("mesh"))?;
         let mut primitives = Vec::new();
         for prim in mesh
@@ -584,6 +611,12 @@ fn as_index(v: Option<&Value>) -> Option<usize> {
 struct Doc<'a> {
     doc: &'a Value,
     bin: &'a [u8],
+    /// BIN bytes the accessors have not decoded yet. A valid file decodes
+    /// each byte of its BIN chunk once (every accessor has its own buffer
+    /// view, laid out one after the other), so a file whose accessors ask
+    /// for more is refused before it can make the reader copy the same
+    /// bytes over and over.
+    unread: Cell<usize>,
 }
 
 impl<'a> Doc<'a> {
@@ -633,6 +666,10 @@ impl<'a> Doc<'a> {
             .bin
             .get(offset..end)
             .ok_or_else(|| Error::Glb("buffer view outside the BIN chunk".into()))?;
+        let unread = self.unread.get().checked_sub(length).ok_or_else(|| {
+            Error::Glb("accessors read more data than the BIN chunk holds".into())
+        })?;
+        self.unread.set(unread);
         Ok((count, data))
     }
 

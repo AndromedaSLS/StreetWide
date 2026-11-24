@@ -31,8 +31,18 @@ pub const FORMAT: &str = "streetwide.replay";
 pub const CONTRACT_VERSION: &str = "0.1.0";
 pub const CHECKPOINT_INTERVAL: u64 = 60;
 const MAX_HEADER_BYTES: usize = 64 * 1024;
+/// A checkpoint: tick (u64) and state hash.
+const CHECKPOINT_BYTES: usize = 8 + 32;
 /// One day at 60 Hz.
 pub const MAX_TICKS: u64 = 60 * 60 * 60 * 24;
+/// The largest valid replay file: the largest header, [`MAX_TICKS`] input
+/// records and a checkpoint at every tick (about 237 MiB). Loaders refuse a
+/// longer file before reading it.
+pub const MAX_REPLAY_BYTES: u64 = (16
+    + MAX_HEADER_BYTES
+    + MAX_TICKS as usize * RECORD_BYTES
+    + 4
+    + MAX_TICKS as usize * CHECKPOINT_BYTES) as u64;
 
 #[derive(Clone, PartialEq, Eq, Debug, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -215,7 +225,10 @@ impl Replay {
             return Err(ReplayError::Header("header too large".into()));
         }
         let mut out = Vec::with_capacity(
-            16 + header.len() + self.inputs.len() * RECORD_BYTES + 4 + self.checkpoints.len() * 40,
+            16 + header.len()
+                + self.inputs.len() * RECORD_BYTES
+                + 4
+                + self.checkpoints.len() * CHECKPOINT_BYTES,
         );
         out.extend_from_slice(&MAGIC);
         out.extend_from_slice(&FILE_VERSION.to_le_bytes());
@@ -251,8 +264,11 @@ impl Replay {
         if !problems.is_empty() {
             return Err(ReplayError::Header(problems.join("; ")));
         }
+        // Reserve no more than the rest of the file can hold: until the
+        // records are read, `ticks` is only a claim (a 400-byte file may
+        // say 5 184 000 ticks).
         let ticks = header.ticks as usize;
-        let mut inputs = Vec::with_capacity(ticks);
+        let mut inputs = Vec::with_capacity(ticks.min(r.b.len() / RECORD_BYTES));
         for tick in 0..header.ticks {
             let record: [u8; RECORD_BYTES] = r.array()?;
             inputs.push(
@@ -264,7 +280,7 @@ impl Replay {
         if count != checkpoint_ticks(header.ticks, header.checkpoint_interval).len() {
             return Err(malformed("wrong number of checkpoints"));
         }
-        let mut checkpoints = Vec::with_capacity(count);
+        let mut checkpoints = Vec::with_capacity(count.min(r.b.len() / CHECKPOINT_BYTES));
         for _ in 0..count {
             let tick = r.u64()?;
             checkpoints.push(Checkpoint {

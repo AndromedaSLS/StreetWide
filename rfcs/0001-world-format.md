@@ -203,7 +203,11 @@ All manifests, tile indexes and world manifests are stored as
   escapes are `\"` and `\\`; all other characters, including non-ASCII such
   as `©`, are written as raw UTF-8;
 - `true`, `false`, `null` as usual. Optional values are written as `null`,
-  never omitted.
+  never omitted;
+- arrays and objects nest at most 127 levels deep, the outermost value
+  being level 1. No document comes close; the limit is the recursion
+  limit of serde_json, which `op_world` uses, checked explicitly by both
+  implementations so that they accept exactly the same documents.
 
 A reader **rejects** a file whose bytes differ from the canonical
 serialisation of its parsed value. This makes the mapping from value to
@@ -230,6 +234,10 @@ validate and has exactly one byte representation per mesh:
 - one JSON chunk and one BIN chunk; JSON padded with spaces, BIN with
   zeros, to 4 bytes; no external URIs, images, textures, samplers, cameras,
   skins, animations or extensions;
+- at most 64 MiB in all (the largest `size_bytes` a manifest may state),
+  and a JSON chunk of at most 1 MiB. An asset is one feature, about a
+  kilobyte of JSON per primitive; the limit keeps readers from parsing a
+  huge document, which takes many times its size in memory;
 - `asset = {"generator": "StreetWide world format 0.1", "version": "2.0"}`;
 - one scene `0` containing every node; nodes have a `name` (the feature id
   of what they show) and a `mesh`, and no transform: positions are already
@@ -265,6 +273,11 @@ objects/<aa>/<hex>.glb             meshes
 where `<hex>` is the 64-digit hash of the file and `<aa>` its first two
 digits. Every object file is named by its own hash, so the store verifies
 itself. Downloaded source data never lives here.
+
+A store may come from anyone (a downloaded world, a contributor's bundle),
+so readers take `world.json` and objects only as regular files, not
+symbolic links, devices or pipes, of at most 64 MiB, and refuse anything
+else before reading it.
 
 ## Options considered
 

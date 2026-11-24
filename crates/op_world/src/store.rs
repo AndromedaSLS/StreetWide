@@ -5,13 +5,55 @@
 //! objects/<aa>/<hex>.json     tile indexes and asset manifests
 //! objects/<aa>/<hex>.glb      meshes
 //! ```
+//!
+//! A store may come from elsewhere (a downloaded world, a contributor's
+//! bundle), so reads check what they read: an object's bytes must hash to
+//! its id, and every file is read with [`read_file`], which takes only a
+//! regular file of at most [`MAX_FILE_BYTES`].
 
 use std::fs;
+use std::io::{self, Read};
 use std::path::{Path, PathBuf};
 
 use crate::id::ContentId;
+use crate::manifest::MAX_ASSET_BYTES;
 use crate::world::WorldManifest;
 use crate::{Error, Result};
+
+/// Largest file a store read accepts: the largest asset a manifest may
+/// describe ([`MAX_ASSET_BYTES`]), far more than any JSON document needs.
+pub const MAX_FILE_BYTES: u64 = MAX_ASSET_BYTES;
+
+/// The bytes of the regular file at `path`, which may be at most `limit`
+/// bytes long.
+///
+/// Stores, contribution bundles and replays may come from anyone. A crafted
+/// one can put a FIFO, a device such as `/dev/zero`, or a link to a file
+/// outside its directory where a file should be (git keeps symbolic links),
+/// or a file far larger than any valid one; reading those would block,
+/// never end, exhaust the memory or quote another file in a report. They
+/// are refused before anything is read: the path must name a regular file
+/// itself, not a link to one. The error does not name the path; callers
+/// say what was read.
+pub fn read_file(path: &Path, limit: u64) -> io::Result<Vec<u8>> {
+    let refuse = |why: String| Err(io::Error::new(io::ErrorKind::InvalidData, why));
+    let meta = fs::symlink_metadata(path)?;
+    if !meta.is_file() {
+        return refuse("not a regular file".into());
+    }
+    if meta.len() > limit {
+        return refuse(format!("larger than {limit} bytes"));
+    }
+    let mut bytes = Vec::new();
+    // `take` stops a file that grew after the check above.
+    fs::File::open(path)?
+        .take(limit.saturating_add(1))
+        .read_to_end(&mut bytes)?;
+    if bytes.len() as u64 > limit {
+        return refuse(format!("larger than {limit} bytes"));
+    }
+    Ok(bytes)
+}
 
 /// Kind of object, which decides its file extension.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
@@ -85,7 +127,8 @@ impl Store {
             .map(|dir| object_path_in(dir, id, kind))
             .find(|p| p.is_file())
             .unwrap_or_else(|| self.object_path(id, kind));
-        let bytes = fs::read(&path).map_err(|e| Error::Io(format!("object {id}: {e}")))?;
+        let bytes =
+            read_file(&path, MAX_FILE_BYTES).map_err(|e| Error::Io(format!("object {id}: {e}")))?;
         let actual = ContentId::of(&bytes);
         if actual != *id {
             return Err(Error::HashMismatch {
@@ -100,7 +143,7 @@ impl Store {
     pub fn write_object(&self, bytes: &[u8], kind: ObjectKind) -> Result<ContentId> {
         let id = ContentId::of(bytes);
         let path = self.object_path(&id, kind);
-        if fs::read(&path).is_ok_and(|existing| existing == bytes) {
+        if read_file(&path, bytes.len() as u64).is_ok_and(|existing| existing == bytes) {
             return Ok(id);
         }
         write_atomically(&path, bytes)?;
@@ -110,7 +153,8 @@ impl Store {
     /// Reads and parses `world.json`, returning the world id and manifest.
     pub fn read_world(&self) -> Result<(ContentId, WorldManifest)> {
         let path = self.world_path();
-        let bytes = fs::read(&path).map_err(|e| Error::Io(format!("{}: {e}", path.display())))?;
+        let bytes = read_file(&path, MAX_FILE_BYTES)
+            .map_err(|e| Error::Io(format!("{}: {e}", path.display())))?;
         let world = WorldManifest::from_bytes(&bytes)?;
         Ok((ContentId::of(&bytes), world))
     }

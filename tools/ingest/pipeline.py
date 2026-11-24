@@ -177,6 +177,9 @@ def run(name: str, area: Area, spawn: Spawn | None, out: Path, cache: Path, *,
         if not area.contains(tx, ty):
             continue
         tile = (int(tx), int(ty))
+        if transport.densified_count(w.en) > transport.MAX_DECK_POINTS:
+            _bump(stats, "bridge decks too long")
+            continue
         mesh = transport.bridge_deck(frame, w, heights, origins[tile])
         if mesh is None:
             _bump(stats, "bridge decks without heights")

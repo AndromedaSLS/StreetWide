@@ -21,6 +21,10 @@
   converted to the region frame vertex by vertex, facing straight up. One
   visual-only asset per tile (`collider: none`): players still walk on
   the terrain underneath.
+
+The Overpass answer is untrusted (a download, or a file in the cache): an
+element without the structure Overpass gives raises OsmError, as in
+`osm.parse`, and a relation too complex to assemble is a broken relation.
 """
 
 from __future__ import annotations
@@ -32,13 +36,14 @@ import mapbox_earcut
 import numpy as np
 import shapely
 from shapely import make_valid
+from shapely.errors import GEOSException
 from shapely.geometry import MultiPolygon, Polygon, box
 from shapely.ops import unary_union
 
 from tools.ingest.dem import Dem
 from tools.ingest.geo import BBox, Frame, lonlat_to_lv95, to_mm
 from tools.ingest.mesh import MeshBuilder
-from tools.ingest.osm import RingError, join_rings
+from tools.ingest.osm import MAX_WAY_NODES, OsmError, RingError, _coordinate, _tags, join_rings
 
 # Kept: `natural=water` with no `water` tag or one of these.
 KEEP_WATER = ("river", "canal", "lake", "oxbow", "lagoon", "reservoir", "pond")
@@ -65,6 +70,10 @@ TERRAIN_TILE_M = 1000
 # inside the tile, and the result depends on the tile alone.
 MARGIN_M = 10.0
 UP = np.array([0.0, 1.0, 0.0])
+MAX_NEST_TESTS = 1_000_000
+"""Most ring-in-ring tests to nest the rings of one relation. A real
+relation needs one or two per ring; rings stacked on one another need one
+per pair, and such a relation counts as one that gives no area."""
 
 
 class WaterError(RuntimeError):
@@ -158,15 +167,55 @@ def _lv95_ring(points: list[tuple[float, float]]) -> Polygon | MultiPolygon | No
         return None
     lon, lat = np.array(points, dtype=np.float64).T
     e, n = lonlat_to_lv95(lon, lat)
-    return _area(Polygon(np.stack([np.asarray(e), np.asarray(n)], axis=1)))
+    en = np.stack([np.asarray(e), np.asarray(n)], axis=1)
+    if not np.isfinite(en).all():
+        raise OsmError("a geometry point is outside LV95")
+    return _area(Polygon(en))
+
+
+def _points(geometry: object, what: str) -> list[tuple[float, float] | None] | None:
+    """The (lon, lat) points of an Overpass geometry, with None where it
+    gives none; None if there is no geometry. Raises OsmError for anything
+    Overpass does not give."""
+    if not geometry:
+        return None
+    if not isinstance(geometry, list):
+        raise OsmError(f"{what}: a geometry is not an array")
+    if len(geometry) > MAX_WAY_NODES:
+        raise OsmError(f"{what}: a way of {len(geometry)} points, more than OpenStreetMap allows ({MAX_WAY_NODES})")
+    return [None if g is None else (_coordinate(g, "lon", 180.0), _coordinate(g, "lat", 90.0)) for g in geometry]
 
 
 def _way_area(el: dict) -> Polygon | MultiPolygon | None:
-    geometry = el.get("geometry")
+    points = _points(el.get("geometry"), f"way/{el['id']}")
     nodes = el.get("nodes", [])
-    if not geometry or any(g is None for g in geometry) or len(nodes) < 4 or nodes[0] != nodes[-1]:
+    if not isinstance(nodes, list) or not all(type(n) is int for n in nodes):
+        raise OsmError(f"way/{el['id']}: node ids are not integers")
+    if not points or any(p is None for p in points) or len(nodes) < 4 or nodes[0] != nodes[-1]:
         return None
-    return _lv95_ring([(g["lon"], g["lat"]) for g in geometry])
+    return _lv95_ring(points)
+
+
+def _check_relation(el: dict) -> None:
+    """Raises OsmError unless the relation has the structure Overpass gives:
+    members that are objects, way members with an integer ref, valid
+    geometries and, if given, numeric bounds."""
+    what = f"relation/{el['id']}"
+    members = el.get("members", [])
+    if not isinstance(members, list) or not all(isinstance(m, dict) for m in members):
+        raise OsmError(f"{what}: members are not objects")
+    for m in members:
+        if m.get("type") == "way" and type(m.get("ref")) is not int:
+            raise OsmError(f"{what}: a member way has no integer ref")
+        _points(m.get("geometry"), what)
+    b = el.get("bounds")
+    if b is not None:
+        if not isinstance(b, dict):
+            raise OsmError(f"{what}: bounds are not an object")
+        for key, limit in (("minlon", 180.0), ("maxlon", 180.0), ("minlat", 90.0), ("maxlat", 90.0)):
+            v = b.get(key)
+            if type(v) not in (int, float) or not abs(v) <= limit:
+                raise OsmError(f"{what}: bounds have no valid {key}")
 
 
 def _relation_area(el: dict, stats: dict[str, int]) -> Polygon | MultiPolygon:
@@ -180,7 +229,7 @@ def _relation_area(el: dict, stats: dict[str, int]) -> Polygon | MultiPolygon:
         if m.get("type") != "way":
             continue
         role = m.get("role") or "outer"  # an empty role counts as outer
-        if role not in lines:
+        if not isinstance(role, str) or role not in lines:
             # Its place in the area is unknown: guessing could drop a river.
             raise RingError(f"its member way {m.get('ref')} has the role {role!r}, not outer or inner")
         if (role, m.get("ref")) in seen:
@@ -195,7 +244,12 @@ def _relation_area(el: dict, stats: dict[str, int]) -> Polygon | MultiPolygon:
                  if (p := _lv95_ring(r)) is not None]
     except RingError as e:
         raise RingError(f"its member ways do not form closed rings: {e}") from e
-    shape = _nest(rings, stats)
+    except GEOSException as e:  # a ring GEOS cannot repair
+        raise RingError(f"its rings cannot be repaired ({e})") from e
+    try:
+        shape = _nest(rings, stats)
+    except GEOSException as e:
+        raise RingError(f"its rings cannot be combined ({e})") from e
     if shape is None:
         raise RingError("its member ways enclose no area")
     return shape
@@ -211,10 +265,18 @@ def _nest(rings: list[tuple[str, Polygon | MultiPolygon]], stats: dict[str, int]
     shapes = [s for _, s in rings]
     for s in shapes:
         shapely.prepare(s)
+    # Only rings whose bounding box holds the point can contain it; the tree
+    # finds them without testing every pair.
+    tree = shapely.STRtree(shapes)
     depth = []
-    for s in shapes:
+    tests = 0
+    for i, s in enumerate(shapes):
         p = s.representative_point()
-        depth.append(sum(1 for o in shapes if o is not s and o.area > s.area and o.contains(p)))
+        candidates = tree.query(p)
+        tests += len(candidates)
+        if tests > MAX_NEST_TESTS:
+            raise RingError(f"its {len(shapes)} rings overlap too much to be nested")
+        depth.append(sum(1 for j in candidates if j != i and shapes[j].area > s.area and shapes[j].contains(p)))
     shape = None
     for d in sorted(set(depth)):
         add = [s for (role, s), k in zip(rings, depth) if k == d and role == "outer"]
@@ -252,19 +314,29 @@ def parse(doc: dict, bbox: BBox, stats: dict[str, int]) -> list[Body]:
     """The water areas of an Overpass water response, sorted by type and id.
 
     Raises WaterError for a multipolygon relation that reaches `bbox` but
-    gives no area (see `_relation_area`).
+    gives no area (see `_relation_area`), and OsmError for an element
+    without the structure Overpass gives.
     """
+    raw = doc.get("elements") if isinstance(doc, dict) else None
+    if not isinstance(raw, list):
+        raise OsmError("the response has no elements")
+    if not all(isinstance(e, dict) and isinstance(e.get("type"), str) and type(e.get("id")) is int for e in raw):
+        raise OsmError("an element has no type or no integer id")
     bodies: list[Body] = []
-    for el in sorted(doc["elements"], key=lambda e: (e["type"], e["id"])):
+    for el in sorted(raw, key=lambda e: (e["type"], e["id"])):
         if el["type"] not in ("way", "relation"):
             continue
-        tags = el.get("tags", {})
+        tags = _tags(el)
         reason = exclusion(tags)
         if reason is not None:
             _bump(stats, f"OSM water areas left out: {reason}")
             continue
         if el["type"] == "way":
-            shape = _way_area(el)
+            try:
+                shape = _way_area(el)
+            except GEOSException:  # a ring GEOS cannot repair
+                _bump(stats, "OSM water ways unusable")
+                continue
             if shape is None:
                 _bump(stats, "OSM water ways not closed or empty")
                 continue
@@ -272,6 +344,7 @@ def parse(doc: dict, bbox: BBox, stats: dict[str, int]) -> list[Body]:
             _bump(stats, f"OSM water relations left out: type={tags.get('type')}")
             continue
         else:
+            _check_relation(el)
             try:
                 shape = _relation_area(el, stats)
             except RingError as e:

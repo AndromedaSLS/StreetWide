@@ -34,6 +34,13 @@ LIFT_M = {"road": 0.05, "path": 0.06}
 MAX_SEGMENT_M = 1.5
 DECK_THICKNESS_M = 0.5
 MIN_WIDTH_M, MAX_WIDTH_M = 0.5, 30.0
+# Bounds on what one (possibly crafted) Overpass way can make the ingest do.
+# Real bridges are a few hundred metres long with tens of nodes.
+MAX_DECK_POINTS = 20_000
+"""Most points along one bridge deck (30 km at MAX_SEGMENT_M)."""
+MAX_BRIDGE_NODES = 4_096
+"""Most free nodes in one group of connected bridges, whose heights come
+from a dense linear solve (memory grows with the square of the count)."""
 
 
 def is_bridge(w: Way) -> bool:
@@ -82,6 +89,13 @@ def densify(en: np.ndarray, max_seg: float = MAX_SEGMENT_M) -> tuple[np.ndarray,
             pts.append(en[i] + (en[i + 1] - en[i]) * t)
             pos.append(src[i] + (src[i + 1] - src[i]) * t)
     return np.asarray(pts), np.asarray(pos)
+
+
+def densified_count(en: np.ndarray, max_seg: float = MAX_SEGMENT_M) -> int:
+    """How many points `densify` makes of a polyline, without making them."""
+    keep = np.concatenate([[True], np.linalg.norm(np.diff(en, axis=0), axis=1) > 1e-6])
+    lengths = np.linalg.norm(np.diff(en[keep], axis=0), axis=1)
+    return 1 + int(np.maximum(1, np.ceil(lengths / max_seg)).sum())
 
 
 def offsets(en: np.ndarray, half_width: float) -> tuple[np.ndarray, np.ndarray]:
@@ -186,6 +200,9 @@ def bridge_heights(bridges: list[Way], others: list[Way], dem: Dem, stats: dict[
             continue
         fixed = {n: ground[n] for n in anchors}
         free = [n for n in comp if n not in fixed]
+        if len(free) > MAX_BRIDGE_NODES:
+            stats["bridges too large"] = stats.get("bridges too large", 0) + 1
+            continue
         if free:
             index = {n: i for i, n in enumerate(free)}
             a = np.zeros((len(free), len(free)))
@@ -205,7 +222,7 @@ def bridge_heights(bridges: list[Way], others: list[Way], dem: Dem, stats: dict[
 
 
 def bridge_deck(frame: Frame, w: Way, heights: dict[int, float], origin_mm) -> MeshBuilder | None:
-    if any(n not in heights for n in w.nodes):
+    if any(n not in heights for n in w.nodes) or densified_count(w.en) > MAX_DECK_POINTS:
         return None
     node_h = np.array([heights[n] for n in w.nodes]) + LIFT_M["road"]
     pts, pos = densify(w.en)

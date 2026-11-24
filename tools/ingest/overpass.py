@@ -18,11 +18,16 @@ from pathlib import Path
 
 from tools.ingest.geo import BBox
 from tools.ingest.http import fetch_bytes
+from tools.worldfmt.store import read_file
 
 ENDPOINT = "https://overpass-api.de/api/interpreter"
 _MAX_BYTES = 256 << 20
 # Tags of the water areas asked for (ADR-0014); the ingest selects among them.
 WATER_TAGS = (("natural", "water"), ("waterway", "riverbank"), ("landuse", "reservoir"))
+
+
+class OverpassError(RuntimeError):
+    """An Overpass response that is malformed or reports an error."""
 
 
 def _swne(bbox: BBox) -> str:
@@ -65,12 +70,17 @@ def _key(q: str) -> str:
 
 def _fetch(q: str, path: Path, what: str, offline: bool, refresh: bool) -> dict:
     if path.exists() and not refresh:
-        return _check(json.loads(path.read_text(encoding="utf-8")))
+        try:
+            return parse_answer(read_file(path, _MAX_BYTES))
+        except ValueError as e:  # read_file refusing the file
+            raise OverpassError(f"cached {path}: {e}") from e
+        except OverpassError as e:
+            raise OverpassError(f"cached {path}: {e}; delete it and retry") from e
     if offline:
         raise RuntimeError(f"{what} is not cached and --offline is set")
     print(f"  querying {ENDPOINT}", flush=True)
     body = fetch_bytes(ENDPOINT, data=urllib.parse.urlencode({"data": q}).encode(), max_bytes=_MAX_BYTES)
-    doc = _check(json.loads(body))
+    doc = parse_answer(body)
     path.parent.mkdir(parents=True, exist_ok=True)
     part = path.with_name(path.name + ".part")
     part.write_bytes(body)
@@ -79,12 +89,28 @@ def _fetch(q: str, path: Path, what: str, offline: bool, refresh: bool) -> dict:
     return doc
 
 
-def _check(doc: dict) -> dict:
+def parse_answer(data: bytes) -> dict:
+    """An Overpass answer from untrusted bytes (a download or the cache),
+    checked as below. Raises OverpassError for anything else."""
+    try:
+        doc = json.loads(data)
+    except (ValueError, RecursionError) as e:  # not JSON, or nested far too deeply
+        raise OverpassError(f"the Overpass response is not valid JSON: {e}") from e
+    return _check(doc)
+
+
+def _check(doc: object) -> dict:
     if not isinstance(doc, dict) or not isinstance(doc.get("elements"), list):
-        raise RuntimeError("unexpected Overpass response")
+        raise OverpassError("unexpected Overpass response")
     if "remark" in doc:
         # Overpass reports timeouts and errors as a remark next to partial data.
-        raise RuntimeError(f"Overpass error: {doc['remark']}")
-    if not doc.get("osm3s", {}).get("timestamp_osm_base"):
-        raise RuntimeError("Overpass response has no timestamp_osm_base")
+        remark = doc["remark"]
+        raise OverpassError(f"Overpass error: {remark[:500] if isinstance(remark, str) else '(not text)'}")
+    osm3s = doc.get("osm3s")
+    base = osm3s.get("timestamp_osm_base") if isinstance(osm3s, dict) else None
+    if not base:
+        raise OverpassError("Overpass response has no timestamp_osm_base")
+    # It becomes the OSM source version in every manifest (schema "text").
+    if not isinstance(base, str) or len(base) > 64 or not base.isprintable():
+        raise OverpassError("Overpass response has an invalid timestamp_osm_base")
     return doc
