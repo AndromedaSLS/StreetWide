@@ -11,7 +11,8 @@ better.
 > **Status: pre-alpha.** We are building the first walkable slice: about
 > 1 km² of Zurich's old town, built only from open data (swisstopo and
 > OpenStreetMap). There is no ML, networking or economy yet. Progress is
-> tracked in [docs/progress.md](docs/progress.md).
+> tracked in [docs/progress.md](docs/progress.md); where we are going, and
+> in which order, is in the [roadmap](docs/roadmap.md).
 
 ## Principles
 

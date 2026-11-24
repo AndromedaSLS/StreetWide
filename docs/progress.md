@@ -442,9 +442,11 @@ checkouts.
 
 - **rustup first install:** the pinned toolchain was already installed on
   this machine.
-- **Linux and macOS:** CI builds, lints and tests there (including the
-  determinism and client tests) but does not run the ingest downloads or
-  open a window.
+- **Linux and macOS:** CI builds, lints and tests every crate on Linux,
+  but does not run the ingest downloads or open a window. *(Corrected
+  2026-11-24: on Windows and macOS, CI ran only the determinism job, so
+  the client was never compiled there. A `client` job now builds and tests
+  it on both.)*
 - **The published clone:** the clone came from the local repository
   because the stage 6 commits were not pushed yet.
 
@@ -681,6 +683,30 @@ simulation are unchanged.
 - churches get house windows, because the shells have no building type;
 - the Limmat is terrain in the data and now looks paved; water needs
   data and a world-format change.
+
+### Roadmap and client CI (2026-11-24)
+
+- **[docs/roadmap.md](roadmap.md):** where StreetWide is going (AAA
+  open-world quality, at planet scale, from open data), an honest current
+  position, the size of the challenge, and milestones M0 to M7 with what
+  each opens with, needs, and exit criteria we can check.
+  - **Facts:** gathered by six research tracks with sources: a repository
+    audit, open building data, terrain, imagery, water and trees,
+    planet-scale engineering, the systems of AAA open worlds, and
+    open-source precedents.
+  - **Review:** four independent reviewers checked the draft for
+    repository accuracy, external facts and links, clarity, and strategic
+    completeness. They raised 49 issues, all addressed. The most important
+    ones:
+    - opening to contributions (M1) now comes with the baseline-refresh
+      tooling that protects them;
+    - the licence question is stated as how the published world meets the
+      ODbL, building on ADR-0001;
+    - lines that read as decisions are now options;
+    - every exit criterion is checkable.
+- **CI:** a `client` job builds and tests the client on Windows and macOS.
+  Until now it was compiled only on Linux (see the correction in stage 6).
+  CI now has 12 jobs.
 
 **Next:** ADR-0010 (hosting) is waiting for the maintainer's choice of
 provider. After it come the world repository, the merge bot, a CI workflow
