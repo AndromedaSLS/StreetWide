@@ -4,8 +4,8 @@
 //! building, which on a slope can be a whole storey or more below the
 //! street).
 //!
-//! Each terrain mesh gets a grid of its triangles once, so a lookup tests a
-//! handful of triangles.
+//! Each terrain mesh gets a grid of its triangles once (`grid`), so a
+//! lookup tests a handful of triangles.
 
 use std::collections::BTreeMap;
 use std::collections::btree_map::Entry;
@@ -16,8 +16,7 @@ use op_stream::Streamer;
 use op_world::glb::GlbMesh;
 use op_world::{ContentId, Layer};
 
-/// Grid cell size (m).
-const CELL_M: f64 = 4.0;
+use crate::grid::ColumnGrid;
 
 /// A height lookup.
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -34,65 +33,40 @@ struct Grid {
     mesh: Arc<GlbMesh>,
     /// Tile origin (region frame, m).
     origin: [f64; 3],
-    /// Local x, z of the grid's corner.
-    min: [f64; 2],
-    cols: usize,
-    rows: usize,
-    /// Per cell: (primitive, first index) of the triangles touching it.
-    cells: Vec<Vec<(u16, u32)>>,
+    /// Per triangle: its primitive and first index.
+    triangles: Vec<(u16, u32)>,
+    /// The triangles over each cell, in the tile's frame.
+    columns: ColumnGrid,
 }
 
 impl Grid {
     fn build(mesh: Arc<GlbMesh>, origin: [f64; 3]) -> Grid {
-        let prims: Vec<_> = mesh.nodes.iter().flat_map(|n| &n.primitives).collect();
-        let (mut min, mut max) = ([f64::MAX; 2], [f64::MIN; 2]);
-        for p in &prims {
-            for v in &p.positions {
-                for (k, c) in [0, 2].into_iter().enumerate() {
-                    min[k] = min[k].min(f64::from(v[c]));
-                    max[k] = max[k].max(f64::from(v[c]));
-                }
-            }
-        }
-        let cols = (((max[0] - min[0]) / CELL_M).ceil() as usize).max(1);
-        let rows = (((max[1] - min[1]) / CELL_M).ceil() as usize).max(1);
-        let mut cells = vec![Vec::new(); cols * rows];
-        let cell =
-            |v: f64, lo: f64, n: usize| (((v - lo) / CELL_M).floor().max(0.0) as usize).min(n - 1);
-        for (pi, p) in prims.iter().enumerate() {
+        let (mut triangles, mut extents) = (Vec::new(), Vec::new());
+        for (pi, p) in mesh.nodes.iter().flat_map(|n| &n.primitives).enumerate() {
             for (ti, t) in p.indices.as_chunks::<3>().0.iter().enumerate() {
-                let xs = t.iter().map(|&i| f64::from(p.positions[i as usize][0]));
-                let zs = t.iter().map(|&i| f64::from(p.positions[i as usize][2]));
-                let (x0, x1) = xs.fold((f64::MAX, f64::MIN), |(a, b), v| (a.min(v), b.max(v)));
-                let (z0, z1) = zs.fold((f64::MAX, f64::MIN), |(a, b), v| (a.min(v), b.max(v)));
-                for r in cell(z0, min[1], rows)..=cell(z1, min[1], rows) {
-                    for c in cell(x0, min[0], cols)..=cell(x1, min[0], cols) {
-                        cells[r * cols + c].push((pi as u16, (ti * 3) as u32));
-                    }
-                }
+                extents.push([0, 2].map(|k| {
+                    let v = t.map(|i| f64::from(p.positions[i as usize][k]));
+                    [v[0].min(v[1]).min(v[2]), v[0].max(v[1]).max(v[2])]
+                }));
+                triangles.push((pi as u16, (ti * 3) as u32));
             }
         }
         Grid {
+            columns: ColumnGrid::new(&extents),
             mesh,
             origin,
-            min,
-            cols,
-            rows,
-            cells,
+            triangles,
         }
     }
 
     /// The highest terrain surface at a region-frame point.
     fn height(&self, x: f64, z: f64) -> Option<f64> {
         let (lx, lz) = (x - self.origin[0], z - self.origin[2]);
-        let c = ((lx - self.min[0]) / CELL_M).floor();
-        let r = ((lz - self.min[1]) / CELL_M).floor();
-        if c < 0.0 || r < 0.0 || c as usize >= self.cols || r as usize >= self.rows {
-            return None;
-        }
+        let ids = self.columns.at(lx, lz)?;
         let prims: Vec<_> = self.mesh.nodes.iter().flat_map(|n| &n.primitives).collect();
         let mut best: Option<f64> = None;
-        for &(pi, start) in &self.cells[r as usize * self.cols + c as usize] {
+        for &id in ids {
+            let (pi, start) = self.triangles[id as usize];
             let p = prims[pi as usize];
             let s = start as usize;
             let tri = [0, 1, 2].map(|k| p.positions[p.indices[s + k] as usize].map(f64::from));

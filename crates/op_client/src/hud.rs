@@ -1,12 +1,14 @@
 //! On-screen text: data credits (always shown), status, help (F1), debug
-//! details (F3), loading and replay results; and the end of
-//! `--replay --exit-when-done` runs.
+//! details (F3), loading and replay results, and inspect mode's crosshair
+//! and panel; and the end of `--replay --exit-when-done` runs.
 
 use bevy::prelude::*;
 use bevy::render::view::screenshot::{Screenshot, save_to_disk};
+use bevy::window::{CursorGrabMode, CursorOptions, PrimaryWindow};
 
 use crate::Options;
 use crate::controls::Look;
+use crate::inspect::{self, Inspect, InspectStats, InspectSystems};
 use crate::materials::MaterialSet;
 use crate::scene::{PlayerCamera, Quality, StreamStats};
 use crate::session::{Playback, Session};
@@ -24,6 +26,21 @@ struct HelpText;
 
 #[derive(Component)]
 struct DebugText;
+
+/// One bar of inspect mode's crosshair: bright, or its dark border.
+#[derive(Component)]
+struct Crosshair {
+    bright: bool,
+}
+
+#[derive(Component)]
+struct InspectPanel;
+
+#[derive(Component)]
+struct InspectHeader;
+
+#[derive(Component)]
+struct InspectBody;
 
 /// Which panels are open.
 #[derive(Resource)]
@@ -100,7 +117,8 @@ impl Plugin for HudPlugin {
             .add_systems(
                 Update,
                 (panel_keys, update_text, update_panels, finish).chain(),
-            );
+            )
+            .add_systems(Update, update_inspect.after(InspectSystems));
     }
 }
 
@@ -177,6 +195,58 @@ fn setup(mut commands: Commands, session: Res<Session>, mut fonts: ResMut<Assets
         },
         DebugText,
     ));
+    // Inspect mode: a crosshair at the centre of the screen, where the
+    // camera's ray goes, with a dark border so it shows on bright walls.
+    for (bright, grow) in [(false, 2.0), (true, 0.0)] {
+        for (w, h) in [(14.0 + grow, 2.0 + grow), (2.0 + grow, 14.0 + grow)] {
+            commands.spawn((
+                Node {
+                    position_type: PositionType::Absolute,
+                    left: Val::Percent(50.0),
+                    top: Val::Percent(50.0),
+                    width: Val::Px(w),
+                    height: Val::Px(h),
+                    margin: UiRect {
+                        left: Val::Px(-w / 2.0),
+                        top: Val::Px(-h / 2.0),
+                        ..default()
+                    },
+                    ..default()
+                },
+                BackgroundColor(if bright {
+                    Color::WHITE
+                } else {
+                    Color::srgba(0.0, 0.0, 0.0, 0.6)
+                }),
+                Visibility::Hidden,
+                Crosshair { bright },
+            ));
+        }
+    }
+    // ... and its panel, bottom left, above the credits.
+    commands
+        .spawn((
+            Node {
+                position_type: PositionType::Absolute,
+                left: Val::Px(0.0),
+                bottom: Val::Px(26.0),
+                // A definite width: with only a maximum, the box takes the
+                // height of the text laid out on one long line, and a
+                // wrapped command spills out below it.
+                width: Val::Percent(62.0),
+                padding: UiRect::all(Val::Px(8.0)),
+                flex_direction: FlexDirection::Column,
+                row_gap: Val::Px(4.0),
+                ..default()
+            },
+            BackgroundColor(Color::srgba(0.0, 0.0, 0.0, 0.55)),
+            Visibility::Hidden,
+            InspectPanel,
+        ))
+        .with_children(|panel| {
+            panel.spawn((Text::new(""), font.style(16.0), InspectHeader));
+            panel.spawn((Text::new(""), font.style(14.0), InspectBody));
+        });
     commands.insert_resource(font);
 }
 
@@ -210,6 +280,9 @@ fn help_text(session: &Session, travel: &Travel) -> String {
     }
     lines.push("VIEW    T, Shift+T: time of day ±30 min · F2: detailed or plain look".into());
     lines.push("        F4: graphics high or fast · F3: details · F1: hide this help".into());
+    lines.push("INSPECT I: what the crosshair is on, who made it, its licence;".into());
+    lines.push("        amber: an improvable building · blue: contributed;".into());
+    lines.push("        click: print it, with the facade tool's command".into());
     // OpenStreetMap data (streets, water) comes with its licence and where
     // to read it (ADR-0014).
     let attribution = &session.streamer().index().world().attribution;
@@ -236,6 +309,7 @@ fn update_panels(
     quality: Res<Quality>,
     set: Res<MaterialSet>,
     stats: Res<StreamStats>,
+    (inspect, pick): (Res<Inspect>, Res<InspectStats>),
     camera: Single<&Transform, With<PlayerCamera>>,
     mut help: Single<(&mut Text, &mut Visibility), (With<HelpText>, Without<DebugText>)>,
     mut debug: Single<(&mut Text, &mut Visibility), (With<DebugText>, Without<HelpText>)>,
@@ -273,7 +347,7 @@ fn update_panels(
         View::Map { height, .. } => format!("map, {height:.0} m up"),
     };
     let d = clock.local;
-    let lines = [
+    let mut lines = vec![
         format!("{:.0} fps ({:.1} ms)", *fps, 1000.0 / *fps),
         format!("camera {lon:.6}, {lat:.6}, {h:.1} m"),
         format!(
@@ -309,6 +383,16 @@ fn update_panels(
             if set.detailed_on { "detailed" } else { "plain" }
         ),
     ];
+    if inspect.on {
+        let p = pick.pick;
+        let away = pick
+            .distance
+            .map_or("nothing hit".into(), |d| format!("{d:.1} m away"));
+        lines.push(format!(
+            "inspect pick {:.0} µs, {away} · searched {} of {} assets, {} triangles · {} grids built",
+            pick.micros, p.assets, pick.shown, p.triangles, p.grids_built
+        ));
+    }
     debug.0.0 = font.show(&lines.join("\n"));
 }
 
@@ -362,6 +446,60 @@ fn update_text(
             _ => String::new(),
         }
     });
+}
+
+/// Inspect mode's crosshair and panel. Text is set only when it changes.
+#[allow(clippy::type_complexity)]
+fn update_inspect(
+    inspect: Res<Inspect>,
+    font: Res<UiFont>,
+    cursor: Single<&CursorOptions, With<PrimaryWindow>>,
+    mut panel: Single<&mut Visibility, (With<InspectPanel>, Without<Crosshair>)>,
+    header: Single<(&mut Text, &mut TextColor), (With<InspectHeader>, Without<InspectBody>)>,
+    mut body: Single<&mut Text, (With<InspectBody>, Without<InspectHeader>)>,
+    mut bars: Query<(&Crosshair, &mut Visibility, &mut BackgroundColor), Without<InspectPanel>>,
+) {
+    let shown = |on: bool| {
+        if on {
+            Visibility::Inherited
+        } else {
+            Visibility::Hidden
+        }
+    };
+    panel.set_if_neq(shown(inspect.on));
+    let selected = inspect.selected();
+    let color = selected.map_or(Color::WHITE, |s| s.description.class.color());
+    for (bar, mut visibility, mut background) in &mut bars {
+        visibility.set_if_neq(shown(inspect.on && !inspect.paused));
+        if bar.bright {
+            background.set_if_neq(BackgroundColor(color));
+        }
+    }
+    if !inspect.on {
+        return;
+    }
+    let captured = cursor.grab_mode != CursorGrabMode::None;
+    let (head, text) = match selected {
+        _ if inspect.paused => inspect::paused_text(),
+        None => inspect::nothing_text(),
+        Some(s) => (
+            s.panel.0.clone(),
+            format!(
+                "{}\n{}",
+                s.panel.1,
+                inspect::footer(inspect.printed(), captured)
+            ),
+        ),
+    };
+    let (head, text) = (font.show(&head), font.show(&text));
+    let (mut header_text, mut header_color) = header.into_inner();
+    if header_text.0 != head {
+        header_text.0 = head;
+    }
+    header_color.set_if_neq(TextColor(color));
+    if body.0 != text {
+        body.0 = text;
+    }
 }
 
 /// With `--exit-when-done`: once a replay has finished, take the optional
@@ -461,6 +599,14 @@ mod tests {
         };
         let text = help_text(&session, &travel);
         assert!(text.contains("© OpenStreetMap contributors"), "{text}");
+        // Inspect mode and its colours.
+        assert!(
+            text.contains("INSPECT I: what the crosshair is on, who made it")
+                && text.contains("amber: an improvable building")
+                && text.contains("blue: contributed")
+                && text.contains("click: print it"),
+            "{text}"
+        );
         assert!(
             text.contains("(ODbL)") && text.contains("openstreetmap.org/copyright"),
             "{text}"

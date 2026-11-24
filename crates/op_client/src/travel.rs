@@ -76,6 +76,9 @@ pub struct Trip {
     pub landing: Landing,
     /// Heading on arrival (radians, clockwise from north).
     pub yaw: f32,
+    /// Pitch on arrival (radians, up positive): level, but for the start
+    /// trip with `--pitch`.
+    pub pitch: f32,
     pub waited: f32,
     /// Keep flying or the map on arrival (the start trip with `--view`),
     /// instead of walking.
@@ -450,6 +453,7 @@ fn init_travel(mut commands: Commands, options: Res<Options>, mut session: ResMu
                 z: p[2],
                 landing: Landing::OpenGround,
                 yaw: yaw.to_radians() as f32,
+                pitch: start_pitch(&options),
                 waited: 0.0,
                 keep_view: options.view.is_some(),
             });
@@ -458,10 +462,31 @@ fn init_travel(mut commands: Commands, options: Res<Options>, mut session: ResMu
     commands.insert_resource(travel);
 }
 
-fn letter(keys: &ButtonInput<Key>, c: char) -> bool {
-    [c.to_ascii_lowercase(), c.to_ascii_uppercase()]
-        .iter()
-        .any(|l| keys.just_pressed(Key::Character(l.to_string().into())))
+/// The pitch to start with (radians): `--pitch`, else level.
+pub fn start_pitch(options: &Options) -> f32 {
+    options.pitch.map_or(0.0, |deg| {
+        crate::controls::clamp_pitch((deg as f32).to_radians())
+    })
+}
+
+/// Whether the key with letter `c` was just pressed, in either case. Letter
+/// shortcuts use the letter printed on the key (the logical key), so they
+/// follow the keyboard layout.
+pub(crate) fn letter(keys: &ButtonInput<Key>, c: char) -> bool {
+    keys.get_just_pressed().any(|key| match key {
+        Key::Character(s) => {
+            let mut chars = s.chars();
+            matches!((chars.next(), chars.next()), (Some(typed), None) if same_letter(typed, c))
+        }
+        _ => false,
+    })
+}
+
+/// Whether `typed` is the ASCII letter `c`, in either case. Turkish and
+/// Azerbaijani keyboards have a dotless I (ı, capital I) and a dotted one
+/// (i, capital İ): either key is I, unshifted or not.
+fn same_letter(typed: char, c: char) -> bool {
+    typed.eq_ignore_ascii_case(&c) || (c.eq_ignore_ascii_case(&'i') && matches!(typed, 'ı' | 'İ'))
 }
 
 const DIGITS: [(KeyCode, KeyCode); 9] = [
@@ -549,6 +574,7 @@ fn travel_keys(
             z: r[2],
             landing: Landing::Below(r[1]),
             yaw: look.yaw,
+            pitch: 0.0,
             waited: 0.0,
             keep_view: false,
         });
@@ -567,6 +593,7 @@ fn travel_keys(
             z: r[2],
             landing: Landing::OpenGround,
             yaw: look.yaw,
+            pitch: 0.0,
             waited: 0.0,
             keep_view: false,
         });
@@ -582,6 +609,7 @@ fn travel_keys(
                 z: r[2],
                 landing: Landing::OpenGround,
                 yaw: (p.yaw_deg as f32).to_radians(),
+                pitch: 0.0,
                 waited: 0.0,
                 keep_view: false,
             });
@@ -656,7 +684,7 @@ fn resolve_trip(
                 yaw: yaw_to_turn16(trip.yaw),
             });
             look.yaw = trip.yaw;
-            look.pitch = 0.0;
+            look.pitch = trip.pitch;
             let feet = session.curr_feet;
             travel.view = match travel.view {
                 View::Fly { .. } if trip.keep_view => View::Fly {
@@ -697,6 +725,45 @@ mod tests {
 
     fn repo() -> PathBuf {
         PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../..")
+    }
+
+    /// Letter shortcuts (T, V, M, I) follow the letter on the key, in
+    /// either case (Shift, Caps Lock), whatever the keyboard layout: on a
+    /// Turkish keyboard, I is ı unshifted, and the İ key gives i and İ.
+    #[test]
+    fn letters_match_either_case() {
+        for pressed in ["I", "i", "ı", "İ"] {
+            let mut keys = ButtonInput::<Key>::default();
+            keys.press(Key::Character(pressed.into()));
+            assert!(letter(&keys, 'i') && letter(&keys, 'I'), "{pressed}");
+            assert!(!letter(&keys, 'm') && !letter(&keys, 't'), "{pressed}");
+            keys.clear();
+            assert!(!letter(&keys, 'i'), "only when just pressed");
+        }
+        for pressed in ["M", "m"] {
+            let mut keys = ButtonInput::<Key>::default();
+            keys.press(Key::Character(pressed.into()));
+            assert!(letter(&keys, 'm') && !letter(&keys, 'i'), "{pressed}");
+        }
+        // Not a letter key, nor two letters.
+        for other in [Key::Character("im".into()), Key::Enter] {
+            let mut keys = ButtonInput::<Key>::default();
+            keys.press(other.clone());
+            assert!(!letter(&keys, 'i'), "{other:?}");
+        }
+    }
+
+    /// `--pitch` starts looking down (or up), short of straight down.
+    #[test]
+    fn start_pitch_follows_the_option() {
+        let with = |pitch| Options {
+            pitch,
+            ..Options::default()
+        };
+        assert_eq!(start_pitch(&with(None)), 0.0);
+        assert!((start_pitch(&with(Some(-30.0))) + 30f32.to_radians()).abs() < 1e-6);
+        let down = start_pitch(&with(Some(-90.0)));
+        assert!(down > -std::f32::consts::FRAC_PI_2 && down < -1.5, "{down}");
     }
 
     #[test]

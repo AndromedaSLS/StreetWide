@@ -898,3 +898,61 @@ section 8 no longer point at branches.
 **For local worlds:** `main` now reads worlds with water. A
 `zurich-altstadt` world built before water still opens; walks recorded in
 it check against that old world, not a rebuilt one.
+
+### Client: inspect mode (2026-11-24, roadmap M1, newcomers)
+
+The client now shows what you are looking at and whether you can improve
+it. Press I, or start with `--inspect`:
+- **What it shows:** a crosshair, and what it points at is highlighted as a
+  whole: a building (shell and facade together), or one asset (a tile's
+  terrain, its streets and paths, its water, or a bridge deck).
+  - Amber: a building with no contribution yet, so it is improvable.
+  - Blue: a building or asset with a contribution.
+- **The panel** names the feature and tile, baseline or contribution and
+  by whom, and the licence and credits. Then it says what to do next:
+  - for a building, the facade guide and the exact command that exports
+    its shell (step 1 of the guide), quoted for PowerShell or Git Bash;
+  - for streets, bridges and water, "fix it in OpenStreetMap", with the
+    way or relation link;
+  - for terrain, that it needs evidence and has no tool yet.
+- **A click** (with the mouse captured) prints the same to the terminal,
+  with the command on its own line.
+- **Where it works:** in Walk and Fly views and during replays; it pauses
+  on the map, where the click travels.
+- **Baseline or contribution:** read from the manifest the way the gate
+  reads it. A `StreetWide contributions` source makes a contribution (G5);
+  otherwise generator `streetwide-ingest` means the baseline.
+- **Picking:** the client's own ray test against the meshes it draws
+  (Bevy's mesh picking cannot see them once they are on the GPU). With the
+  whole district loaded (1,491 assets, 1.08 million triangles), a pick
+  takes 20 to 30 µs (median) and at most 0.35 ms. It runs only when the
+  camera or the scene changes. The grid code that heights, water and
+  picking share is now one module.
+- **Also:** `--pitch <deg>` sets where the camera looks at start (used for
+  scripted screenshots), `/contrib/` is ignored by Git (where the printed
+  command writes), and the README and the facade guide describe the key.
+- **Nothing in the simulation changed.** Inspect only reads; the sample
+  replay still matches every checkpoint, also when played with `--inspect`.
+
+**Reviews:** three reviews (correctness, architecture, UX and docs) found
+14 minor issues, all fixed. The final check found the panel's box one or
+two lines too short when the command wraps; it now has a definite width.
+Screenshots were taken of every case (district buildings, bridge, street,
+water, terrain, the map, a replay, the sample facade merged into a copy of
+the fixture world).
+
+**Checks:** `cargo fmt --check`; `cargo clippy --workspace --all-targets
+-- -D warnings`; `cargo test --workspace` (155 passed, 1 ignored: the
+district pick benchmark); `op_replay check` on the sample replay; pytest;
+the dependency check. The printed commands were run as printed in
+PowerShell and Git Bash.
+
+**For the maintainer:**
+- **Buildings outlined from OpenStreetMap** (10 in the district) are amber
+  and get the command, with a note to model the facade from your own
+  observations and use the ODbL shell only to place it (never
+  `--derived-from-shell`). The alternative is a link to OpenStreetMap only.
+  This touches ADR-0019.
+- **A manifest that is both** (generator `streetwide-ingest` and a
+  contributions source) shows as a contribution. The gate does not refuse
+  it; the baseline refresh design treats it as a conflict.

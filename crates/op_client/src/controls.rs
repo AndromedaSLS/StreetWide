@@ -16,6 +16,7 @@ use bevy::window::{CursorGrabMode, CursorOptions, PrimaryWindow};
 use op_kernel::PlayerInput;
 use op_kernel::input::{PITCH_MAX, buttons};
 
+use crate::Options;
 use crate::session::{LatchedInput, Session};
 use crate::travel::{Travel, View};
 
@@ -38,6 +39,11 @@ pub fn turn16_to_yaw(t: u16) -> f32 {
     f32::from(t) / 65_536.0 * TAU
 }
 
+/// Looking up or down stops just short of straight up or down.
+pub fn clamp_pitch(pitch: f32) -> f32 {
+    pitch.clamp(-FRAC_PI_2 * 0.98, FRAC_PI_2 * 0.98)
+}
+
 fn pitch_to_turn16(pitch: f32) -> i16 {
     ((pitch / TAU * 65_536.0).round() as i32).clamp(-i32::from(PITCH_MAX), i32::from(PITCH_MAX))
         as i16
@@ -53,8 +59,9 @@ impl Plugin for ControlsPlugin {
     }
 }
 
-fn init_look(session: Res<Session>, mut look: ResMut<Look>) {
+fn init_look(session: Res<Session>, options: Res<Options>, mut look: ResMut<Look>) {
     look.yaw = turn16_to_yaw(session.spawn_yaw());
+    look.pitch = crate::travel::start_pitch(&options);
 }
 
 fn grab_cursor(
@@ -86,8 +93,7 @@ fn look_and_move(
     if travel.view != View::Walk {
         if captured {
             look.yaw = (look.yaw + motion.delta.x * MOUSE_SENSITIVITY).rem_euclid(TAU);
-            look.pitch = (look.pitch - motion.delta.y * MOUSE_SENSITIVITY)
-                .clamp(-FRAC_PI_2 * 0.98, FRAC_PI_2 * 0.98);
+            look.pitch = clamp_pitch(look.pitch - motion.delta.y * MOUSE_SENSITIVITY);
         }
         // The player waits where it is.
         latched.input = PlayerInput {
@@ -100,8 +106,7 @@ fn look_and_move(
     }
     if captured {
         look.yaw = (look.yaw + motion.delta.x * MOUSE_SENSITIVITY).rem_euclid(TAU);
-        look.pitch = (look.pitch - motion.delta.y * MOUSE_SENSITIVITY)
-            .clamp(-FRAC_PI_2 * 0.98, FRAC_PI_2 * 0.98);
+        look.pitch = clamp_pitch(look.pitch - motion.delta.y * MOUSE_SENSITIVITY);
     }
     let axis = |plus: KeyCode, minus: KeyCode| -> i8 {
         match (keys.pressed(plus), keys.pressed(minus)) {

@@ -7,8 +7,12 @@
 //! the simulation collides. The one exception is flat terrain under water,
 //! drawn just below the water so the water shows (see `water`); the
 //! simulation still collides with the terrain as it is.
+//!
+//! Every mesh shown is also registered, as drawn, for inspect mode's
+//! picking (`pick`).
 
 use std::collections::{BTreeMap, BTreeSet};
+use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use bevy::anti_alias::taa::TemporalAntiAliasing;
@@ -18,11 +22,14 @@ use bevy::light::{AtmosphereEnvironmentMapLight, NotShadowCaster, ShadowFilterin
 use bevy::pbr::{AtmosphereSettings, ScreenSpaceAmbientOcclusion};
 use bevy::post_process::bloom::Bloom;
 use bevy::prelude::*;
-use op_world::{ContentId, Layer};
+use op_kernel::AssetKey;
+use op_world::glb::GlbMesh;
+use op_world::{ContentId, Layer, TileKey};
 
 use crate::controls::{Look, turn16_to_yaw};
 use crate::heights::{Height, HeightIndex};
 use crate::materials::{self, AssetLook, MaterialSet, Surface};
+use crate::pick::{NEAR_M, PickEntry, PickIndex};
 use crate::session::{EYE_HEIGHT, Session};
 use crate::travel::{Travel, View};
 use crate::water::{self, WaterSurface};
@@ -37,13 +44,38 @@ const SPAWN_BUDGET: Duration = Duration::from_millis(6);
 #[derive(Component)]
 pub struct PlayerCamera;
 
-/// (tile x, tile y, layer, feature id): one placed asset.
-type AssetId = (u32, u32, String, String);
+/// The camera's projection: nothing nearer than [`NEAR_M`] or further than
+/// 8 km is drawn.
+pub fn projection() -> Projection {
+    Projection::Perspective(PerspectiveProjection {
+        fov: 70f32.to_radians(),
+        near: NEAR_M,
+        far: 8_000.0,
+        ..default()
+    })
+}
+
+/// The scene's key of an asset, as the simulation keys its colliders: its
+/// tile, layer and feature id.
+pub fn asset_key(tile: TileKey, layer: Layer, feature_id: &str) -> AssetKey {
+    AssetKey {
+        tile: [tile.x, tile.y],
+        layer: layer.as_str().to_string(),
+        feature_id: feature_id.to_string(),
+    }
+}
 
 /// Assets currently in the scene.
 #[derive(Resource, Default)]
-struct Shown {
-    entities: BTreeMap<AssetId, Vec<Entity>>,
+pub struct Shown {
+    entities: BTreeMap<AssetKey, Vec<Entity>>,
+}
+
+impl Shown {
+    /// The parts drawn for an asset (none if it is not shown).
+    pub fn entities(&self, key: &AssetKey) -> &[Entity] {
+        self.entities.get(key).map_or(&[], Vec::as_slice)
+    }
 }
 
 /// Buildings that have a contributed facade: their walls get no
@@ -54,7 +86,10 @@ struct Facaded(BTreeSet<String>);
 /// An asset in range that is not in the scene yet.
 struct Wanted {
     distance: f32,
-    id: AssetId,
+    id: AssetKey,
+    /// Index into the world's tiles.
+    tile: usize,
+    layer: Layer,
     content_id: ContentId,
     offset: Vec3,
     origin_m: [f64; 3],
@@ -78,11 +113,17 @@ pub struct Quality {
     pub high: bool,
 }
 
+/// The scene systems: the camera has followed the player, and the meshes
+/// in range are shown, once they have run.
+#[derive(SystemSet, Debug, Clone, PartialEq, Eq, Hash)]
+pub struct SceneSystems;
+
 pub struct ScenePlugin;
 
 impl Plugin for ScenePlugin {
     fn build(&self, app: &mut App) {
         app.init_resource::<Shown>()
+            .init_resource::<PickIndex>()
             .init_resource::<StreamStats>()
             .init_resource::<HeightIndex>()
             .insert_resource(Quality { high: true })
@@ -98,6 +139,7 @@ impl Plugin for ScenePlugin {
                     stream_meshes,
                 )
                     .chain()
+                    .in_set(SceneSystems)
                     .after(crate::travel::TravelSystems),
             );
     }
@@ -106,12 +148,7 @@ impl Plugin for ScenePlugin {
 fn setup_camera(mut commands: Commands) {
     commands.spawn((
         Camera3d::default(),
-        Projection::Perspective(PerspectiveProjection {
-            fov: 70f32.to_radians(),
-            near: 0.1,
-            far: 8_000.0,
-            ..default()
-        }),
+        projection(),
         AtmosphereSettings::default(),
         AtmosphereEnvironmentMapLight::default(),
         Exposure { ev100: 13.5 },
@@ -245,6 +282,7 @@ fn stream_meshes(
     camera: Single<&Transform, With<PlayerCamera>>,
     mut meshes: ResMut<Assets<Mesh>>,
     mut shown: ResMut<Shown>,
+    mut pick: ResMut<PickIndex>,
     mut stats: ResMut<StreamStats>,
     mut heights: ResMut<HeightIndex>,
 ) {
@@ -252,7 +290,7 @@ fn stream_meshes(
     let eye = camera.translation;
     let mut wanted: Vec<Wanted> = Vec::new();
     let mut keep = BTreeSet::new();
-    for tile in streamer.index().tiles() {
+    for (t, tile) in streamer.index().tiles().iter().enumerate() {
         let offset = session.offset_m(tile.origin_mm);
         let origin_m = tile.origin_mm.map(|v| v as f64 / 1000.0);
         // A tile has at most one water asset (RFC 0003).
@@ -269,12 +307,7 @@ fn stream_meshes(
             let dx = (lo.x - eye.x).max(eye.x - hi.x).max(0.0);
             let dz = (lo.z - eye.z).max(eye.z - hi.z).max(0.0);
             let d = (dx * dx + dz * dz).sqrt();
-            let key = (
-                tile.key.x,
-                tile.key.y,
-                a.layer.as_str().to_string(),
-                a.feature_id.clone(),
-            );
+            let key = asset_key(tile.key, a.layer, &a.feature_id);
             if d < UNLOAD_RADIUS_M {
                 keep.insert(key.clone());
             }
@@ -296,6 +329,8 @@ fn stream_meshes(
                 wanted.push(Wanted {
                     distance: d,
                     id: key,
+                    tile: t,
+                    layer: a.layer,
                     content_id: a.content_id,
                     offset,
                     origin_m,
@@ -317,6 +352,7 @@ fn stream_meshes(
         for e in shown.entities.remove(&k).unwrap_or_default() {
             commands.entity(e).despawn();
         }
+        pick.remove(&k);
     }
     // Load and show the nearest missing assets first, within the budget.
     wanted.sort_by(|a, b| a.distance.total_cmp(&b.distance));
@@ -353,10 +389,14 @@ fn stream_meshes(
             Height::At(y) => Some(y),
             _ => None,
         };
-        let sunk = tile_water.map(|surface| water::sink_terrain(&glb, &surface));
-        let mesh = sunk.as_ref().unwrap_or(&*glb);
+        // The mesh as drawn, which inspect mode picks from (`pick`): the
+        // stream cache's own, or terrain drawn lower under water.
+        let drawn: Arc<GlbMesh> = match &tile_water {
+            Some(surface) => Arc::new(water::sink_terrain(&glb, surface)),
+            None => glb,
+        };
         let mut entities = Vec::new();
-        for prim in mesh.nodes.iter().flat_map(|n| &n.primitives) {
+        for prim in drawn.nodes.iter().flat_map(|n| &n.primitives) {
             for (surface, part) in materials::parts(prim, w.origin_m, &w.look, &mut ground) {
                 let looks = set.looks(surface, prim.material, &w.look);
                 let mut entity = commands.spawn((
@@ -373,7 +413,10 @@ fn stream_meshes(
                 entities.push(entity.id());
             }
         }
-        shown.entities.insert(w.id, entities);
+        shown.entities.insert(w.id.clone(), entities);
+        if let Some(entry) = PickEntry::new(w.tile, w.layer, w.offset, drawn) {
+            pick.insert(w.id, entry);
+        }
     }
     stats.shown = shown.entities.len();
 }
