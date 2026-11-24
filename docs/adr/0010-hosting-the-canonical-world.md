@@ -98,3 +98,7 @@ directories, so tooling does not depend on this decision.
   verifies every object it downloads against its content id.
 - **Mirrors:** anyone can mirror the world by copying the bucket and the
   log repository; the hash chain proves the mirror complete and unchanged.
+- **Source archive:** [ADR-0015](0015-zurich-trees-and-lights.md)
+  proposes a `sources/` area in the same bucket for raw source answers
+  that a published baseline uses, keyed by SHA-256. It is not part of any
+  world store, and no world id covers it.

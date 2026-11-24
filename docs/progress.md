@@ -829,3 +829,53 @@ comment, as RFC 0001 and RFC 0002 were. The simulation is unchanged.
 - Walks recorded in a local zurich-altstadt world built before water no
   longer match the rebuilt one; check them against a copy of the old
   world.
+
+### M2 decisions drafted (2026-11-24, branch m2-decisions, drafts only)
+
+A design for M2's trees and street lights found decisions that must come
+first: how the published world meets the ODbL, which licences new sources
+may use, where the lighting data's objects stand, how night is exposed,
+and what the client may cost. They are drafted as options, each with a
+recommendation. **Nothing is decided;** the maintainer decides each one.
+
+| Draft | Question | Recommended |
+|---|---|---|
+| [RFC 0004](../rfcs/0004-point-features.md) (*Draft*) | how the world format stores trees and lights | `vegetation` and `street_objects` layers of canonical-JSON points documents, one per tile and source; collider `none`; closed to contributions; gate 0.1.2; the contract version chosen once with RFC 0003; the pedestrian ADR decided first |
+| [ADR-0015](adr/0015-zurich-trees-and-lights.md) | where Zurich's trees and lights come from | the city's CC0 tree register and ewz's lighting data; no OSM trees or lamps anywhere in Switzerland; anchors on swisstopo terrain only; a status allowlist for private ground |
+| [ADR-0016](adr/0016-swisssurface3d-heights.md) | tree heights | swissSURFACE3D minus swissALTI3D within 1.5 m of the trunk, measured from the anchor; the measured height or null, never a formula |
+| [ADR-0017](adr/0017-licence-allowlist.md) | which licences world data and client assets may use | a machine-readable allowlist enforced by the gate, validation and the ingest; NC, ND and redistribution-barred terms refused |
+| [ADR-0018](adr/0018-performance-tier.md) | the performance tier | an 8 GB RTX 3060 / RX 6600-class card at 1080p, 99th percentile frame time at most 16.7 ms on high, a `--benchmark` route of three places, and a lower night exposure |
+| [ADR-0019](adr/0019-odbl-and-the-published-world.md) | how the published world meets the ODbL | offer the whole world under the ODbL, each manifest keeping its own sources' licences; five questions for the OSMF Licensing Working Group |
+
+- **Facts** gathered on 2026-11-24: the city's WFS services (fetched and
+  counted per LV95 kilometre square), swissSURFACE3D heights measured at
+  every register tree in the district, the publishers' licence pages, the
+  OSMF guidelines, the Steam hardware survey, and the client's code.
+- **Review:** two independent reviewers, one for consistency and accuracy
+  and one for process and governance, raised 31 findings; 30 were fixed
+  and 1 (length) partly. The most important: the drafts left render-time
+  uses of OSM to ADR-0019, which did not answer them (now its option B
+  reading and LWG question 5); the source archive had been put in the
+  world store (now a separate area, RFC 0001 unchanged); changing the
+  allowlist would change a merge criterion without an RFC (now two
+  drafted ways, delegation recommended); and the reference card had no
+  recommendation.
+- **Checked by hand** against the code and the documents before commit:
+  what the simulation hashes per collider, the serde name the new layer
+  would get, the fixture tile, the exposure floor, the shadow cascades
+  and cut-off, the STAC item-id pattern, the help panel under
+  `--screenshot`, and every cited section and comment period. One figure
+  in ADR-0015 was corrected (the bridge rule counts 200 bridge lights,
+  not 191). Every relative link and anchor resolves.
+- **Also changed:** the ADR and RFC indexes, the roadmap's section 8, a
+  pointer in RFC 0003 to the joint contract-version decision, and a note
+  in ADR-0010 about the proposed source archive.
+- **No code, schema, fixture or replay changes.**
+
+**Waiting for the maintainer, in the recommended order:**
+1. ADR-0019, which M1 opens with, and its question to the LWG.
+2. ADR-0017, with a short RFC for the G4 and validation rules it needs.
+3. The pedestrian ADR (to be drafted), before RFC 0004.
+4. RFC 0004 with RFC 0003 (one contract-version choice), then ADR-0015
+   and ADR-0016.
+5. ADR-0018, including who buys or lends the reference card.
