@@ -6,7 +6,7 @@
 - **Contract version affected:** world format 0.1, amended in place or
   moved to 0.2.0, in one decision with RFC 0003 (see "Compatibility and
   migration"); contribution contract 0.1, amended in place; gate
-  0.1.1 → 0.1.2
+  0.1.2 → 0.1.3
 
 ## Summary
 
@@ -318,7 +318,7 @@ inside a trunk unless the client checks.
 | `street_objects` | **no: fix it in the source** | `none` | From open data (ADR-0015 for Zurich). The next baseline refresh brings fixes in. |
 | `vegetation` | **no: fix it in the source** | `none` | Same. |
 
-The gate's version becomes 0.1.2:
+The gate's version becomes 0.1.3:
 - **G3:** a contributed change fails, with that advice. A baseline refresh
   authored by `streetwide:ingest` gets `review`.
 - **G7:** points do not count towards triangle budgets. New: at most 5,000
@@ -544,7 +544,7 @@ must be recorded again, with unchanged checkpoints.
 **Fixtures:** `fixtures/world` gains two assets in tile 17/68646/45903
 (33 trees and up to 136 light points), a tile index and a world id;
 `sample.oprep` is recorded again (its header only); the facade sample is
-regenerated (gate 0.1.2); `fixtures/format` gains a golden points asset.
+regenerated (gate 0.1.3); `fixtures/format` gains a golden points asset.
 ADR-0015 section 4 drafts how the raw source answers stay available.
 
 **Refreshes.** Each refresh of a point source is a new world id, so the

@@ -4,6 +4,9 @@ UTF-8, no whitespace, keys sorted by byte value, integers only within
 +/-(2^53 - 1), no control characters, and only the escapes for the double
 quote and the backslash. `loads` rejects any document whose bytes differ
 from `dumps` of its value.
+
+`loads` reads untrusted bytes: whatever it is given, it returns a value or
+raises CanonicalError.
 """
 
 from __future__ import annotations
@@ -13,6 +16,12 @@ import re
 from typing import Any
 
 MAX_SAFE_INTEGER = 2**53 - 1
+MAX_DEPTH = 127
+"""Deepest nesting of arrays and objects in a document. It is the limit of
+serde_json's parser (its recursion limit of 128), so `op_world` and this
+module accept exactly the same documents, on every platform."""
+# The longest integer token in range: "-9007199254740991".
+_MAX_INT_CHARS = len(str(-MAX_SAFE_INTEGER))
 _KEY = re.compile(r"[a-z][a-z0-9_]*")
 _BACKSLASH = chr(92)
 _QUOTE = chr(34)
@@ -37,13 +46,43 @@ def loads(data: bytes) -> Any:
             text,
             object_pairs_hook=_reject_duplicates,
             parse_float=_reject_float,
+            parse_int=_parse_int,
             parse_constant=_reject_float,
         )
-    except (UnicodeDecodeError, json.JSONDecodeError) as e:
+    except CanonicalError:
+        raise
+    except ValueError as e:  # invalid UTF-8 or JSON (JSONDecodeError is a ValueError)
         raise CanonicalError(f"invalid JSON: {e}") from e
+    except RecursionError as e:  # nested far deeper than MAX_DEPTH
+        raise CanonicalError(f"arrays and objects nested deeper than {MAX_DEPTH} levels") from e
+    # Checked before `dumps`, which recurses once per level.
+    if deeper_than(value, MAX_DEPTH):
+        raise CanonicalError(f"arrays and objects nested deeper than {MAX_DEPTH} levels")
     if dumps(value) != data:
         raise CanonicalError("bytes differ from the canonical form")
     return value
+
+
+def _parse_int(token: str) -> int:
+    # Longer tokens are out of range anyway; refusing them here keeps int()
+    # from spending quadratic time on (or refusing) thousands of digits.
+    if len(token) > _MAX_INT_CHARS:
+        raise CanonicalError(f"integer {token[:24]}... is outside +/-(2^53 - 1)")
+    return int(token)
+
+
+def deeper_than(value: Any, limit: int) -> bool:
+    """Whether arrays and objects nest more than `limit` levels deep."""
+    stack = [(value, 1)]
+    while stack:
+        v, depth = stack.pop()
+        children = v.values() if isinstance(v, dict) else v if isinstance(v, list) else None
+        if children is None:
+            continue
+        if depth > limit:
+            return True
+        stack.extend((c, depth + 1) for c in children if isinstance(c, (dict, list)))
+    return False
 
 
 def _reject_duplicates(pairs: list[tuple[str, Any]]) -> dict[str, Any]:

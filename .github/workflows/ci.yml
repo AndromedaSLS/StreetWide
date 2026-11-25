@@ -168,6 +168,19 @@ jobs:
           python-version: "3.13"
       - run: python -m pip install -r tools/requirements.txt
       - run: python -m pytest
+      - name: Stacks of a hung fuzz test
+        # A fuzz test that stops making progress ends pytest and leaves
+        # every thread's stack in a file of its own, since pytest drops what
+        # it captured (tools/worldfmt/tests/fuzzing.py, HANG_S).
+        if: failure()
+        run: |
+          dir=$(python3 -c "import tempfile; print(tempfile.gettempdir())")
+          for f in "$dir"/streetwide-fuzz-hang-*.txt; do
+            if [ -f "$f" ]; then
+              echo "== $f"
+              cat "$f"
+            fi
+          done
 
   gltf:
     name: glTF validator (Khronos)

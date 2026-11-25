@@ -3,9 +3,12 @@
 
 use crate::cjson::is_control;
 
-/// Non-empty, at most 4096 characters, no control characters.
+/// Longest text field, in characters.
+pub const MAX_TEXT_CHARS: usize = 4096;
+
+/// Non-empty, at most [`MAX_TEXT_CHARS`] characters, no control characters.
 pub fn is_text(s: &str) -> bool {
-    !s.is_empty() && s.chars().count() <= 4096 && !s.chars().any(is_control)
+    !s.is_empty() && s.chars().count() <= MAX_TEXT_CHARS && !s.chars().any(is_control)
 }
 
 /// `^[a-z][a-z0-9_-]*:[!-~]+$`, at most 256 characters.

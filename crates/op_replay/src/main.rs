@@ -99,7 +99,8 @@ fn parse(args: &[String]) -> Result<Args, String> {
 }
 
 fn load(path: &str) -> Result<Replay, String> {
-    let bytes = std::fs::read(path).map_err(|e| format!("{path}: {e}"))?;
+    let bytes = op_world::store::read_file(Path::new(path), op_replay::format::MAX_REPLAY_BYTES)
+        .map_err(|e| format!("{path}: {e}"))?;
     Replay::from_bytes(&bytes).map_err(|e| format!("{path}: {e}"))
 }
 

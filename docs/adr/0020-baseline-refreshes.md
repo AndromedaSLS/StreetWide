@@ -571,7 +571,7 @@ together with this ADR (section 8). The RFC stays a Draft.
 
 Each of these would change a gate rule, a merge rule or the contract,
 so none is part of the clarification. None is decided here, and the
-tool assumes none of them. They are questions 8 to 15 of
+tool assumes none of them. They are questions 9 to 16 of
 [RFC 0002's unresolved questions](../../rfcs/0002-contributions-and-merge-rules.md#unresolved-questions).
 
 - **A1. Terrain edges (Q9).** G8 would require a replaced terrain to

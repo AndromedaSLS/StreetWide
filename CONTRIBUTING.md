@@ -95,6 +95,72 @@ cargo run -p op_replay -- check fixtures/replays/sample.oprep   # determinism
 If you change a `.glb` fixture, also run the Khronos glTF validator:
 `cd tools/ci/gltf && npm ci --ignore-scripts && npm run check`.
 
+## Fuzzing
+
+`cargo test --workspace` and `pytest` include fuzz tests for every reader
+of untrusted files:
+
+- **Rust** (`crates/op_world/tests/fuzz_readers.rs`,
+  `crates/op_replay/tests/fuzz_replay.rs`): canonical JSON and every
+  document type, glb meshes, ids and tile keys, store reads, validation of
+  a whole world, the gate on contribution bundles, the world log and
+  replays.
+- **Python** (`tools/*/tests/test_fuzz_*.py`): canonical JSON, schemas,
+  store reads, the glTF importer and the facade tool, Overpass answers for
+  roads and water, STAC searches, GeoTIFF terrain, CityGML sheets and the
+  derived building cache.
+
+A reader must accept its input or return its documented error. It must
+never panic or raise anything else, hang, or take memory out of proportion
+to its input. The tests are seeded and deterministic and need no extra
+dependencies: each input follows from the seed, the test and the case
+number, so every failure reproduces.
+
+Environment variables:
+
+- `STREETWIDE_FUZZ_ITERS=n` scales every test: one that runs d cases in CI
+  runs n × d / 2000, so 40000 runs everything 20 times longer.
+- `STREETWIDE_FUZZ_SEED=n` sets the base seed, in decimal or `0x` hex.
+- Rust only:
+  - `STREETWIDE_FUZZ_HANG_SECS=s`: how long a target may make no progress
+    before it is reported as hung (default 120).
+  - `STREETWIDE_FUZZ_TRACE=1` prints each iteration before it runs, to
+    find an input that aborts the process.
+  - `STREETWIDE_FUZZ_ISOLATE=1` (or `true`, `yes`) runs each target in a
+    child process of its own; `0` (or `false`, `no`) in the test process,
+    where memory is not checked. The default is a child process wherever
+    the memory check works (Linux).
+
+When you change a reader, run a long campaign before you open the pull
+request, then again with another seed such as
+`STREETWIDE_FUZZ_SEED=0xC0FFEE`. It takes a few minutes in Rust and about
+15 in Python:
+
+```sh
+STREETWIDE_FUZZ_ITERS=40000 cargo test -p op_world --test fuzz_readers
+STREETWIDE_FUZZ_ITERS=40000 cargo test -p op_replay --test fuzz_replay
+STREETWIDE_FUZZ_ITERS=40000 .venv/bin/python -m pytest -k fuzz
+```
+
+In PowerShell, set the variable first: `$env:STREETWIDE_FUZZ_ITERS = 40000`.
+
+Keep long Rust campaigns in the default debug profile. `--release` turns
+off integer-overflow checks, so an overflow would go unnoticed. If you need
+release speed, turn them back on:
+`CARGO_PROFILE_RELEASE_OVERFLOW_CHECKS=true cargo test --release ...`.
+
+**When a test fails:**
+- **Rust:** the input is saved as
+  `target/tmp/fuzz-failures/<target>-<seed>-<iteration>.bin` and printed
+  as a byte-string literal. An input that panics is shrunk first.
+- **Python:** the message names the test, the case number and the seed. A
+  test that makes no progress for 300 s writes every thread's stack to
+  `streetwide-fuzz-hang-<test>-<pid>.txt` in the system's temporary
+  directory.
+
+Fix the reader, and keep the input as a regression test next to the fuzz
+test that found it.
+
 ## When your change alters simulation results
 
 Any change that alters a state hash (physics parameters, module order, the

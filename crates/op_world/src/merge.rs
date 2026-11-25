@@ -33,7 +33,7 @@ use crate::contrib::{
 use crate::gate;
 use crate::id::ContentId;
 use crate::manifest::AssetManifest;
-use crate::store::{ObjectKind, Store};
+use crate::store::{MAX_FILE_BYTES, ObjectKind, Store, read_file};
 use crate::{Error, Result};
 
 /// The lock file a merge holds in the world store's directory.
@@ -222,7 +222,10 @@ pub fn merge_with(
 
     // Copy the new objects in: the change set's manifests and meshes, then
     // the candidate's tile indexes; `world.json` last.
-    let change = ChangeSet::from_bytes(&std::fs::read(bundle_dir.join("change.json"))?)?;
+    let change = ChangeSet::from_bytes(
+        &read_file(&bundle_dir.join("change.json"), MAX_FILE_BYTES)
+            .map_err(|e| Error::Io(format!("change.json: {e}")))?,
+    )?;
     let bundle = Store::layered(bundle_dir, vec![world_dir.to_path_buf()]);
     for c in &change.changes {
         let Some(manifest_id) = c.manifest_id else {

@@ -240,3 +240,89 @@ exactly at its border, and needs its own ADR.
   - when swimming is designed;
   - when a national water source would replace OSM in a whole country;
   - if OSM edits break rivers often.
+
+## Open questions
+
+### 1. Bounding the repair of invalid rings
+
+The ingest repairs an invalid ring with GEOS's `make_valid` (through
+shapely). Nothing bounds that work. Its cost depends on how often the ring
+crosses or overlaps itself, more than on its length. A way has at most
+2,000 points, but a multipolygon joins its member ways into rings of any
+length, and a crafted shape is slow far below 2,000 points.
+
+**Measured** on one ring each (Windows, shapely 2.2.0, GEOS 3.14.1; memory
+is the growth of the process's peak commit):
+
+| Ring | Points | `linework` method (used now) | `structure` method |
+|---|---|---|---|
+| a 15 m square, retraced | 2,000 | 1.0 s, 0.4 GB | 1.4 s, 0.4 GB |
+| | 4,000 | 3.8 s, 1.4 GB | 5.4 s, 1.4 GB |
+| | 6,000 | 8.5 s, 3.2 GB | 12.2 s, 3.2 GB |
+| | 8,000 | 16.3 s, 7.3 GB | not run |
+| a star: each edge crosses most others | 50 | 1.1 s | not run |
+| | 100 | 10.9 s | 0.07 s |
+| | 200 | 103 s | 0.35 s |
+| | 500 | over 300 s (stopped) | 2.6 s, 0.3 GB |
+| | 2,000 | not run | 83 s, 4.4 GB |
+
+**Real data:**
+- Samples: the two water answers in the ingest's cache (75 rings) and the
+  water relations of the canton of Zurich, queried on 2026-11-24 (514
+  joined rings).
+- No ring in them needs repair.
+- The longest joined rings are Bodensee (14,540 points), Zürichsee
+  (8,091), Sihlsee (3,562), Obersee (2,543) and the Limmat (2,261). The
+  Limmat relation (1598599) has 100 member ways and 3,679 points in all.
+- A real ring with one defect added repairs fast: Bodensee with two points
+  swapped takes 0.19 s, Zürichsee with a 50 m spike 0.10 s.
+
+**Options:**
+
+- **A. A point limit for rings that need repair.** An invalid ring longer
+  than the limit counts as broken, like a ring that does not close: a
+  relation that reaches the area stops the ingest, and one outside it is
+  counted.
+  - Valid rings are not affected. No ring in the samples needs repair, so
+    no limit drops any of them. A limit of 2,000 points on all rings would
+    drop five of the canton's, the Limmat among them.
+  - Cost and length are not linked: a 2,000-point limit still lets a
+    200-point star take 103 s. Bounding the star at about a second needs a
+    limit of about 50 points, which would also break real rings with one
+    harmless defect.
+- **B. Repair in a subprocess, with a time and a memory limit.**
+  - It bounds any shape and keeps every repair that fits.
+  - Starting the process costs about 0.3 s, paid only for invalid rings.
+  - Memory limits differ by system: `setrlimit` on Linux, a job object on
+    Windows, and macOS does not enforce `RLIMIT_AS`.
+  - A time limit depends on the machine. Reaching a limit must stop the
+    ingest with an error, never drop the ring, or two machines could build
+    different worlds.
+- **C. The `structure` method of `make_valid`.**
+  - It is fast on small stars, but not bounded: 83 s and 4.4 GB for a
+    2,000-point star, 12.2 s and 3.2 GB for a retraced square of 6,000
+    points.
+  - It repairs differently. On the star it keeps the whole outline
+    (15,708 m²) where `linework` keeps alternate pieces (12,152 m²), so
+    worlds with a repaired ring could change.
+- **D. Leave it as is.** An OSM edit near an area, or a crafted cache
+  file, can stall an ingest for minutes and take gigabytes.
+- **E. Count where a ring touches itself, and repair only a ring that does
+  so little.** Before `make_valid`, count the pairs of segments that are
+  not neighbours and whose bounding boxes overlap (an STRtree), stopping at
+  a cap. Above the cap, the ring is broken, as in A.
+  - Real rings: Bodensee has the most such pairs, 503; no ring in the
+    samples has more than 1,000.
+  - Cost: 0.1 s for the Bodensee ring; crafted rings pass the cap within
+    0.08 s.
+  - Bound: under a cap of 1,000, the slowest repair measured takes 0.8 to
+    1.2 s (a 45-point star, 961 pairs, inside a 20,000-point ring).
+
+**Recommendation: E,** with a cap of 1,000 pairs, for ways and joined rings
+alike. It still repairs real rings with a few defects, such as the
+Bodensee and Zürichsee tests above, and bounds each ring at about a
+second. It is a count, not a clock, so every machine decides the same.
+The cap may have to grow with the ring for lakes larger than Bodensee. B
+stays the fallback if a GEOS version breaks that bound. The same question
+applies to OpenStreetMap building footprints, which go through
+`make_valid` too.

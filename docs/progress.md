@@ -840,7 +840,7 @@ recommendation. **Nothing is decided;** the maintainer decides each one.
 
 | Draft | Question | Recommended |
 |---|---|---|
-| [RFC 0004](../rfcs/0004-point-features.md) (*Draft*) | how the world format stores trees and lights | `vegetation` and `street_objects` layers of canonical-JSON points documents, one per tile and source; collider `none`; closed to contributions; gate 0.1.2; the contract version chosen once with RFC 0003; the pedestrian ADR decided first |
+| [RFC 0004](../rfcs/0004-point-features.md) (*Draft*) | how the world format stores trees and lights | `vegetation` and `street_objects` layers of canonical-JSON points documents, one per tile and source; collider `none`; closed to contributions; gate 0.1.3 *(drafted as 0.1.2, which reader fuzzing took)*; the contract version chosen once with RFC 0003; the pedestrian ADR decided first |
 | [ADR-0015](adr/0015-zurich-trees-and-lights.md) | where Zurich's trees and lights come from | the city's CC0 tree register and ewz's lighting data; no OSM trees or lamps anywhere in Switzerland; anchors on swisstopo terrain only; a status allowlist for private ground |
 | [ADR-0016](adr/0016-swisssurface3d-heights.md) | tree heights | swissSURFACE3D minus swissALTI3D within 1.5 m of the trunk, measured from the anchor; the measured height or null, never a formula |
 | [ADR-0017](adr/0017-licence-allowlist.md) | which licences world data and client assets may use | a machine-readable allowlist enforced by the gate, validation and the ingest; NC, ND and redistribution-barred terms refused |
@@ -957,7 +957,177 @@ PowerShell and Git Bash.
   contributions source) shows as a contribution. The gate does not refuse
   it; the baseline refresh design treats it as a conflict.
 
-### Baseline refresh tool (2026-11-24, branch refresh, ADR-0020 Proposed)
+### Reader fuzzing (2026-11-24)
+
+Roadmap M1 asks for fuzzing of the strict file readers before announcing.
+Every reader of untrusted bytes is now fuzzed in CI, and what the fuzzing
+and two adversarial reviews found is fixed. Valid input is unchanged.
+
+- **What is fuzzed:**
+  - Rust (`op_world`, `op_replay`): canonical JSON and every document
+    type, glb meshes, ids, tile keys and store paths, store reads,
+    validation of a whole world, the gate on contribution bundles, the
+    world log and replays;
+  - Python (`tools/worldfmt`, `tools/contrib`, `tools/ingest`): canonical
+    JSON, schemas, store reads, the glTF importer and the facade tool on
+    crafted worlds, Overpass answers for roads and water, OSM and water
+    parsing, STAC searches, swissALTI3D GeoTIFFs, swissBUILDINGS3D CityGML
+    and the derived building cache.
+- **How:** one small mutation fuzzer per language, seeded and
+  deterministic. Each input follows from the seed, the test and the case
+  number, so every failure reproduces.
+  - No new dependencies: stable Rust without a new crate, and Python's
+    standard library.
+  - A failing input is shrunk and kept as a regression test.
+  - Memory: on Linux, each Rust target runs alone in a child process that
+    checks what every input takes. Python measures with tracemalloc, and
+    on Linux with the process's peak memory for the readers that work in
+    GEOS.
+  - CI runs them in `cargo test --workspace` and `pytest`.
+    [CONTRIBUTING.md](../CONTRIBUTING.md#fuzzing) gives the settings and
+    how to run a long campaign.
+
+**Bugs fixed: 60**, 14 in Rust and 46 in Python:
+
+| Reader | Fixed | The most serious |
+|---|---|---|
+| Canonical JSON | 4 | Python accepted documents nested deeper than `op_world` accepts |
+| Schemas and ids | 4 | a list of 60,000 mixed items took over 30 s to validate |
+| Stores and download caches | 5 | a pipe, or a link to `/dev/zero`, in a store blocked a reader or made it read forever |
+| glb (`op_world`) | 2 | a 37 KB file made the reader copy 786 MB; a 66 MB file with one long JSON chunk took 1.1 GB |
+| glTF importer | 6 | 60 nodes sharing their children gave 2^60 paths to walk |
+| Facade tool | 6 | **path traversal:** a crafted world's feature id put the exported shell outside the output directory |
+| Validation | 1 | a mesh listed 4,000 times was read 4,000 times (16.6 s) |
+| Gate | 6 | **the G8 hang:** a contributed shell triangle 2,000 km across meant 10^12 grid cells |
+| Replays | 1 | a 349-byte file reserved 41 MB |
+| Overpass, OSM, water and bridges | 9 | GEOS took 2.5 GB on a way that retraces its outline; one bridge solve took 7.2 GB |
+| STAC | 5 | **path traversal:** a crafted asset name put a download outside the cache; a 3,000-ring footprint took 3 GB in GEOS |
+| GeoTIFF | 3 | two tiles 1,000 km apart asked for 29.1 TiB |
+| CityGML and its cache | 8 | one roof ring retraced 6,000 times kept the triangulation busy for over 40 s |
+
+Four of the 60 were mistakes in earlier fixes, caught by the reviews: G8's
+first step limit refused valid facades on dense roofs, G8 skipped
+canonical shells over the shell budget, the traversal fix renamed the
+export of some valid feature ids, and refusing links in stores also
+refused links in the download cache.
+
+- **Limits now in the Draft RFCs**, to be confirmed with them:
+  - RFC 0001 section 5: canonical JSON nests at most 127 levels, the
+    limit of serde_json, now checked explicitly by both implementations;
+  - section 6: a glb is at most 64 MiB, and its JSON chunk at most 1 MiB;
+  - section 7: readers take `world.json` and objects only as regular
+    files of at most 64 MiB, never links, devices or pipes;
+  - RFC 0002 G8: a facade over its G7 budget, or on a shell that the same
+    change set proposes over the shell budget, is `not_run`. Measuring
+    stops at 20,000,000 grid steps or 100,000,000 vertex-to-triangle
+    distances, and the facade then fails as too complex to check.
+- **Other limits**, in the code and far above real data: OSM ways of
+  2,000 nodes (OpenStreetMap's own limit), CityGML rings of 100 points and
+  buildings of 16 MiB of XML, STAC footprints of 1,000 points and 100
+  result pages, DEM mosaics of 400 million pixels, and work budgets for
+  the glTF importer.
+- **Gate 0.1.2.** The gate's output changes for some change sets, so its
+  version changes. G8 is `not_run` for meshes that G7 refuses, or fails
+  as too complex beyond its step limits. Links, devices, pipes and files
+  over 64 MiB are refused before reading. glb JSON chunks over 1 MiB and
+  JSON nested deeper than 127 levels get new errors. A detail that breaks
+  the text rule is repaired, where before no report could be written.
+  - The sample report changes only in `gate_version`: report `e5dee148…`.
+  - RFC 0004's gate version moves to 0.1.3.
+- **Valid input is unchanged:**
+  - a re-ingest of the whole district with the final code, offline from a
+    fresh copy of the cache, is byte-identical to the stored world:
+    `blake3:4689c972…`, 3,013 files. The rebuilt CityGML cache (version 2)
+    is byte-identical to version 1;
+  - the sample report is byte-identical apart from `gate_version`;
+  - the glTF importer reads all 1,491 district meshes as before;
+  - G8 decides exactly as before (57d7563) whenever it stays within its
+    limits. 80,000 random shells shaped like buildings (several nodes,
+    roof first, rotated or on cell lines, some degenerate triangles)
+    with 14.5 million facade vertices, many exactly 0.5 m from the shell,
+    10 mm above its top or on cell lines, give the same counts and worst
+    distances, bit for bit.
+
+**G8 under attack** (the final check):
+- **Real shells stay below the limits.** A facade at the G7 maximum (two
+  kinds of 49,800-triangle skin) on the sample building and two of the
+  district's largest shells, with roofs or walls divided into up to
+  87,348 triangles, takes at most 722,044 grid steps and 2.3 million
+  distances, in under half a second. Reordering its vertices to defeat
+  G8's cache gave at most 6.6 million distances. Even with no cache hit
+  at all, none would go over 91 million.
+- **The review's dense roofs now pass.** The skin on the sample building
+  with its roof in 19,320 triangles, refused before, takes 120,378 grid
+  steps and 289,058 distances; the gate passes it in 0.7 s (debug). The
+  four variants of shell `ac8fa799` that took 7.3 to 211 million steps
+  take 0.26 to 1.4 million (grid steps and distances together).
+- **Crafted shells can still reach the limits**, as intended. One 100 m
+  wall listed 20,000 times (40,001 triangles) under a skin facade fails
+  as too complex after 0.3 s, where 57d7563 would pass it after about two
+  minutes. 99,000 stacked triangles in front of nine anchors refuse a
+  facade of 1,800 vertices that 57d7563 passes in 1.9 s.
+- **The most one facade can cost:** about 2 s and 120 MB at both limits.
+  A change set may hold 50 changes, so a crafted one can keep the gate
+  busy for a minute or two.
+
+**Reviews:** two adversarial rounds, then a final check.
+- **First round** (fixes and behaviour, harness quality): 18 findings, 17
+  fixed as proposed. G8 got its column index, its step limit and the
+  `not_run` rule, after one bundle took 2 min 37 s. Rust reads got the
+  file rules and the glb JSON cap, validation reads a repeated object at
+  most twice, and the branch moved onto `main`, so the water reader was
+  hardened and fuzzed too. A counting allocator would need `unsafe`, so
+  the Rust memory check runs in child processes instead.
+- **Second round** (Rust gate and readers, Python on the whole district,
+  harness and CI): 23 findings, 1 blocking. 20 were fixed, 2 are drafted
+  below, and the documentation is this entry and CONTRIBUTING.md. G8 now
+  searches 2 m height buckets with a small cache: 28 to 150 times fewer
+  steps on the review's dense roofs. The Python memory check sees GEOS on
+  Linux, a hang's stacks reach the CI log, and CityGML buildings over
+  16 MiB are skipped and counted instead of failing the sheet.
+- **Final check:** every check below, the district re-ingest, and the
+  attack on G8 above. Nothing new to fix.
+
+| Check | Result |
+|---|---|
+| `cargo fmt --all --check`, `cargo clippy --workspace --all-targets --locked -- -D warnings` | pass |
+| `cargo test --workspace --locked` | 202 passed, 1 ignored (the district pick benchmark) |
+| `python -m pytest` | 332 passed, 5 skipped on Windows (links, pipes, Linux memory readings), 70 s; 337 passed on Linux (Python 3.13, Docker) |
+| `python tools/ci/check_deps.py` | pass |
+| `op_replay check fixtures/replays/sample.oprep` | 20/20 checkpoints, final `212bd353…`, unchanged |
+| `op_world validate`, both fixture worlds | 0 errors, `fd6446c2…` and `f2d6f869…` as before |
+| Sample facade, `op_world check-change` | passes; the report is byte-identical to the committed one |
+| Tool-made facade, `op_replay check-change --replay sample.oprep` | passes the gate |
+| `op_world validate data/world/zurich-altstadt` | 30 tiles, 1,491 assets, 1,078,342 triangles, 0 errors |
+| District re-ingest, offline | byte-identical, 3,013 files, 295 s |
+| G8 against 57d7563 | 80,000 random cases, 0 differences |
+| Long campaigns, final code | Rust at 20 times the CI budget (`STREETWIDE_FUZZ_ITERS=40000`) on two seeds, 2.1 million inputs each; Python at 10 times on Windows and Linux (20 times after the first review); no failure |
+| `git diff --check`, CR scan | clean |
+
+**Linux-only Rust tests** (the child process's memory check, its
+self-test, and the link tests) cannot run on Windows. They passed in the
+branch's first Linux CI run, with all 12 jobs green.
+
+**For the maintainer:**
+1. **JSON size limits** ([RFC 0001](../rfcs/0001-world-format.md),
+   unresolved questions): any document up to 64 MiB is parsed whole, and
+   a crafted one can take about 7 GB. Recommended: limits per kind of
+   document, checked before parsing.
+2. **Repairing invalid water rings**
+   ([ADR-0014](adr/0014-water-areas-from-openstreetmap.md), open question
+   1): `make_valid` is unbounded; a crafted 200-point ring takes 103 s.
+   Recommended: count where a ring touches itself and stop at 1,000
+   pairs. OpenStreetMap building footprints have the same question.
+3. **The Draft RFC text** the limits added: RFC 0001 sections 5 to 7, and
+   RFC 0002's G8 row and its question 8 (no triangle budget for baseline
+   shells; recommended: leave it until real data comes near the budget).
+4. **Gate time per change set** (RFC 0002, question 2): G8's limits are
+   per facade, so a crafted change set of 50 facades can keep the gate
+   busy for a minute or two. Recommended: leave it until the gate runs as
+   a service; a budget shared by the change set would make one facade's
+   outcome depend on the others.
+
+### Baseline refresh tool (2026-11-25, branch refresh, ADR-0020 Proposed)
 
 Roadmap M1's baseline refresh: newer open data can now enter the
 canonical world as change sets authored by `streetwide:ingest`, planned
@@ -970,7 +1140,7 @@ follow [docs/contributing/baseline-refresh.md](contributing/baseline-refresh.md)
 
 - **Drafts:** ADR-0020; the refresh rules of RFC 0002 section 7, as a
   clarification proposed with the ADR (the RFC stays a Draft); RFC 0002's
-  unresolved questions 8 to 15, which are amendments A1 to A8; and a
+  unresolved questions 9 to 16, which are amendments A1 to A8; and a
   note in ADR-0010 (*Proposed*) on the local log layout, with `<hex>`
   paths and `worlds/`.
 - **`tools/worldfmt`:** `changes.py`, the change-set rules and `apply()`,
@@ -1021,7 +1191,7 @@ maintainer (Q22). For Q18 the tools apply (a), stricter than the
 recommended (b): nothing lifts a takedown.
 
 **Pending:** ADR-0020 itself and the section 7 clarification; the
-amendments A1 to A8 (RFC 0002 unresolved questions 8 to 15), including
+amendments A1 to A8 (RFC 0002 unresolved questions 9 to 16), including
 A7, which would make `--require-base` mandatory for refreshes; the
 ADR-0010 note; the two rules ADR-0020 proposes for the ingest (bump its
 `VERSION` when its output changes; refresh on the platform of the last

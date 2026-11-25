@@ -1,39 +1,72 @@
 """Facade contributions (RFC 0002): find a building, export its shell to
-model on, and turn the finished model into a contribution bundle."""
+model on, and turn the finished model into a contribution bundle.
+
+The world store and the model may come from anyone: a store that cannot be
+read, a document that breaks its schema or a model that cannot be used
+raises ContributionError, which the command line reports.
+"""
 
 from __future__ import annotations
 
-import shutil
+import os
 from pathlib import Path
 
 import numpy as np
 
 from tools.contrib import GENERATOR, VERSION
-from tools.contrib.gltf_in import Part, read
+from tools.contrib.gltf_in import GltfError, Part, read
 from tools.worldfmt import CONTRACT_VERSION, cjson, glb, schemas
 from tools.worldfmt.ids import content_id
-from tools.worldfmt.store import Store
+from tools.worldfmt.store import Store, read_file
 
 CONTRIBUTION_CONTRACT = "0.1.0"
 CONTRIBUTION_LICENSE = "CC-BY-SA-4.0"
 COLLECTIVE_CREDIT = "The StreetWide contributors"
 DATASET = "StreetWide contributions"
 REPO_URL = "https://github.com/AndromedaSLS/StreetWide"
+MAX_TRIANGLES = 50_000
+"""A facade's triangle budget (RFC 0002 G7, `op_world`'s FACADE_MAX_TRIANGLES)."""
+MAX_COORDINATE_M = 1_000_000.0
+"""Farthest a facade vertex may be from its tile's origin. Real facades are
+within a few hundred metres; the bound keeps millimetre arithmetic exact."""
 
 
 class ContributionError(ValueError):
     """The contribution cannot be built; the message says why."""
 
 
+def _document(data: bytes, fmt: str, what: str) -> dict:
+    """`data` parsed as a canonical, schema-valid document of format `fmt`."""
+    try:
+        doc = cjson.loads(data)
+    except cjson.CanonicalError as e:
+        raise ContributionError(f"{what} is not canonical JSON: {e}") from e
+    errors = schemas.errors(doc)
+    if not errors and doc["format"] != fmt:
+        errors = [f"expected a {fmt} document"]
+    if errors:
+        raise ContributionError(f"{what} is invalid: " + "; ".join(e[:200] for e in errors[:3]))
+    return doc
+
+
 class World:
-    """A world store opened for reading."""
+    """A world store opened for reading. Its documents are checked against
+    their schemas, so the fields used below exist and have the right types."""
 
     def __init__(self, directory: Path):
         self.store = Store(directory)
-        self.world_id, self.doc = self.store.read_world()
-        self.tiles = [
-            (wt, cjson.loads(self.store.read_object(wt["tile_id"], "json"))) for wt in self.doc["tiles"]
-        ]
+        try:
+            data = read_file(self.store.root / "world.json")
+            self.world_id = content_id(data)
+            self.doc = _document(data, "streetwide.world", "world.json")
+            self.tiles = [
+                (wt, _document(self.store.read_object(wt["tile_id"], "json"), "streetwide.tile", f"tile {wt['tile']}"))
+                for wt in self.doc["tiles"]
+            ]
+        except ContributionError:
+            raise
+        except (OSError, ValueError) as e:
+            raise ContributionError(f"cannot read the world in {directory}: {e}") from e
 
     def find(self, layer: str, feature_id: str):
         for wt, index in self.tiles:
@@ -43,7 +76,12 @@ class World:
         return None
 
     def manifest(self, entry: dict) -> dict:
-        return cjson.loads(self.store.read_object(entry["manifest_id"], "json"))
+        what = f"the manifest of {entry['feature_id']}"
+        try:
+            data = self.store.read_object(entry["manifest_id"], "json")
+        except (OSError, ValueError) as e:
+            raise ContributionError(f"cannot read {what}: {e}") from e
+        return _document(data, "streetwide.asset", what)
 
 
 def find_building(world_dir: Path, lon: float, lat: float) -> str:
@@ -85,9 +123,25 @@ def export_reference(world_dir: Path, feature_id: str, out_dir: Path) -> Path:
     if found is None:
         raise ContributionError(f"no building {feature_id} in this world")
     _, shell = found
+    try:
+        data = world.store.read_object(shell["content_id"], "glb")  # checked against its id
+    except (OSError, ValueError) as e:
+        raise ContributionError(f"cannot read the shell of {feature_id}: {e}") from e
     out_dir.mkdir(parents=True, exist_ok=True)
-    path = out_dir / f"{feature_id.rsplit(':', 1)[-1]}-shell.glb"
-    shutil.copyfile(world.store.object_path(shell["content_id"], "glb"), path)
+    # The id comes from the world's documents, which may be crafted: a path
+    # separator in it would take the file out of out_dir ("../../x"). Only
+    # those are replaced, so every other id keeps the name it always had;
+    # the part after the last ":" never holds a drive ("C:"), and the
+    # suffix keeps "." and ".." from naming a directory.
+    stem = feature_id.rsplit(":", 1)[-1]
+    for separator in (os.sep, os.altsep):
+        if separator:
+            stem = stem.replace(separator, "_")
+    path = out_dir / f"{stem}-shell.glb"
+    try:
+        path.write_bytes(data)
+    except OSError as e:  # a character this platform does not allow in names
+        raise ContributionError(f"cannot write {path}: {e}") from e
     return path
 
 
@@ -102,8 +156,13 @@ def facade_node(parts: list[Part], name: str) -> glb.Node:
     palette material. Triangles that collapse when snapped are dropped."""
     by_material: dict[str, list[np.ndarray]] = {}
     for part in parts:
+        if not np.all(np.abs(part.triangles) <= MAX_COORDINATE_M):
+            raise ContributionError(
+                f"the model reaches more than {MAX_COORDINATE_M:,.0f} m from the tile origin; "
+                "model the facade in metres, on the reference"
+            )
         by_material.setdefault(palette_material(part.material), []).append(part.triangles)
-    primitives = []
+    snapped = []
     for material in glb.PALETTE:
         if material not in by_material:
             continue
@@ -111,16 +170,21 @@ def facade_node(parts: list[Part], name: str) -> glb.Node:
         normals = np.cross(tris_mm[:, 1] - tris_mm[:, 0], tris_mm[:, 2] - tris_mm[:, 0])
         keep = np.any(normals != 0, axis=1)
         tris_mm, normals = tris_mm[keep], normals[keep].astype(np.float64)
-        if len(tris_mm) == 0:
-            continue
+        if len(tris_mm):
+            snapped.append((material, tris_mm, normals))
+    if not snapped:
+        raise ContributionError("the model has no triangles left after snapping to the millimetre")
+    triangles = sum(len(t) for _, t, _ in snapped)
+    if triangles > MAX_TRIANGLES:
+        raise ContributionError(f"the model has {triangles:,} triangles; a facade may have at most {MAX_TRIANGLES:,}")
+    primitives = []
+    for material, tris_mm, normals in snapped:
         normals /= np.linalg.norm(normals, axis=1, keepdims=True)
         positions = [tuple(v) for v in tris_mm.reshape(-1, 3).tolist()]
         normal_rows = [tuple(n) for n in np.repeat(normals, 3, axis=0).tolist()]
         primitives.append(
             glb.Primitive(material=material, positions_mm=positions, normals=normal_rows, indices=list(range(len(positions))))
         )
-    if not primitives:
-        raise ContributionError("the model has no triangles left after snapping to the millimetre")
     return glb.Node(name=name, primitives=primitives)
 
 
@@ -159,7 +223,11 @@ def make_bundle(
             )
         sources += shell_sources
 
-    node = facade_node(read(model), feature_id)
+    try:
+        parts = read(model)
+    except GltfError as e:
+        raise ContributionError(f"cannot read the model: {e}") from e
+    node = facade_node(parts, feature_id)
     mesh = glb.write([node])
     out_dir.mkdir(parents=True, exist_ok=True)
     bundle = Store(out_dir)

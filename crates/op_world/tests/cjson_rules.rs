@@ -75,3 +75,26 @@ fn missing_optional_field_is_not_canonical() {
         Err(Error::NotCanonical(_))
     ));
 }
+
+/// Arrays and objects nest at most 127 levels (RFC 0001, section 5). The
+/// limit is checked explicitly, so it does not move with the JSON parser's
+/// own recursion limit; `tools/worldfmt` pins the same numbers.
+#[test]
+fn nesting_is_limited_to_127_levels() {
+    let arrays = |n: usize| format!("{}{}", "[".repeat(n), "]".repeat(n));
+    let objects = |n: usize| format!("{}[]{}", "{\"a\":".repeat(n - 1), "}".repeat(n - 1));
+    for doc in [arrays(127), objects(127)] {
+        assert!(parse(doc.as_bytes()).is_ok(), "127 levels are allowed");
+    }
+    for doc in [arrays(128), objects(128), arrays(100_000)] {
+        match parse(doc.as_bytes()) {
+            Err(Error::NotCanonical(m)) => {
+                assert_eq!(m, "arrays and objects nested deeper than 127 levels")
+            }
+            other => panic!("128 levels or more must be refused, got {other:?}"),
+        }
+    }
+    // Brackets inside strings are text, not nesting.
+    let text = format!("[\"{}\"]", "[{".repeat(200));
+    assert!(parse(text.as_bytes()).is_ok());
+}

@@ -14,6 +14,12 @@ use crate::{Error, Result};
 /// Largest integer exactly representable as an IEEE 754 double.
 pub const MAX_SAFE_INTEGER: i64 = (1 << 53) - 1;
 
+/// Deepest nesting of arrays and objects, the outermost value being level 1
+/// (RFC 0001, section 5). It is serde_json's own limit (its recursion limit
+/// is 128), checked here so that the rule does not depend on a parser
+/// setting; `tools/worldfmt` enforces the same.
+pub const MAX_DEPTH: usize = 127;
+
 /// Serialises a JSON value canonically.
 pub fn to_vec(value: &Value) -> Result<Vec<u8>> {
     let mut out = Vec::with_capacity(256);
@@ -33,6 +39,7 @@ pub fn to_canonical<T: Serialize>(value: &T) -> Result<Vec<u8>> {
 /// field that was omitted and filled in by a default (such as a missing
 /// `null`) is also rejected.
 pub fn from_canonical<T: Serialize + DeserializeOwned>(bytes: &[u8]) -> Result<T> {
+    check_depth(bytes)?;
     let value: Value = serde_json::from_slice(bytes)?;
     let canonical = to_vec(&value)?;
     if canonical != bytes {
@@ -45,6 +52,39 @@ pub fn from_canonical<T: Serialize + DeserializeOwned>(bytes: &[u8]) -> Result<T
         ));
     }
     Ok(typed)
+}
+
+/// Refuses JSON text whose arrays and objects nest deeper than
+/// [`MAX_DEPTH`], before it is parsed. Brackets inside strings do not count;
+/// anything else that is not JSON is left for the parser to refuse.
+pub(crate) fn check_depth(bytes: &[u8]) -> Result<()> {
+    let (mut depth, mut in_string, mut escaped) = (0usize, false, false);
+    for &b in bytes {
+        if in_string {
+            if escaped {
+                escaped = false;
+            } else if b == b'\\' {
+                escaped = true;
+            } else if b == b'"' {
+                in_string = false;
+            }
+            continue;
+        }
+        match b {
+            b'"' => in_string = true,
+            b'[' | b'{' => {
+                depth += 1;
+                if depth > MAX_DEPTH {
+                    return Err(Error::NotCanonical(format!(
+                        "arrays and objects nested deeper than {MAX_DEPTH} levels"
+                    )));
+                }
+            }
+            b']' | b'}' => depth = depth.saturating_sub(1),
+            _ => {}
+        }
+    }
+    Ok(())
 }
 
 fn first_difference(actual: &[u8], canonical: &[u8]) -> String {

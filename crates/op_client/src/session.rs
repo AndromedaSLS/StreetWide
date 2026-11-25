@@ -100,7 +100,8 @@ impl Session {
     pub fn start(options: &Options) -> Result<Session, String> {
         let replay = match &options.replay {
             Some(path) => {
-                let bytes = std::fs::read(path).map_err(|e| format!("{}: {e}", path.display()))?;
+                let bytes = op_world::store::read_file(path, op_replay::format::MAX_REPLAY_BYTES)
+                    .map_err(|e| format!("{}: {e}", path.display()))?;
                 Some(Replay::from_bytes(&bytes).map_err(|e| format!("{}: {e}", path.display()))?)
             }
             None => None,

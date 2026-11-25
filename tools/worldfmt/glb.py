@@ -40,6 +40,10 @@ BASE_COLOR_MILLI = {
     "water": (200, 350, 450, 1000),
 }
 
+MAX_JSON_BYTES = 1 << 20
+"""Longest JSON chunk the profile allows (`op_world`'s MAX_GLB_JSON_BYTES);
+an asset needs about a kilobyte per primitive."""
+
 _GLB_MAGIC = 0x46546C67
 _CHUNK_JSON = 0x4E4F534A
 _CHUNK_BIN = 0x004E4942
@@ -216,6 +220,8 @@ def write(nodes: list[Node]) -> bytes:
     _json(doc, out)
     json_bytes = "".join(out).encode("utf-8")
     json_bytes += b" " * (-len(json_bytes) % 4)
+    if len(json_bytes) > MAX_JSON_BYTES:
+        raise GlbError(f"mesh too large: its JSON chunk would be longer than {MAX_JSON_BYTES} bytes")
     bin_bytes = b"".join(bin_parts)
     total = 12 + 8 + len(json_bytes) + 8 + len(bin_bytes)
     return b"".join([

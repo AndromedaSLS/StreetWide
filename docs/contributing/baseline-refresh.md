@@ -367,6 +367,6 @@ that shape a refresh:
 
 None of the amendments A1 to A8 is adopted: the tools change no gate
 rule, schema, contract version or merge rule, and the 50-change cap
-stays. They are RFC 0002's unresolved questions 8 to 15. The ingest
+stays. They are RFC 0002's unresolved questions 9 to 16. The ingest
 options Q20 and Q21, and refreshing one source at a time, are open too
 (ADR-0020, section 10).

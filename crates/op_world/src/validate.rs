@@ -2,11 +2,12 @@
 //! licence rules across the world manifest, tile indexes, manifests and
 //! meshes (RFC 0001).
 
-use std::collections::BTreeSet;
+use std::collections::{BTreeMap, BTreeSet};
+use std::rc::Rc;
 
 use crate::glb;
 use crate::id::ContentId;
-use crate::manifest::{AssetManifest, Layer};
+use crate::manifest::{AssetManifest, BoundsMm, Layer};
 use crate::store::{ObjectKind, Store};
 use crate::tile::TileIndex;
 
@@ -26,6 +27,53 @@ impl Report {
     }
 }
 
+/// What reading and checking one object gave: the parsed object or the
+/// error's message.
+type Outcome<T> = Rc<std::result::Result<T, String>>;
+
+/// A mesh's length, and its triangle count and bounds (or why it is not a
+/// valid glb).
+type MeshFacts = (
+    usize,
+    std::result::Result<(usize, Option<BoundsMm>), String>,
+);
+
+/// Outcomes of objects listed more than once. A world may list one object
+/// many times (validly a shared mesh, or a crafted world listing a 64 MiB
+/// mesh thousands of times), and each listing gets its own errors, but the
+/// object is read and checked at most twice. Objects listed once, as every
+/// manifest in a valid world is, are not kept.
+struct Seen<T> {
+    once: BTreeSet<ContentId>,
+    kept: BTreeMap<ContentId, Outcome<T>>,
+}
+
+impl<T> Seen<T> {
+    fn new() -> Self {
+        Seen {
+            once: BTreeSet::new(),
+            kept: BTreeMap::new(),
+        }
+    }
+
+    /// The outcome for `id`, and whether this is its first listing.
+    fn get(
+        &mut self,
+        id: ContentId,
+        check: impl FnOnce() -> std::result::Result<T, String>,
+    ) -> (Outcome<T>, bool) {
+        if let Some(kept) = self.kept.get(&id) {
+            return (Rc::clone(kept), false);
+        }
+        let outcome = Rc::new(check());
+        let first = self.once.insert(id);
+        if !first {
+            self.kept.insert(id, Rc::clone(&outcome));
+        }
+        (outcome, first)
+    }
+}
+
 /// Validates every object reachable from `world.json`. Collects all errors
 /// rather than stopping at the first.
 pub fn validate_store(store: &Store) -> Report {
@@ -41,13 +89,19 @@ pub fn validate_store(store: &Store) -> Report {
 
     let mut attribution: BTreeSet<String> = BTreeSet::new();
     let mut features: BTreeSet<(Layer, String)> = BTreeSet::new();
+    let mut tiles: Seen<TileIndex> = Seen::new();
+    let mut manifests: Seen<AssetManifest> = Seen::new();
+    let mut meshes: Seen<MeshFacts> = Seen::new();
 
     for wt in &world.tiles {
         let ctx = format!("tile {}", wt.tile);
-        let index = match store
-            .read_object(&wt.tile_id, ObjectKind::Json)
-            .and_then(|b| TileIndex::from_bytes(&b))
-        {
+        let (index, _) = tiles.get(wt.tile_id, || {
+            store
+                .read_object(&wt.tile_id, ObjectKind::Json)
+                .and_then(|b| TileIndex::from_bytes(&b))
+                .map_err(|e| e.to_string())
+        });
+        let index = match &*index {
             Ok(i) => i,
             Err(e) => {
                 report.errors.push(format!("{ctx}: {e}"));
@@ -78,10 +132,13 @@ pub fn validate_store(store: &Store) -> Report {
                     .errors
                     .push(format!("{actx}: listed more than once in the world"));
             }
-            let manifest = match store
-                .read_object(&asset.manifest_id, ObjectKind::Json)
-                .and_then(|b| AssetManifest::from_bytes(&b))
-            {
+            let (manifest, first) = manifests.get(asset.manifest_id, || {
+                store
+                    .read_object(&asset.manifest_id, ObjectKind::Json)
+                    .and_then(|b| AssetManifest::from_bytes(&b))
+                    .map_err(|e| e.to_string())
+            });
+            let manifest = match &*manifest {
                 Ok(m) => m,
                 Err(e) => {
                     report.errors.push(format!("{actx}: manifest: {e}"));
@@ -89,7 +146,9 @@ pub fn validate_store(store: &Store) -> Report {
                 }
             };
             report.assets += 1;
-            attribution.extend(manifest.provenance.attribution.iter().cloned());
+            if first {
+                attribution.extend(manifest.provenance.attribution.iter().cloned());
+            }
 
             let mismatch = [
                 ("tile", manifest.tile != index.tile),
@@ -108,22 +167,31 @@ pub fn validate_store(store: &Store) -> Report {
                 }
             }
 
-            let bytes = match store.read_object(&manifest.content_id, ObjectKind::Glb) {
-                Ok(b) => b,
+            let (mesh, _) = meshes.get(manifest.content_id, || {
+                let bytes = store
+                    .read_object(&manifest.content_id, ObjectKind::Glb)
+                    .map_err(|e| e.to_string())?;
+                let facts = glb::read(&bytes)
+                    .map(|mesh| (mesh.triangle_count(), mesh.bounds_mm()))
+                    .map_err(|e| e.to_string());
+                Ok((bytes.len(), facts))
+            });
+            let (len, facts) = match &*mesh {
+                Ok(m) => m,
                 Err(e) => {
                     report.errors.push(format!("{actx}: mesh: {e}"));
                     continue;
                 }
             };
-            if bytes.len() as u64 != manifest.size_bytes {
+            if *len as u64 != manifest.size_bytes {
                 report
                     .errors
                     .push(format!("{actx}: size_bytes does not match the mesh"));
             }
-            match glb::read(&bytes) {
-                Ok(mesh) => {
-                    report.triangles += mesh.triangle_count();
-                    if mesh.bounds_mm() != Some(manifest.bounds_mm) {
+            match facts {
+                Ok((triangles, bounds)) => {
+                    report.triangles += triangles;
+                    if *bounds != Some(manifest.bounds_mm) {
                         report
                             .errors
                             .push(format!("{actx}: bounds_mm does not match the mesh"));
@@ -142,4 +210,33 @@ pub fn validate_store(store: &Store) -> Report {
         ));
     }
     report
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn objects_listed_many_times_are_checked_at_most_twice() {
+        let mut seen: Seen<u32> = Seen::new();
+        let (a, b) = (ContentId::of(b"a"), ContentId::of(b"b"));
+        let mut checks = 0;
+        let mut firsts = Vec::new();
+        for id in [a, b, a, a, a, b, a] {
+            let (outcome, first) = seen.get(id, || {
+                checks += 1;
+                Ok(7)
+            });
+            assert_eq!(*outcome, Ok(7));
+            firsts.push(first);
+        }
+        assert_eq!(checks, 4, "a and b, twice each");
+        assert_eq!(firsts, [true, true, false, false, false, false, false]);
+        // Only the objects listed more than once are kept.
+        let mut once: Seen<u32> = Seen::new();
+        for k in 0..100u8 {
+            once.get(ContentId::of(&[k]), || Ok(1));
+        }
+        assert!(once.kept.is_empty());
+    }
 }
