@@ -130,7 +130,9 @@ fn setup(mut commands: Commands, session: Res<Session>, mut fonts: ResMut<Assets
             .find_map(|p| std::fs::read(p).ok())
             .map(|bytes| fonts.add(Font::from_bytes(bytes))),
     );
-    let credits = font.show(&session.streamer().index().world().attribution.join(" · "));
+    let credits = font.show(&credit_line(
+        &session.streamer().index().world().attribution,
+    ));
     commands.spawn((
         Text::new(credits),
         font.style(14.0),
@@ -249,6 +251,24 @@ fn setup(mut commands: Commands, session: Res<Session>, mut fonts: ResMut<Assets
             panel.spawn((Text::new(""), font.style(14.0), InspectBody));
         });
     commands.insert_resource(font);
+}
+
+/// The credit line, always on screen: the world's credits, the
+/// OpenStreetMap one naming the ODbL and where to read it. Scripted
+/// screenshots and the benchmark's hide the help panel, so this line
+/// carries the notice that ODbL 4.3 asks of published images (ADR-0019).
+fn credit_line(attribution: &[String]) -> String {
+    attribution
+        .iter()
+        .map(|a| {
+            if a.contains("OpenStreetMap") {
+                format!("{a}, under the ODbL: openstreetmap.org/copyright")
+            } else {
+                a.clone()
+            }
+        })
+        .collect::<Vec<_>>()
+        .join(" · ")
 }
 
 fn panel_keys(keys: Res<ButtonInput<KeyCode>>, mut panels: ResMut<Panels>) {
@@ -601,6 +621,7 @@ mod tests {
             fly_speed: 25.0,
             places: Vec::new(),
             pending: None,
+            last_end: None,
             cut: false,
         };
         let text = help_text(&session, &travel);
@@ -616,6 +637,26 @@ mod tests {
         assert!(
             text.contains("(ODbL)") && text.contains("openstreetmap.org/copyright"),
             "{text}"
+        );
+    }
+
+    /// The credit line, which scripted screenshots show, names the ODbL
+    /// beside the OpenStreetMap credit (ADR-0019), and only there.
+    #[test]
+    fn the_credit_line_names_the_odbl() {
+        let world = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../fixtures/world");
+        let session = Session::start(&Options {
+            world: Some(world),
+            ..Options::default()
+        })
+        .unwrap();
+        assert_eq!(
+            credit_line(&session.streamer().index().world().attribution),
+            "© OpenStreetMap contributors, under the ODbL: openstreetmap.org/copyright · © swisstopo"
+        );
+        assert_eq!(
+            credit_line(&["© swisstopo".into(), "© Someone".into()]),
+            "© swisstopo · © Someone"
         );
     }
 }

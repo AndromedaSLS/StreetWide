@@ -1,0 +1,17 @@
+{
+  "format": "streetwide.route",
+  "version": 1,
+  "world": "zurich-altstadt",
+  "description": "ADR-0018's benchmark route: Lindenhof (the most trees), Hirschenplatz (narrow lanes) and Rathausbrücke (the river and long views), each in full sun on 21 June at 18:00, with lamps and trees in leaf at 22:30, and with bare trees on 21 December at 18:00. 2026-06-21 is a Sunday, 2026-12-21 a Monday. Places and headings are the world's own (zurich-altstadt.json). Run it with op_client --benchmark worlds/zurich-altstadt.route.json --preset high (then fast).",
+  "stops": [
+    {"name": "Lindenhof, 21 June, 18:00", "place": "Lindenhof", "date": "2026-06-21", "time": "18:00"},
+    {"name": "Lindenhof, 21 June, 22:30", "place": "Lindenhof", "date": "2026-06-21", "time": "22:30"},
+    {"name": "Lindenhof, 21 December, 18:00", "place": "Lindenhof", "date": "2026-12-21", "time": "18:00"},
+    {"name": "Hirschenplatz, 21 June, 18:00", "place": "Hirschenplatz", "date": "2026-06-21", "time": "18:00"},
+    {"name": "Hirschenplatz, 21 June, 22:30", "place": "Hirschenplatz", "date": "2026-06-21", "time": "22:30"},
+    {"name": "Hirschenplatz, 21 December, 18:00", "place": "Hirschenplatz", "date": "2026-12-21", "time": "18:00"},
+    {"name": "Rathausbrücke, 21 June, 18:00", "place": "Rathausbrücke", "date": "2026-06-21", "time": "18:00"},
+    {"name": "Rathausbrücke, 21 June, 22:30", "place": "Rathausbrücke", "date": "2026-06-21", "time": "22:30"},
+    {"name": "Rathausbrücke, 21 December, 18:00", "place": "Rathausbrücke", "date": "2026-12-21", "time": "18:00"}
+  ]
+}

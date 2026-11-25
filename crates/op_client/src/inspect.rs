@@ -2294,6 +2294,7 @@ inspect: building swisstopo:swissbuildings3d:000f609c-4003-495f-9426-b43e3d77016
             fly_speed: 30.0,
             places: Vec::new(),
             pending: None,
+            last_end: None,
             cut: false,
         });
         app.insert_resource(index);
