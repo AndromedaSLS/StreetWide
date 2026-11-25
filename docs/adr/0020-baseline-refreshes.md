@@ -1,13 +1,13 @@
 # ADR-0020: Plan baseline refreshes by comparing a fresh ingest with the canonical world
 
-- **Status:** Proposed
+- **Status:** Accepted (2026-11-25)
 - **Date:** 2026-11-24
 - **Deciders:** @victorpicaud
-- **Supersedes / superseded by:** none (proposed together with a
+- **Supersedes / superseded by:** none (accepted together with a
   clarification of
   [RFC 0002](../../rfcs/0002-contributions-and-merge-rules.md) section 7;
   adds a note to [ADR-0010](0010-hosting-the-canonical-world.md);
-  proposes two rules for the ingest of
+  sets two rules for the ingest of
   [ADR-0006](0006-ingest-pipeline-and-data-sources.md), which stays
   unchanged)
 
@@ -16,7 +16,7 @@
 [RFC 0002 section 7](../../rfcs/0002-contributions-and-merge-rules.md#7-baseline-refreshes-and-takedowns)
 brings newer source data into the canonical world as change sets
 authored by `streetwide:ingest`: a *baseline refresh*. Before the
-clarification proposed with this ADR, the section settled two rules. An
+clarification accepted with this ADR, the section settled two rules. An
 asset made by the ingest is replaced "when its content changed", and a
 contribution is listed "as a conflict for review". Roadmap M1 asks for
 the tool that makes these change sets
@@ -71,13 +71,13 @@ proposes):
 
 ## Options considered
 
-Each question has a recommended option. None is decided: the
-maintainer, @victorpicaud, chooses. Until then, the recommended options
-of sections 1 to 9 are the defaults that the refresh tool and its
-workflow follow, and this ADR calls those defaults *Proposed*. Q18
-(section 9) is the one exception: there the tool implements a stricter
-option than the one recommended. The ingest options of section 10 and
-the amendments A1 to A8 are not implemented.
+Each question has a recommended option. On 2026-11-25 the maintainer,
+@victorpicaud, accepted the recommended options of sections 1 to 9 (see
+Decision). The "default until decided" lines below record what the tool
+applied while this ADR was proposed. They are the decisions, except for
+Q18 (section 9), where the tool applied a stricter option than the one
+now decided. The ingest options of section 10 and the amendments A1 to
+A8 are not decided here and are not implemented.
 
 ### 1. What the tool compares
 
@@ -294,8 +294,8 @@ removed or moved by a change set of its own, or once A2 is decided.
 | **A. Bump `tools/ingest`'s `VERSION` whenever its output changes (recommended)** | A changed mesh with unchanged sources and generator then points to noise or republication, and the tool holds it (`unexplained-change`). The tool can refuse a new store made by an older ingest. | One more step in every ingest change. |
 | B. No rule | Nothing to remember. | The generator says nothing about the output: water was added without a bump. |
 
-ADR-0006 is accepted and stays unchanged, so this rule is proposed here
-(see Consequences).
+ADR-0006 is accepted and stays unchanged, so this rule is set here (see
+Consequences).
 
 ### 8. RFC 0002's text
 
@@ -304,9 +304,8 @@ ADR-0006 is accepted and stays unchanged, so this rule is proposed here
 | **(a) Clarify section 7 in place, with no version bump (recommended)** | The RFC states the rules the tool applies. The text changes no document and no check, and RFC 0002 asks for a new contract version only when its rules change. RFC 0002 is a Draft and has been clarified in place before. | The section grows. |
 | (b) Leave section 7 unchanged, and record the rules here only | The RFC stays as it was. | The tool would apply rules that the RFC does not state. |
 
-The clarification is written into the Draft RFC, marked as proposed
-together with this ADR, and the RFC's status is unchanged. If (b) is
-chosen, the text comes out again.
+The clarification is written into the Draft RFC, marked as accepted
+with this ADR, and the RFC's status is unchanged.
 
 ### 9. What RFC 0002 leaves open
 
@@ -559,13 +558,15 @@ bump (section 7).
 
 ## Decision
 
-*Proposed:* the recommended option in each section above. **Not
-decided:** the maintainer, @victorpicaud, decides, and the decisions
-and their reasons are recorded here when made.
+*Accepted on 2026-11-25 by @victorpicaud:* the recommended option in
+each of sections 1 to 9 above. For Q18 that is (b): a removal by a
+takedown stays frozen, and a revert may be lifted by an accept with a
+reason, in a decision set of its own. Until the tool implements (b), it
+applies the stricter (a), and nothing lifts `takedown`. Not decided by
+this ADR: the ingest options of section 10, the amendments A1 to A8,
+and the questions left open below.
 
-Until then, the recommended options of sections 1 to 9 are the
-defaults, except Q18, where the tool implements (a). With these
-defaults, the tool:
+With these decisions, the tool:
 - never runs the ingest, and never writes to either store or to the
   log;
 - never replaces or removes a contribution, and never re-adds a key
@@ -578,8 +579,9 @@ defaults, the tool:
 - holds back and lists any change that RFC 0002 does not settle,
   instead of deciding it.
 
-RFC 0002 section 7 carries these rules as a clarification proposed
-together with this ADR (section 8). The RFC stays a Draft.
+RFC 0002 section 7 carries these rules as a clarification accepted
+with this ADR (section 8, option (a)). The RFC as a whole stays a
+Draft.
 
 ### Amendments flagged for RFC 0002
 
@@ -669,14 +671,14 @@ while it is a Draft and raise `GATE_VERSION`, as water did
 ## Consequences
 
 - **Contracts:** no format, schema, gate rule, `GATE_VERSION` or
-  contract version changes. RFC 0002 section 7 gains the proposed
+  contract version changes. RFC 0002 section 7 gains the accepted
   clarification, and its unresolved questions gain A1 to A8. The
   50-change cap stays.
 - **ADR-0010** carries a note on the local log layout (section 4). The
   log repository of its option A would need the same `<hex>` paths to
   be cloned on Windows.
 - **The ingest.** ADR-0006 is accepted, so it is not edited. This ADR
-  proposes two consequences for it:
+  sets two rules for it:
   - bump `tools/ingest`'s `VERSION` whenever its output changes, since
     `unexplained-change` and the tool's generator checks rely on it
     (section 7);

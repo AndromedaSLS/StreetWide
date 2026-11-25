@@ -1,6 +1,6 @@
 # ADR-0022: Draw trees, street lamps and lit windows in the client
 
-- **Status:** Proposed
+- **Status:** Accepted (2026-11-25)
 - **Date:** 2026-11-25
 - **Deciders:** @victorpicaud
 - **Supersedes / superseded by:** none (extends ADR-0012)
@@ -25,8 +25,8 @@ under. Floodlit landmarks are a fifth, briefly.
   the simulation must be deterministic
   ([ADR-0003](0003-determinism-strategy.md)). Everything here is client
   code. Trees and lamps are visual only in M2: RFC 0004 gives both layers
-  `collider: none`, and [ADR-0021](0021-pedestrians.md) (Proposed)
-  recommends people drawn by the client, so that "trunks and poles stay
+  `collider: none`, and [ADR-0021](0021-pedestrians.md) (Accepted)
+  puts people in the client, so that "trunks and poles stay
   visual in M2".
 - **Decoration is not data**
   ([ADR-0012](0012-client-realism-from-procedural-detail.md), Proposed).
@@ -723,9 +723,10 @@ ADR-0018's night-exposure option B, with a curve as Far Cry 5 used.
 
 ## Decision
 
-*Proposed, not decided.* The options marked recommended are a proposal
-to the maintainer (@victorpicaud), who decides and records the choice
-here. Until then nothing in this ADR applies.
+*Accepted on 2026-11-25 by @victorpicaud:* the options marked
+recommended below (T1 with S1, L2, W1, N2 and F0). The open questions at
+the end stay open; the night's values and the budget share are set as
+they describe.
 
 **Recommended:**
 - **trees:** T1, with sun shadows from the nearest level only (S1), and
@@ -976,6 +977,6 @@ before its own guesses.
 9. **Floodlit landmarks:** F0 in M2; F2 later, when a source or
    contributors can say which buildings are lit.
 
-**Nothing here is decided.** The maintainer, @victorpicaud, decides and
-records the choice and its reasons in the Decision section. Each open
-choice is drafted with a recommendation.
+**These stay open after the decision.** The maintainer, @victorpicaud,
+decides each and records it here. Each is drafted with a
+recommendation.

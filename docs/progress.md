@@ -1593,3 +1593,33 @@ In the recommended configuration (shadows from the nearest tree level,
    reference card's run, as the ADR proposes, then reused in pieces once
    RFC 0004's points load. Its input conversion and raw reports are
    kept outside the repository for now.
+
+### ADR-0020, ADR-0021 and ADR-0022 accepted (2026-11-25)
+
+The maintainer merged pull requests #4, #5 and #6 and accepted the three
+decision records with their recommended options:
+- **[ADR-0020](adr/0020-baseline-refreshes.md), baseline refreshes:**
+  the recommended option of each of its sections 1 to 9, and the
+  clarification of RFC 0002 section 7 (the RFC as a whole stays a
+  Draft). For Q18 that is (b): a revert by a takedown may be lifted by a
+  written accept in a decision set; the tool still applies the stricter
+  (a) until it implements (b). The amendments A1 to A8 (RFC 0002,
+  questions 9 to 16), the ingest options of section 10 and the
+  questions left open by the reviews stay open.
+- **[ADR-0021](adr/0021-pedestrians.md), pedestrians:** C2 in M2,
+  people drawn by the client from a shared seed, outside the
+  simulation; a seeded A is the fallback if the client prototype fails
+  its checks; C1 is left to M4 and M5.
+- **[ADR-0022](adr/0022-drawing-trees-lamps-and-windows.md), drawing
+  trees, street lamps and lit windows:** T1 trees with sun shadows from
+  the nearest level, L2 lamps, W1 lit windows, N2 for the night, and no
+  floodlit landmarks in M2.
+
+The open questions inside each record stay open. RFC 0001 to RFC 0004
+and the other proposed ADRs are unchanged.
+
+**Next:** lit windows and the night's look (ADR-0022, W1 and N2) need no
+world data, so they go into the client first. Trees and lamps wait for
+RFC 0004's point features. ADR-0020's Q18 (b) goes into the refresh
+planner. ADR-0021 starts with its client prototype and the
+navigation-data RFC.

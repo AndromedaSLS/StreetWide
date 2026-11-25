@@ -277,9 +277,10 @@ run.
 
 ### 7. Baseline refreshes and takedowns
 
-*The baseline refresh rules below are a clarification proposed together
-with [ADR-0020](../docs/adr/0020-baseline-refreshes.md). They change no
-contract document and no gate check.*
+*The baseline refresh rules below are a clarification accepted with
+[ADR-0020](../docs/adr/0020-baseline-refreshes.md) on 2026-11-25; the RFC
+as a whole stays a Draft. They change no contract document and no gate
+check.*
 
 **Baseline refresh.** When `tools/ingest` is run with newer source data
 (a new swisstopo release, a newer OpenStreetMap snapshot), a refresh

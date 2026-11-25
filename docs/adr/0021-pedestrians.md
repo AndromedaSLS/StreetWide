@@ -1,6 +1,6 @@
 # ADR-0021: Decide where pedestrians live: the client, the simulation or both
 
-- **Status:** Proposed
+- **Status:** Accepted (2026-11-25)
 - **Date:** 2026-11-25
 - **Deciders:** @victorpicaud
 - **Supersedes / superseded by:** none (answers the roadmap's M2
@@ -656,9 +656,11 @@ world they roll back exactly, but still cost 30.4 to 30.9 ms a frame at
 
 ## Decision
 
-*Proposed, not decided.* The options marked recommended are a proposal
-to the maintainer (@victorpicaud), who decides and records the choice
-here. Until then nothing in this ADR applies.
+*Accepted on 2026-11-25 by @victorpicaud:* the options marked
+recommended below. C2 in M2: people drawn by the client from a shared
+seed, outside the simulation; a seeded A is the fallback if the client
+prototype fails its checks; C1 is left to M4 and M5. The open questions
+at the end stay open.
 
 **Recommended: C2 in M2.** The client draws people from a shared seed.
 They stay out of the simulation (out of `op_sim`'s `Schedule`, state
@@ -1040,6 +1042,6 @@ the world (roadmap, section 5).
    mixing. Recommended: settle both in the navigation-data RFC, with
    ADR-0019, before the ingest builds lanes.
 
-**Nothing here is decided.** The maintainer, @victorpicaud, decides and
-records the choice and its reasons in the Decision section. Each open
-choice is drafted with a recommendation.
+**These stay open after the decision.** The maintainer, @victorpicaud,
+decides each and records it here. Each is drafted with a
+recommendation.
