@@ -2589,3 +2589,80 @@ Each RFC records this.
 6. The drafts the decisions call for: ADR-0017's RFC, the navigation
    ingest's ADR.
 7. The ODbL notices in the client and the store (ADR-0019).
+
+### A7: refresh sets merge only on their base world (2026-11-25)
+
+RFC 0002's question 15 (ADR-0020's amendment A7) is built. `op_world
+merge`, `op_replay merge` and the library merge (`merge_with`) refuse a
+change set authored by `streetwide:ingest` whose `base_world_id` is not
+the store's world, with or without `--require-base`, with the flag's
+message ("the store holds world ..., but this change set was planned on
+...; plan the refresh again"). The merge checks before the gate runs,
+and again on the change set the gate checked, in case `change.json`
+changed in between; nothing is written. The flag stays and still applies
+the rule to any change set. It is a merge rule: the gate, its reports
+and `GATE_VERSION` (0.1.2) do not change.
+
+- **The planner's rationale** now says each set "merges only there (RFC
+  0002 section 7)", not "(merge it with --require-base)". The rationale
+  is part of `change.json`, so the fixture refresh's pinned ids change:
+  change `98aa8fbd…` (was `49650252…`), report `78bfd934…` (was
+  `08f8cb7d…`). The old sentence gives back the old change id, and the
+  report differs only in that id and the set's size (12 bytes more).
+  The printed commands keep `--require-base`, as ADR-0020's workflow
+  has them; the text above them and the guide no longer call it opt-in.
+  `tools.ingest.changes` stays at version 0.1.0.
+- **Tests:** a refresh set planned on another world is refused through
+  `MergeArgs` with and without the flag, through `merge_with` before the
+  gate runs, when `change.json` is swapped while the gate runs (this one
+  fails without the second check), and by `op_world merge` and `op_replay
+  merge` without the flag; planned on the store's world, it merges. The
+  fuzz targets need no change: the merge-arguments target only parses,
+  and `require_base` keeps its rule and message.
+
+Checks: see the next entry, which ran on the same tree.
+
+### Water rings: a bound on repair (2026-11-25, ADR-0014)
+
+ADR-0014's open question 1, option E, is built in
+`tools/ingest/water.py`. Before an invalid ring is repaired, the ingest
+counts the pairs of its segments that are not neighbours and whose
+bounding boxes overlap (an STRtree queried in batches; the count stops
+at 1,001). With more than 1,000 the ring counts as broken, for ways and
+joined rings alike: a way is counted as unusable (`OSM water ways
+unusable`); a relation raises `RingError`, which stops the ingest with
+the relation named if it reaches the area ("... a ring of N points
+crosses or touches itself too often to be repaired ..."), and is
+counted otherwise (`OSM water relations broken outside the area`).
+Valid rings are never counted. Building footprints keep their unbounded
+repair: ADR-0014 leaves that question open.
+
+- **Tests** (`test_osm_water.py`, 5 new): the count on hand-made rings;
+  a ring is broken only above the cap; a Bodensee-like ring (14,540
+  points in eight member ways, 508 pairs, a spike) still repairs, in
+  0.45 s; a 500-point star, which GEOS took over 300 s to repair, is
+  refused before any repair as a way and as a relation inside and
+  outside the area, in 0.05 s.
+- **The district does not change:** an offline re-ingest into a scratch
+  directory gives the same 3,013 files byte for byte, world
+  `4689c972…`. No ring in either cached water answer needs repair.
+- **`VERSION` stays 0.1.0.** ADR-0020 section 7 bumps it "whenever its
+  output changes", and the output does not: only an invalid ring with
+  more than 1,000 such pairs behaves differently, and no ring sampled
+  for ADR-0014 needs repair at all. For such a ring nothing that relies
+  on the version is misled: a relation stops the ingest, and a way that
+  drops out takes its id out of its tile's water sources, so
+  `unexplained-change`, which needs unchanged sources, cannot fire. A
+  bump would change every manifest, so the fixture world, the district
+  and every pinned id. If the maintainer reads section 10 (Q21 needs a
+  bump although the district does not change) as covering this, bump
+  with Q20, which needs one anyway.
+
+| Check (both entries) | Result |
+|---|---|
+| `cargo fmt --all --check`, `cargo clippy --workspace --all-targets --locked -- -D warnings` | pass |
+| `cargo test --workspace --locked` | 273 passed, 1 ignored |
+| `python -m pytest` | 768 passed, 95 skipped |
+| `STREETWIDE_GATE=1`, CI's gate step (`test_changes_gate.py`, `test_changes_fixture.py`, and `tools/worldfmt`'s `test_changes.py`, `test_log.py`, `test_glb_reader.py`) | 303 passed |
+| District re-ingest, offline, into a scratch directory | byte-identical, 3,013 files, world `4689c972…`, 250 s |
+| `op_replay check fixtures/replays/sample.oprep` | 20/20 checkpoints, final `212bd353…`, unchanged |

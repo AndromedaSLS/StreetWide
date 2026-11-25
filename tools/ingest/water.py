@@ -4,11 +4,15 @@
   and the like), `waterway=riverbank` or `landuse=reservoir`. Fountains,
   basins, reflecting pools and covered or underground water are left out.
 - Assembly: ways and multipolygon relations become polygons with holes in
-  LV95, repaired if invalid. Rings nest as deep as they are mapped: a pond
-  on an island in a lake is water. A relation that reaches the area but
-  gives no area (rings that do not close, a member way without geometry
-  or with a role other than outer or inner) stops the ingest: a river must
-  never vanish silently.
+  LV95, repaired if invalid. The repair is bounded: an invalid ring with
+  more than MAX_REPAIR_PAIRS pairs of segments that are not neighbours and
+  whose bounding boxes overlap counts as broken, as a ring that does not
+  close does. Rings nest as deep as they are mapped: a pond on an island
+  in a lake is water. A relation that reaches the area but gives no area
+  (rings that do not close or are too broken to repair, a member way
+  without geometry or with a role other than outer or inner) stops the
+  ingest: a river must never vanish silently. A way that cannot be
+  repaired is counted as unusable.
 - Level: swissALTI3D models water as its surface, so each water body gets
   one flat level per swissALTI3D tile: the median terrain height at 2 m
   grid points at least 3 m inside the outline, plus 3 cm. Only that
@@ -74,6 +78,18 @@ MAX_NEST_TESTS = 1_000_000
 """Most ring-in-ring tests to nest the rings of one relation. A real
 relation needs one or two per ring; rings stacked on one another need one
 per pair, and such a relation counts as one that gives no area."""
+MAX_REPAIR_PAIRS = 1_000
+"""Most pairs of segments that are not neighbours and whose bounding boxes
+overlap in an invalid ring that the ingest repairs (ADR-0014, open
+question 1, option E). GEOS's repair grows with how often a ring crosses
+or touches itself, more than with its length: under this cap the slowest
+repair measured took about a second, and of the real rings sampled,
+Bodensee had the most such pairs, 503. A ring with more counts as broken.
+It is a count, not a clock, so every machine decides the same."""
+QUERY_PAIRS = 1 << 20
+"""Most pairs one query of the segment tree may return, so that counting
+the pairs of a long ring that retraces itself never holds more than this
+many in memory."""
 
 
 class WaterError(RuntimeError):
@@ -149,11 +165,58 @@ def _polygons(geom) -> list[Polygon]:
     return [p for g in getattr(geom, "geoms", []) for p in _polygons(g)]
 
 
+def overlapping_pairs(ring: np.ndarray, cap: int) -> int:
+    """The pairs of segments of the closed `ring` (points, the first equal
+    to the last) that are not neighbours and whose bounding boxes overlap or
+    touch, counted up to `cap + 1`: the count stops there. Repeated points
+    are dropped first, so a segment of zero length makes no pair. A segment
+    and the next one are neighbours, and so are the last and the first."""
+    keep = np.r_[True, np.any(ring[1:] != ring[:-1], axis=1)]
+    ring = ring[keep]
+    m = len(ring) - 1  # segments
+    if m < 4:
+        return 0  # every pair of a triangle is a pair of neighbours
+    segments = shapely.linestrings(np.stack([ring[:-1], ring[1:]], axis=1))
+    tree = shapely.STRtree(segments)
+    step = max(1, QUERY_PAIRS // m)  # a segment can meet at most m others
+    count = 0
+    for start in range(0, m, step):
+        # Every pair (i, j) of a segment i in this batch and a segment j of
+        # the ring whose boxes meet; each pair of segments is counted once,
+        # from its lower index.
+        i, j = tree.query(segments[start:start + step])
+        i = i + start
+        count += int(np.count_nonzero((j > i + 1) & ~((i == 0) & (j == m - 1))))
+        if count > cap:
+            return cap + 1
+    return count
+
+
+def _check_repair(poly: Polygon) -> None:
+    """Raises RingError, completing "the relation reaches the area, but
+    ...", if `poly`, an invalid polygon, is too broken to repair: its rings
+    have more than MAX_REPAIR_PAIRS pairs of segments that are not
+    neighbours and whose bounding boxes overlap (ADR-0014, option E)."""
+    pairs = 0
+    for ring in (poly.exterior, *poly.interiors):
+        pairs += overlapping_pairs(shapely.get_coordinates(ring), MAX_REPAIR_PAIRS - pairs)
+        if pairs > MAX_REPAIR_PAIRS:
+            raise RingError(
+                f"a ring of {len(ring.coords)} points crosses or touches itself too often to be repaired: more "
+                f"than {MAX_REPAIR_PAIRS} pairs of its segments that are not neighbours have overlapping "
+                "bounding boxes"
+            )
+
+
 def _area(geom) -> Polygon | MultiPolygon | None:
-    """The polygonal part of `geom`, repaired if invalid; None if empty."""
+    """The polygonal part of `geom`, repaired if invalid; None if empty.
+    An invalid polygon is repaired only if it is not too broken: raises
+    RingError otherwise (`_check_repair`)."""
     if geom.is_empty:
         return None
     if not geom.is_valid:
+        if isinstance(geom, Polygon):
+            _check_repair(geom)
         geom = make_valid(geom)
     parts = _polygons(geom)
     if not parts:
@@ -162,7 +225,8 @@ def _area(geom) -> Polygon | MultiPolygon | None:
 
 
 def _lv95_ring(points: list[tuple[float, float]]) -> Polygon | MultiPolygon | None:
-    """The area inside a closed ring of (lon, lat) points, in LV95."""
+    """The area inside a closed ring of (lon, lat) points, in LV95. Raises
+    RingError for a ring too broken to repair (`_check_repair`)."""
     if len(points) < 4:
         return None
     lon, lat = np.array(points, dtype=np.float64).T
@@ -221,8 +285,9 @@ def _check_relation(el: dict) -> None:
 def _relation_area(el: dict, stats: dict[str, int]) -> Polygon | MultiPolygon:
     """The area of a multipolygon relation. Raises RingError, completing
     "the relation reaches the area, but ...", if it gives none: its rings
-    do not close, a member way has no geometry or a role other than outer
-    or inner, or the rings enclose nothing."""
+    do not close or one is too broken to repair, a member way has no
+    geometry or a role other than outer or inner, or the rings enclose
+    nothing."""
     lines: dict[str, list[list[tuple[float, float]]]] = {"outer": [], "inner": []}
     seen: set[tuple[str, int]] = set()
     for m in el.get("members", []):
@@ -239,13 +304,19 @@ def _relation_area(el: dict, stats: dict[str, int]) -> Polygon | MultiPolygon:
         if not geometry or any(g is None for g in geometry):
             raise RingError(f"its member way {m.get('ref')} has no geometry")
         lines[role].append([(g["lon"], g["lat"]) for g in geometry])
-    try:
-        rings = [(role, p) for role in ("outer", "inner") for r in join_rings(lines[role])
-                 if (p := _lv95_ring(r)) is not None]
-    except RingError as e:
-        raise RingError(f"its member ways do not form closed rings: {e}") from e
-    except GEOSException as e:  # a ring GEOS cannot repair
-        raise RingError(f"its rings cannot be repaired ({e})") from e
+    rings: list[tuple[str, Polygon | MultiPolygon]] = []
+    for role in ("outer", "inner"):
+        try:
+            joined = join_rings(lines[role])
+        except RingError as e:
+            raise RingError(f"its member ways do not form closed rings: {e}") from e
+        for r in joined:
+            try:
+                p = _lv95_ring(r)  # a ring too broken to repair raises RingError
+            except GEOSException as e:  # a ring GEOS cannot repair
+                raise RingError(f"its rings cannot be repaired ({e})") from e
+            if p is not None:
+                rings.append((role, p))
     try:
         shape = _nest(rings, stats)
     except GEOSException as e:
@@ -334,7 +405,7 @@ def parse(doc: dict, bbox: BBox, stats: dict[str, int]) -> list[Body]:
         if el["type"] == "way":
             try:
                 shape = _way_area(el)
-            except GEOSException:  # a ring GEOS cannot repair
+            except (GEOSException, RingError):  # a ring GEOS cannot repair, or too broken to try
                 _bump(stats, "OSM water ways unusable")
                 continue
             if shape is None:
