@@ -1,7 +1,10 @@
 """The water layer from OpenStreetMap water areas (ADR-0014), on synthetic
-data: selection, assembly of relations (nested rings, loud failures),
-levels per swissALTI3D tile (medians, independent of the area), the cut per
-tile, the report, the manifests and determinism."""
+data: selection, assembly of relations (nested rings, loud failures), the
+bound on repairing invalid rings, levels per swissALTI3D tile (medians,
+independent of the area), the cut per tile, the report, the manifests and
+determinism."""
+
+import time
 
 import numpy as np
 import pytest
@@ -264,6 +267,122 @@ def test_a_self_intersecting_way_is_repaired_drawn_and_counted(dems, tmp_path):
     assert report["area_m2"] == pytest.approx(800.0, abs=0.5)
     assert report["tiles"]["17/68645/45902"]["drawn_m2"] > 800.0
     assert [lv["body"] for lv in report["levels"]] == ["way/9"]
+
+
+def _star(n, k, e=2683200.5, n0=1247350.5, radius=100.0):
+    """A closed star polygon {n/k} of radius 100 m: with k near n/2, each
+    edge crosses most others."""
+    angle = 2 * np.pi * k * np.arange(n) / n
+    points = [(e + radius * float(np.cos(a)), n0 + radius * float(np.sin(a))) for a in angle]
+    return points + points[:1]
+
+
+def _bodensee_like():
+    """A ring of 14,540 points (Bodensee's longest joined ring has 14,540)
+    round a 43 km circle, with a ragged shore: each point moves up to 41 m
+    in or out, which gives about 500 pairs of segments that are not
+    neighbours and whose boxes overlap (Bodensee has 503). The shore stays
+    simple (every point keeps its angle), so the ring is valid. Returns it
+    and the same ring with one defect, a 50 m spike out and back to the
+    same point, where the ring touches itself."""
+    count = 14_539
+    rng = np.random.default_rng(14_540)
+    angle = 2 * np.pi * np.arange(count) / count
+    r = 43_000.0 + rng.uniform(-41.0, 41.0, count)
+    ring = [(2_700_000.5 + float(a * np.cos(t)), 1_250_000.5 + float(a * np.sin(t))) for a, t in zip(r, angle)]
+    k = 5_000
+    out = (2_700_000.5 + float((r[k] + 50.0) * np.cos(angle[k])), 1_250_000.5 + float((r[k] + 50.0) * np.sin(angle[k])))
+    spiked = ring[:k + 1] + [out, ring[k]] + ring[k + 1:]
+    return ring + ring[:1], spiked + spiked[:1]
+
+
+def test_the_repair_bound_counts_pairs_of_segments_that_are_not_neighbours():
+    """ADR-0014, open question 1, option E: pairs of segments that are not
+    neighbours (the first and the last segment are neighbours too) and whose
+    bounding boxes overlap, counted up to the cap plus one."""
+    e, n = 2683200.5, 1247350.5
+    bow_tie = [(e, n), (e + 40, n + 40), (e + 40, n), (e, n + 40), (e, n)]
+    assert water.overlapping_pairs(np.array(bow_tie), 10) == 1  # the two diagonals
+    assert water.overlapping_pairs(np.array(_square(e, n, 40.0)), 10) == 0
+    # A repeated point makes no segment of its own.
+    doubled = bow_tie[:2] + bow_tie[1:]
+    assert water.overlapping_pairs(np.array(doubled), 10) == 1
+    # The count stops one past the cap.
+    star = np.array(_star(500, 249))
+    assert water.overlapping_pairs(star, 1000) == 1001
+    assert water.overlapping_pairs(star, 5) == 6
+    assert water.overlapping_pairs(star, 10**9) > 100_000
+
+
+@pytest.mark.parametrize("cap,repaired", [(1, True), (0, False)])
+def test_a_ring_is_broken_only_above_the_cap(monkeypatch, cap, repaired):
+    """A bow tie has one such pair: repaired with a cap of one, broken (a
+    way counted as unusable) with a cap of zero."""
+    monkeypatch.setattr(water, "MAX_REPAIR_PAIRS", cap)
+    e, n = 2683200.5, 1247350.5
+    bow_tie = _way(9, [(e, n), (e + 40, n + 40), (e + 40, n), (e, n + 40), (e, n)], natural="water")
+    stats = {}
+    bodies = water.parse(doc(bow_tie), AREA.bbox(), stats)
+    assert len(bodies) == int(repaired)
+    assert stats.get("OSM water ways unusable", 0) == int(not repaired)
+
+
+def test_a_bodensee_like_ring_is_still_repaired():
+    """A long real ring with one defect repairs, as ADR-0014 measured for
+    Bodensee: here 14,540 points in eight member ways joined into one ring,
+    about 500 pairs, and a spike."""
+    ring, spiked = _bodensee_like()
+    assert Polygon(ring).is_valid and not Polygon(spiked).is_valid
+    pairs = water.overlapping_pairs(np.array(spiked), water.MAX_REPAIR_PAIRS)
+    assert 400 <= pairs <= 600, pairs
+    # Member ways of at most 2,000 points, end to end, as OSM maps a lake.
+    ways = [spiked[i:i + 2_000] for i in range(0, len(spiked) - 1, 1_999)]
+    assert all(len(w) <= 2_000 for w in ways) and ways[-1][-1] == spiked[0]
+    rel = _relation(80, [(800 + i, "outer", w) for i, w in enumerate(ways)], natural="water", water="lake",
+                    name="Bodensee-like")
+    stats = {}
+    start = time.perf_counter()
+    (body,) = water.parse(doc(rel), AREA.bbox(), stats)
+    seconds = time.perf_counter() - start
+    assert body.shape.is_valid
+    assert body.shape.area == pytest.approx(Polygon(ring).area, rel=1e-6)
+    assert stats["OSM water areas"] == 1
+    assert seconds < 30, f"took {seconds:.1f} s"
+
+
+def _no_repair(geom):
+    raise AssertionError("a ring over the cap was sent to make_valid")
+
+
+def test_a_ring_over_the_cap_is_refused_before_any_repair(monkeypatch):
+    """A 500-point star, which GEOS took over 300 s to repair (ADR-0014),
+    is refused within the time it takes to count: as a way it is counted as
+    unusable; as a relation, joined from two member ways, it stops the
+    ingest if it reaches the area and is counted otherwise."""
+    monkeypatch.setattr(water, "make_valid", _no_repair)
+    star = _star(500, 249)
+    assert not Polygon(star).is_valid
+    start = time.perf_counter()
+
+    stats = {}
+    assert water.parse(doc(_way(70, star, natural="water")), AREA.bbox(), stats) == []
+    assert stats["OSM water ways unusable"] == 1
+
+    def relation(id, dx=0.0):
+        moved = [(e + dx, n) for e, n in star]
+        members = [(id * 10 + 1, "outer", moved[:251]), (id * 10 + 2, "outer", moved[250:])]
+        return _relation(id, members, natural="water", water="lake", name="Star lake")
+
+    message = (r"relation 71 \(Star lake\) reaches the area, but a ring of 501 points crosses or touches itself "
+               r"too often to be repaired: more than 1000 pairs of its segments that are not neighbours have "
+               r"overlapping bounding boxes\. Water is never dropped silently")
+    with pytest.raises(water.WaterError, match=message):
+        water.parse(doc(relation(71)), AREA.bbox(), {})
+    stats = {}
+    assert water.parse(doc(relation(72, dx=7000.0)), AREA.bbox(), stats) == []  # 7 km east of the area
+    assert stats["OSM water relations broken outside the area"] == 1
+    seconds = time.perf_counter() - start
+    assert seconds < 10, f"took {seconds:.1f} s"
 
 
 def test_samples_stay_strictly_inside_their_terrain_tile():

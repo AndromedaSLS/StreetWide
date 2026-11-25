@@ -38,8 +38,8 @@ WATER_MANIFEST_ID = "blake3:48443eac"
 WATER_MESH_ID = "blake3:3fe3966e"
 
 # Made by this planner: they change only when its output changes.
-CHANGE_ID = "blake3:49650252e149e183f12ceebdd107d53e8abd2f7c5848105c2ce98737347a1920"
-REPORT_ID = "blake3:08f8cb7da197ca0e0d134ffd20ab67d5c5bc0f391428e92d8cf35978807cf1d9"
+CHANGE_ID = "blake3:98aa8fbd156dd2b1e1566399b777dd4d9c5effc5861a64f4fde95f0d22ac5e23"
+REPORT_ID = "blake3:78bfd9343de8a0d4588815a9ae7bb0dd260fcc61ca2a11f0e4405df499f41871"
 BASELINE_REASON = "Baseline of the fixture world before water (test)."
 
 

@@ -1,7 +1,7 @@
 //! `merge_with` (the gate as a parameter), the world log kept in a
-//! directory (`--log`), `--require-base`, and the arguments that
-//! `op_world merge` and `op_replay merge` share
-//! (`op_world::merge::{WorldLog, MergeArgs}`).
+//! directory (`--log`), `--require-base` and the base world of a baseline
+//! refresh, and the arguments that `op_world merge` and `op_replay merge`
+//! share (`op_world::merge::{WorldLog, MergeArgs}`).
 
 mod common;
 
@@ -9,7 +9,8 @@ use std::path::{Path, PathBuf};
 use std::process::Command;
 
 use op_world::contrib::{
-    Change, ChangeSet, CheckReport, Decision, MergeRecord, Op, Outcome, Review, Verdict, verify_log,
+    Change, ChangeSet, CheckReport, Decision, INGEST_AUTHOR, MergeRecord, Op, Outcome, Review,
+    Verdict, verify_log,
 };
 use op_world::limits::{MAX_CHANGE_SET_BYTES, MAX_MERGE_RECORD_BYTES};
 use op_world::merge::{
@@ -95,6 +96,12 @@ fn merge_args(
 /// A change set planned on world `base` that takes the facade in `world`
 /// down again.
 fn takedown_bundle(world: &Path, base: ContentId, dir: &Path) -> PathBuf {
+    removal_by(world, base, "github:maintainer", dir)
+}
+
+/// A change set by `author`, planned on world `base`, that removes the
+/// facade in `world`.
+fn removal_by(world: &Path, base: ContentId, author: &str, dir: &Path) -> PathBuf {
     let store = Store::new(world);
     let (_, w) = store.read_world().unwrap();
     let index = TileIndex::from_bytes(
@@ -113,7 +120,7 @@ fn takedown_bundle(world: &Path, base: ContentId, dir: &Path) -> PathBuf {
         contract_version: "0.1.0".into(),
         base_world_id: base,
         title: "Remove the test facade".into(),
-        author: "github:maintainer".into(),
+        author: author.into(),
         rationale: "Owner request (test).".into(),
         changes: vec![Change {
             op: Op::Remove,
@@ -351,8 +358,9 @@ fn require_base_refuses_a_change_set_planned_on_another_world() {
     assert_eq!(world_id(&world), w1);
     assert!(!t.join("2.json").exists() && !t.join("2-report.json").exists());
 
-    // The flag is opt-in: without it, RFC 0002 lets a change set whose
-    // parents are still current merge on a newer world.
+    // Without the flag, RFC 0002 lets a change set whose parents are still
+    // current merge on a newer world, unless it is a baseline refresh (see
+    // the next test).
     merge_args(
         &world,
         &stale,
@@ -363,6 +371,109 @@ fn require_base_refuses_a_change_set_planned_on_another_world() {
     .run(&t.join("scratch-3"), gate::run)
     .unwrap();
     assert_eq!(world_id(&world), w0);
+}
+
+/// RFC 0002 sections 2 and 7 (question 15, amendment A7): a change set
+/// authored by `streetwide:ingest` merges only on the world named in its
+/// `base_world_id`, with or without `--require-base`, through the merge
+/// commands and `merge_with` alike, even when its parents are all still
+/// current.
+#[test]
+fn a_refresh_set_merges_only_on_its_base_world() {
+    let t = Temp::new("refresh-base");
+    let world = world_copy(&t);
+    let w0 = world_id(&world);
+    let log_dir = t.join("log");
+    start_log(&world, &log_dir);
+    merge_args(
+        &world,
+        &facade(),
+        MergeOutput::Log(log_dir.clone()),
+        Decision::Merged,
+        false,
+    )
+    .run(&t.join("scratch"), gate::run)
+    .unwrap();
+    let w1 = world_id(&world);
+    let before = common::files_under(&log_dir);
+    let stale_message = Error::Invalid(format!(
+        "the store holds world {w1}, but this change set was planned on {w0}; plan the refresh again"
+    ));
+
+    // A refresh set planned before the facade was merged: its parent, the
+    // facade, is current, but the store holds another world.
+    let stale = removal_by(&world, w0, INGEST_AUTHOR, &t.join("stale"));
+    for (require_base, scratch) in [(false, "scratch-1"), (true, "scratch-2")] {
+        let refused = merge_args(
+            &world,
+            &stale,
+            MergeOutput::Log(log_dir.clone()),
+            Decision::Merged,
+            require_base,
+        )
+        .run(&t.join(scratch), gate::run);
+        assert_eq!(refused.err(), Some(stale_message.clone()), "{require_base}");
+        assert_eq!(world_id(&world), w1);
+        assert_eq!(common::files_under(&log_dir), before);
+    }
+
+    // `merge_with` refuses it too, before the gate runs.
+    let head = WorldLog::open(&log_dir).unwrap().head().to_vec();
+    let no_gate = |_: &Path, _: &Path, _: &Path| -> op_world::Result<CheckReport> {
+        panic!("the gate runs on a refresh set planned on another world")
+    };
+    let refused = merge_with(
+        &world,
+        &stale,
+        &head,
+        Decision::Merged,
+        vec![better()],
+        "Test.",
+        &t.join("scratch-3"),
+        no_gate,
+    );
+    assert_eq!(refused.err(), Some(stale_message.clone()));
+    assert_eq!(world_id(&world), w1);
+
+    // A change.json that changes while the gate runs, from a refresh set
+    // planned on the store's world to the stale one: the change set the
+    // gate checked is held to the rule too, and nothing is written.
+    let swapped = removal_by(&world, w1, INGEST_AUTHOR, &t.join("swapped"));
+    let stale_bytes = read(stale.join("change.json"));
+    let swapping = |w: &Path, b: &Path, c: &Path| -> op_world::Result<CheckReport> {
+        std::fs::write(b.join("change.json"), &stale_bytes).unwrap();
+        gate::run(w, b, c)
+    };
+    let refused = merge_with(
+        &world,
+        &swapped,
+        &head,
+        Decision::Merged,
+        vec![better()],
+        "Test.",
+        &t.join("scratch-4"),
+        swapping,
+    );
+    assert_eq!(refused.err(), Some(stale_message));
+    assert_eq!(world_id(&world), w1);
+    assert!(!world.join(STORE_LOCK).exists());
+
+    // Planned on the store's world, a refresh set merges without the flag.
+    let current = removal_by(&world, w1, INGEST_AUTHOR, &t.join("current"));
+    let line = merge_args(
+        &world,
+        &current,
+        MergeOutput::Log(log_dir.clone()),
+        Decision::Merged,
+        false,
+    )
+    .run(&t.join("scratch-5"), gate::run)
+    .unwrap();
+    assert!(
+        line.contains(&format!(" (log/00000002.json): world {w1} -> {w0}")),
+        "{line}"
+    );
+    assert_eq!(check_log(&log_dir), w0);
 }
 
 #[test]
@@ -1654,6 +1765,27 @@ fn the_command_line_keeps_a_log() {
         &"--require-base",
         &"--reason",
         &"Owner request (test).",
+    ]);
+    assert_eq!(code, 2);
+    assert_eq!(
+        err.trim_end(),
+        format!(
+            "error: invalid: the store holds world {w1}, but this change set was planned on {w0}; plan the refresh again"
+        )
+    );
+    // A baseline refresh planned on that world is refused without the flag
+    // (RFC 0002 section 7).
+    let refresh = removal_by(&world, w0, INGEST_AUTHOR, &t.join("refresh"));
+    let (code, _, err) = op_world(&[
+        &"merge",
+        &world,
+        &refresh,
+        &"--log",
+        &log,
+        &"--reason",
+        &"Baseline refresh (test).",
+        &"--review",
+        &"github:reviewer=better:Checked.",
     ]);
     assert_eq!(code, 2);
     assert_eq!(

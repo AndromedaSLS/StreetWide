@@ -19,6 +19,8 @@
 //! `baseline` starts it, and `merge` takes the previous record from it and
 //! appends the new record, the change set, the report and the new world.
 //! `--require-base` refuses a change set that was planned on another world.
+//! A change set authored by `streetwide:ingest`, a baseline refresh, is
+//! refused on another world with or without it (RFC 0002 section 7).
 //! A merge takes `merge.lock` in the store, and with `--log` `log.lock` in
 //! the log, before it reads them, and keeps them until it has written the
 //! store and the record; a second merge that finds one stops before it

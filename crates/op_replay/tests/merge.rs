@@ -156,22 +156,43 @@ fn a_facade_merged_between_two_refresh_sets_stops_the_next_one() {
         .unwrap();
     let w2 = world_id(&world);
 
-    let refused =
-        merge_args(&world, &set2, &log, true).run(&t.join("scratch-3"), full_gate(&replays));
+    // The second set is stale. Its parent is still current, but a set
+    // authored by streetwide:ingest merges only on its base world (RFC 0002
+    // section 7, amendment A7), with or without --require-base.
+    let stale = Error::Invalid(format!(
+        "the store holds world {w2}, but this change set was planned on {w1}; plan the refresh again"
+    ));
+    for (require_base, scratch) in [(true, "scratch-3"), (false, "scratch-4")] {
+        let refused = merge_args(&world, &set2, &log, require_base)
+            .run(&t.join(scratch), full_gate(&replays));
+        assert_eq!(refused.err(), Some(stale.clone()), "{require_base}");
+        assert_eq!(world_id(&world), w2);
+        assert_eq!(check_log(&log).len(), 3, "the refused merge wrote nothing");
+    }
+    // The command refuses it too, without the flag.
+    let (code, _, err) = op_replay(&[
+        &"merge",
+        &world,
+        &set2,
+        &"--log",
+        &log,
+        &"--reason",
+        &"Baseline refresh (test).",
+        &"--review",
+        &"github:reviewer=better:Checked.",
+    ]);
     assert_eq!(
-        refused.err(),
-        Some(Error::Invalid(format!(
-            "the store holds world {w2}, but this change set was planned on {w1}; plan the refresh again"
-        )))
+        (code, err.trim_end()),
+        (2, format!("error: {stale}").as_str())
     );
-    assert_eq!(world_id(&world), w2);
     assert_eq!(check_log(&log).len(), 3, "the refused merge wrote nothing");
 
-    // Without the flag, RFC 0002 lets the stale set through, because its
-    // parent is still current. Amendment A7 would refuse it without the
-    // flag; it is not adopted.
-    merge_args(&world, &set2, &log, false)
-        .run(&t.join("scratch-4"), full_gate(&replays))
+    // Planned again on the world the facade made, the set merges.
+    let again = t.join("set-2-again");
+    let replanned = removal(&world, &[far[1].as_str()], INGEST_AUTHOR, &again);
+    assert_eq!(replanned.base_world_id, w2);
+    merge_args(&world, &again, &log, false)
+        .run(&t.join("scratch-5"), full_gate(&replays))
         .unwrap();
     let records = check_log(&log);
     assert_eq!(records.len(), 4);
