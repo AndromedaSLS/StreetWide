@@ -605,4 +605,3 @@ def build_draped(cur: StoreView, items: list[Item], origins: dict[Key, Origin],
             if touches(i.new.box, box):
                 found.setdefault(terrain.key, []).append(i)
     return {k: found[k] for k in sorted(found, key=key_order)}
-

@@ -483,4 +483,3 @@ def _mm(value) -> str:
 
 def _list(values: list) -> str:
     return "none" if not values else ", ".join(f"`{v}`" for v in values)
-
