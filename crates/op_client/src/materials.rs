@@ -31,6 +31,12 @@ const TEXTURE_SIZE: usize = 512;
 const MIN_WINDOWED_HEIGHT_M: f64 = 4.5;
 /// Walls narrower than this get no window (m).
 const MIN_WINDOWED_WALL_M: f64 = 1.6;
+/// A triangle of a wall at most this far off the wall's plane (degrees) is
+/// drawn as part of that plane, with its normal and texture frame.
+const WALL_ANGLE_DEG: f64 = 10.0;
+/// So is a triangle lying within this distance of the wall's plane (m),
+/// whatever its normal: a sliver, whose normal is imprecise.
+const IN_PLANE_M: f64 = 0.02;
 /// Open ground flatter than this is paved; steeper ground is grass and
 /// soil (cosine of 12 degrees).
 const PAVED_MIN_NORMAL_Y: f64 = 0.978;
@@ -284,6 +290,58 @@ fn triangulate(poly: &[Corner]) -> Vec<[Corner; 3]> {
         .collect()
 }
 
+/// A wall as drawn (see [`walls`]): triangles lying in one plane, which
+/// share its normal and texture frame.
+struct Drawn {
+    /// Its largest triangle, which it started from.
+    first: usize,
+    /// That triangle's normal: the others are turned to its side.
+    reference: [f64; 3],
+    /// The area-weighted sums of its triangles' normals (so turned) and of
+    /// their centres, and its area.
+    normals: [f64; 3],
+    centres: [f64; 3],
+    area: f64,
+    /// The area wound to face the reference's side less the area wound the
+    /// other way.
+    side: f64,
+    /// Its plane so far: the mean normal and a point on it.
+    normal: [f64; 3],
+    centre: [f64; 3],
+}
+
+impl Drawn {
+    fn new(first: usize, face: [f64; 3]) -> Self {
+        Drawn {
+            first,
+            reference: face,
+            normals: [0.0; 3],
+            centres: [0.0; 3],
+            area: 0.0,
+            side: 0.0,
+            normal: face,
+            centre: [0.0; 3],
+        }
+    }
+
+    /// Adds a triangle: its unit normal as wound, corners and area.
+    fn add(&mut self, face: [f64; 3], corners: [[f64; 3]; 3], area: f64) {
+        let w = if dot(face, self.reference) < 0.0 {
+            -area
+        } else {
+            area
+        };
+        for k in 0..3 {
+            self.normals[k] += w * face[k];
+            self.centres[k] += area * (corners[0][k] + corners[1][k] + corners[2][k]) / 3.0;
+        }
+        self.area += area;
+        self.side += w;
+        self.normal = normalize(self.normals).unwrap_or(self.reference);
+        self.centre = self.centres.map(|v| v / self.area);
+    }
+}
+
 /// Splits a triangle by the horizontal plane at height `y` into the
 /// polygon below it and the polygon above it (either may be empty).
 fn cut_at(tri: [Corner; 3], y: f64) -> (Vec<Corner>, Vec<Corner>) {
@@ -311,6 +369,16 @@ fn cut_at(tri: [Corner; 3], y: f64) -> (Vec<Corner>, Vec<Corner>) {
 /// windows, the walls are cut at the first floor and the part below gets a
 /// ground-floor style; where the ground falls away along the wall, the
 /// part below street level is a plain base.
+///
+/// A wall made of several triangles is drawn as one plane: its triangles
+/// share one direction along the wall, one fit of bays and storeys, and
+/// one normal (the area-weighted mean of theirs), and all face the same
+/// way. The shells are not always planar, so a wall's triangles differ a
+/// little in their normals. Before, each triangle took its direction along
+/// the wall from its own normal, and u is measured from the frame's
+/// origin, two to three kilometres away: a hundredth of a degree between
+/// two triangles moved one's windows about 0.4 m against the other's,
+/// cutting windows along the diagonal between them.
 fn walls(
     prim: &Primitive,
     origin: [f64; 3],
@@ -335,11 +403,12 @@ fn walls(
     // Per triangle: the wall plane it lies in, if it is a wall.
     struct Plane {
         key: (i64, i64),
-        tangent: [f64; 2],
         /// The horizontal normal (one orientation per plane) and the
         /// plane's distance from the origin along it.
         normal: [f64; 2],
         distance: f64,
+        /// The triangle's unit normal, as it is wound.
+        face: [f64; 3],
     }
     let planes: Vec<Option<Plane>> = tris
         .iter()
@@ -363,9 +432,9 @@ fn walls(
                     (azimuth / 2.0).round() as i64,
                     (distance / 0.25).round() as i64,
                 ),
-                tangent: [-h[1], h[0]],
                 normal: h,
                 distance,
+                face: n,
             })
         })
         .collect();
@@ -418,27 +487,93 @@ fn walls(
             });
         wall_of.insert(k, wall);
     }
-    let mut extent: BTreeMap<(i64, i64), (f64, f64)> = BTreeMap::new();
-    // Per plane: sum of x, sum of z, count, lowest y.
-    let mut spread: BTreeMap<(i64, i64), (f64, f64, f64, f64)> = BTreeMap::new();
-    for (t, plane) in tris.iter().zip(&planes) {
-        let Some(p) = plane else { continue };
+    // The walls as drawn: triangles that lie in one plane share its normal
+    // and texture frame. Largest first, a triangle joins the first wall
+    // whose plane (the area-weighted mean of its triangles') it lies
+    // within 0.2 m of and is at most WALL_ANGLE_DEG off, or within
+    // IN_PLANE_M of whatever its normal (a sliver, whose normal is
+    // imprecise); else it starts a wall. Unlike the keys above, this
+    // measures nothing from the frame's origin, kilometres away, where a
+    // hundredth of a degree is 0.4 m.
+    let cos_wall = WALL_ANGLE_DEG.to_radians().cos();
+    let face = |i: usize| planes[i].as_ref().map_or([0.0; 3], |p| p.face);
+    let mut order: Vec<usize> = (0..tris.len()).filter(|&i| planes[i].is_some()).collect();
+    order.sort_by(|&a, &b| areas[b].total_cmp(&areas[a]).then(a.cmp(&b)));
+    let mut drawn: Vec<Drawn> = Vec::new();
+    let mut drawn_of: Vec<Option<usize>> = vec![None; tris.len()];
+    for i in order {
+        let corners = tris[i].map(world);
+        let f = face(i);
+        let fits = |d: &Drawn| {
+            let off = corners
+                .iter()
+                .map(|p| dot(sub(*p, d.centre), d.normal).abs())
+                .fold(0.0, f64::max);
+            off < 0.2 && (dot(f, d.normal).abs() >= cos_wall || off < IN_PLANE_M)
+        };
+        let k = match drawn.iter().position(fits) {
+            Some(k) => k,
+            None => {
+                drawn.push(Drawn::new(i, f));
+                drawn.len() - 1
+            }
+        };
+        drawn[k].add(f, corners, areas[i]);
+        drawn_of[i] = Some(k);
+    }
+    // Per drawn wall: its normal, facing the side most of its area is wound
+    // to face, and its direction along the wall, from that normal.
+    let axes: Vec<([f64; 3], [f64; 2])> = drawn
+        .iter()
+        .map(|d| {
+            let n = if d.side < 0.0 {
+                d.normal.map(|v| -v)
+            } else {
+                d.normal
+            };
+            let h = normalize([n[0], 0.0, n[2]]).map_or([1.0, 0.0], |h| {
+                // One orientation per plane, as for the keys.
+                if h[0] < -1e-9 || (h[0].abs() <= 1e-9 && h[2] < 0.0) {
+                    [-h[0], -h[2]]
+                } else {
+                    [h[0], h[2]]
+                }
+            });
+            (n, [-h[1], h[0]])
+        })
+        .collect();
+    // Per drawn wall: its extent along the wall, and the sum of x, sum of z,
+    // count and lowest y of its corners.
+    let mut extent = vec![(f64::MAX, f64::MIN); drawn.len()];
+    let mut spread = vec![(0.0, 0.0, 0.0, f64::MAX); drawn.len()];
+    for (t, k) in tris.iter().zip(&drawn_of) {
+        let Some(k) = *k else { continue };
+        let tangent = axes[k].1;
         for &i in t {
             let w = world(i);
-            let u = p.tangent[0] * w[0] + p.tangent[1] * w[2];
-            let e = extent.entry(p.key).or_insert((u, u));
+            let u = tangent[0] * w[0] + tangent[1] * w[2];
+            let e = &mut extent[k];
             e.0 = e.0.min(u);
             e.1 = e.1.max(u);
-            let s = spread.entry(p.key).or_insert((0.0, 0.0, 0.0, f64::MAX));
+            let s = &mut spread[k];
             s.0 += w[0];
             s.1 += w[2];
             s.2 += 1.0;
             s.3 = s.3.min(w[1]);
         }
     }
-    let base: BTreeMap<(i64, i64), f64> = spread
+    let base: Vec<f64> = spread
         .into_iter()
-        .map(|(key, (sx, sz, n, lowest))| (key, ground(sx / n, sz / n).unwrap_or(lowest)))
+        .map(|(sx, sz, n, lowest)| ground(sx / n, sz / n).unwrap_or(lowest))
+        .collect();
+    // Windowed walls carry a seed for lit windows: their largest triangle's
+    // wall's, so a window is never split between two choices.
+    let seeds: Vec<[f32; 2]> = drawn
+        .iter()
+        .map(|d| {
+            let key = planes[d.first].as_ref().map_or((0, 0), |p| p.key);
+            windows::wall_seed(look.building, wall_of[&key])
+        })
         .collect();
     let [bay_w, storey_h] = match look.style {
         Some(s) => [f64::from(FACADES[s].bay_w), f64::from(FACADES[s].storey_h)],
@@ -447,16 +582,17 @@ fn walls(
             [f64::from(p[0]), f64::from(p[1])]
         }
     };
-    let uv_of = |c: &Corner, plane: &Option<Plane>| -> [f32; 2] {
+    let uv_of = |c: &Corner, wall: Option<usize>| -> [f32; 2] {
         let w = c.world;
-        match plane {
+        match wall {
             // Not a wall (a horizontal piece): one plaster texel.
             None => [0.05, 0.02],
-            Some(p) => {
-                let u = p.tangent[0] * w[0] + p.tangent[1] * w[2];
-                let (lo, hi) = extent[&p.key];
+            Some(k) => {
+                let tangent = axes[k].1;
+                let u = tangent[0] * w[0] + tangent[1] * w[2];
+                let (lo, hi) = extent[k];
                 let len = hi - lo;
-                let v = -((w[1] - base[&p.key]) / storey_h);
+                let v = -((w[1] - base[k]) / storey_h);
                 if look.style.is_none() {
                     [(u / bay_w) as f32, v as f32]
                 } else if len < MIN_WINDOWED_WALL_M {
@@ -470,17 +606,28 @@ fn walls(
         }
     };
     let (mut upper, mut lower) = (Part::default(), Part::default());
-    for (t, plane) in tris.iter().zip(&planes) {
-        let tri = t.map(|i| Corner {
+    for (i, t) in tris.iter().enumerate() {
+        let wall = drawn_of[i];
+        let mut tri = t.map(|i| Corner {
             local: prim.positions[i],
             normal: prim.normals[i],
             world: world(i),
         });
+        // A wall's triangles share its normal and face the same way.
+        if let Some(k) = wall {
+            let n = axes[k].0;
+            if dot(face(i), n) < 0.0 {
+                tri.swap(1, 2);
+            }
+            for c in &mut tri {
+                c.normal = n.map(|v| v as f32);
+            }
+        }
         // (polygon, part, fixed texture coordinates).
         let mut pieces: Vec<(Vec<Corner>, bool, Option<[f32; 2]>)> = Vec::new();
-        match (look.style, plane) {
-            (Some(_), Some(p)) => {
-                let street = base[&p.key];
+        match (look.style, wall) {
+            (Some(_), Some(k)) => {
+                let street = base[k];
                 let (under, rest) = cut_at(tri, street);
                 // Below the street line: one texel of the ground floor's
                 // base, 0.2 m up at the edge of the bay.
@@ -493,17 +640,12 @@ fn walls(
             }
             _ => pieces.push((tri.to_vec(), true, None)),
         }
-        // Windowed walls carry their wall's seed for lit windows.
-        let seed = look.style.map(|_| {
-            plane.as_ref().map_or([0.0; 2], |p| {
-                windows::wall_seed(look.building, wall_of[&p.key])
-            })
-        });
+        let seed = look.style.map(|_| wall.map_or([0.0; 2], |k| seeds[k]));
         for (poly, is_upper, fixed) in pieces {
             let part = if is_upper { &mut upper } else { &mut lower };
             for t in triangulate(&poly) {
                 for c in &t {
-                    part.push(c.local, c.normal, fixed.unwrap_or_else(|| uv_of(c, plane)));
+                    part.push(c.local, c.normal, fixed.unwrap_or_else(|| uv_of(c, wall)));
                     if let Some(seed) = seed {
                         part.seeds.push(seed);
                     }
@@ -1042,6 +1184,145 @@ mod tests {
             assert!(part.seeds.is_empty());
             assert_eq!(mesh(part).attribute(Mesh::ATTRIBUTE_UV_1), None);
         }
+    }
+
+    /// A wall's triangles as drawn: each corner's position, normal and
+    /// texture coordinates.
+    fn corners(out: &[(Surface, Part)]) -> Vec<([f32; 3], [f32; 3], [f32; 2])> {
+        out.iter()
+            .flat_map(|(_, p)| {
+                (0..p.positions.len()).map(|i| (p.positions[i], p.normals[i], p.uvs[i]))
+            })
+            .collect()
+    }
+
+    /// The unit normal of a triangle as wound.
+    fn wound(a: [f32; 3], b: [f32; 3], c: [f32; 3]) -> [f64; 3] {
+        let [a, b, c] = [a, b, c].map(|p| p.map(f64::from));
+        normalize(cross(sub(b, a), sub(c, a))).unwrap()
+    }
+
+    /// A wall that is not quite planar, as the shells' are: a 10 m by 12 m
+    /// quad facing south, of two triangles, each with its own normal (one
+    /// corner is 3 cm out of the plane): one due south, the other a little
+    /// west of it. And a sliver along its top, 1 mm out of the plane. When
+    /// each triangle took its own direction along the wall, these two even
+    /// took opposite ones, mirroring one's windows.
+    fn bent_wall() -> Primitive {
+        let positions = vec![
+            [0.0, 0.0, 0.0],
+            [10.0, 0.0, 0.0],
+            [10.0, 12.0, 0.03],
+            [0.0, 12.0, 0.0],
+            [0.0, 12.0, 0.0],
+            [10.0, 12.0, 0.031],
+            [10.0, 12.05, 0.03],
+        ];
+        let indices: Vec<u32> = vec![0, 1, 2, 0, 2, 3, 4, 5, 6];
+        let mut normals = vec![[0.0; 3]; positions.len()];
+        for t in indices.chunks(3) {
+            let [a, b, c] = [0, 1, 2].map(|k| positions[t[k] as usize]);
+            let n = wound(a, b, c);
+            for &i in t {
+                normals[i as usize] = n.map(|v| v as f32);
+            }
+        }
+        Primitive {
+            material: Palette::Wall,
+            positions,
+            normals,
+            indices,
+        }
+    }
+
+    /// Far from the frame's origin, as the old town's tiles are.
+    const FAR: [f64; 3] = [-2148.0, 400.0, -479.0];
+
+    #[test]
+    fn a_wall_plane_has_one_normal_and_one_texture_frame() {
+        let look = AssetLook::for_building("test:bent", 12.0, false);
+        assert!(look.style.is_some());
+        let prim = bent_wall();
+        let [a, b] = [0, 3].map(|t| {
+            let i = &prim.indices[t..t + 3];
+            wound(
+                prim.positions[i[0] as usize],
+                prim.positions[i[1] as usize],
+                prim.positions[i[2] as usize],
+            )
+        });
+        let apart = dot(a, b).acos();
+        assert!(apart.to_degrees() > 0.1, "{}", apart.to_degrees());
+        let out = walls(&prim, FAR, &look, &mut |_, _| None);
+        let all = corners(&out);
+        // Every triangle of the wall, the sliver too, has the same normal:
+        // the mean of the two halves', between them.
+        let n = all[0].1;
+        assert!(all.iter().all(|c| c.1 == n), "{all:?}");
+        let n = n.map(f64::from);
+        assert!(dot(n, a).acos() < apart && dot(n, b).acos() < apart);
+        // One texture frame: a corner has the same texture coordinates in
+        // every triangle it belongs to, so no window is cut along the
+        // diagonal; and the bays still fit the wall.
+        for (p, _, uv) in &all {
+            for (q, _, other) in &all {
+                if p == q {
+                    assert!(
+                        (uv[0] - other[0]).abs() < 1e-4 && (uv[1] - other[1]).abs() < 1e-4,
+                        "{p:?}: {uv:?} {other:?}"
+                    );
+                }
+            }
+        }
+        let us = all.iter().map(|c| c.2[0]);
+        let (lo, hi) = us.fold((f32::MAX, f32::MIN), |(l, h), u| (l.min(u), h.max(u)));
+        let bays = (10.0 / FACADES[look.style.unwrap()].bay_w).round();
+        assert!(lo.abs() < 1e-3 && (hi - bays).abs() < 1e-3, "{lo} {hi}");
+        // The world data is not changed: the client only draws it so.
+        assert_eq!(prim.normals, bent_wall().normals);
+    }
+
+    /// A triangle wound the other way (its normal pointing into the
+    /// building) is turned to face the way the rest of its wall does, so
+    /// the wall's normal map is not inverted on it.
+    #[test]
+    fn a_wall_faces_one_way() {
+        let mut prim = wall_prim(10.0);
+        prim.indices = vec![0, 1, 2, 0, 3, 2];
+        prim.normals = vec![[0.0, 0.0, 1.0]; 4];
+        let out = walls(&prim, FAR, &AssetLook::plain(), &mut |_, _| None);
+        let all = corners(&out);
+        for t in all.chunks(3) {
+            assert_eq!(t[0].1, [0.0, 0.0, 1.0]);
+            assert!(wound(t[0].0, t[1].0, t[2].0)[2] > 0.999, "{t:?}");
+        }
+    }
+
+    /// A narrow return beside a wall, 15 cm deep, lies within 0.2 m of the
+    /// wall's plane but at a right angle to it: it keeps its own normal.
+    #[test]
+    fn a_return_keeps_its_own_normal() {
+        let mut prim = wall_prim(10.0);
+        prim.positions
+            .extend([[10.0, 0.0, 0.0], [10.0, 0.0, -0.15], [10.0, 12.0, -0.15]]);
+        prim.normals = vec![[0.0, 0.0, 1.0]; 4];
+        prim.normals.extend([[1.0, 0.0, 0.0]; 3]);
+        prim.indices.extend([4, 5, 6]);
+        let look = AssetLook::for_building("test:return", 12.0, false);
+        let out = walls(&prim, FAR, &look, &mut |_, _| None);
+        let all = corners(&out);
+        let returns = all.chunks(3).filter(|t| t.iter().any(|c| c.0[2] < -0.01));
+        let mut n = 0;
+        for t in returns {
+            assert_eq!(t[0].1, [1.0, 0.0, 0.0]);
+            n += 1;
+        }
+        assert!(n > 0);
+        assert!(
+            all.chunks(3)
+                .filter(|t| t.iter().all(|c| c.0[2].abs() < 1e-6))
+                .all(|t| t[0].1 == [0.0, 0.0, 1.0])
+        );
     }
 
     #[test]

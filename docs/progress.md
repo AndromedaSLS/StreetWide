@@ -2431,3 +2431,101 @@ outside the repository):
   atmosphere's settings change.
 - **The moon's disc** (above): give the moon a `SunDisk` of its own size,
   or none.
+
+### Window glass and the moon (2026-11-25)
+
+Two look defects fixed in `op_client` only (`materials.rs`, `sky.rs`); the
+world format, the meshes and their hashes, the simulation and the replays
+did not change. No ADR changed.
+
+**The diagonal seam on window glass.** Near windows were cut along the
+diagonal between a wall's two triangles: the glass and frames on one side
+sat elsewhere than on the other, so by day one triangle showed glass
+reflecting the sky where the other showed plaster, and at night one half
+of a window was lit and the other not.
+- **The cause** (checked with a temporary test that ran the client's wall
+  code over every windowed wall of the world and compared each corner
+  shared by two nearly coplanar triangles): the shells' wall triangles
+  differ a little in their normals, as suspected, but the normals were not
+  what showed. Each triangle took its direction along the wall from its
+  own normal, and the texture coordinate along the wall is measured from
+  the frame's origin, 2 to 2.6 km away, so a hundredth of a degree moved
+  one triangle's windows about 0.4 m against its neighbour's. Of the
+  edges between triangles 0.001° to 0.01° apart, 31% had windows shifted
+  by more than 2% of a bay; over all walls, 35,875 of 268,842 shared
+  edges had a shift of 5% or more of a bay or storey (whole bays aside).
+  Walls split into several plane keys also fitted their bays and storeys
+  per key, and the keys move by metres for the same reason. The normals
+  themselves differed by more than 0.5° at only 8,501 edges; a 0.1°
+  difference turns the reflection by 0.2°, too little to see.
+- **The fix:** triangles that lie in one plane (within 0.2 m of the
+  plane and at most 10° off it, or within 2 cm whatever their normal, as
+  slivers are) are drawn as one wall: one direction along the wall, one
+  fit of bays and storeys, one normal (the area-weighted mean of the
+  triangles'), and all wound to face the same way. The grouping measures
+  nothing from the frame's origin. Lit windows keep the seed of the
+  wall's largest triangle, so walls that had no seam keep their lit
+  windows. Shared edges with a shift of 5% or more: 926 of 280,262. The
+  cost is unchanged: the wall code for all 1,369 shells takes 402 ms in
+  total against 470 ms before (one run each, test build).
+- **Screenshots** (1280 × 720, high, release build; kept outside the
+  repository): at Hirschenplatz and Rathaus at 12:00 and 18:00 on 21
+  December and 22:30 on 21 June, windows cut along a diagonal (with a
+  lit and an unlit half at night) and the jagged ground floor of the
+  corner building at Rathaus are whole now.
+
+**The moon drawn as a second sun.** The moon's light had no `SunDisk`, so
+Bevy's atmosphere drew the sun's for it (0.533°), as bright as the light
+spread over that disc: about 1,800 times the exposure's white at 18:00 on
+21 December, a blown disc with a sun's bloom. Bevy 0.20.1 draws a light's
+disc (`sample_sun_radiance` in the atmosphere's shaders) as a round,
+evenly bright circle: a size, and an intensity times the light over the
+disc; no phase and no texture.
+- **The fix:** the moon's disc is 0.518° (its mean diameter), as bright
+  as the real moon (about 4,800 cd/m² when full, dimmed by the phase) but
+  at most 6 times the exposure's white, a look choice; it appears as the
+  sun goes from 1° to 3° below the horizon (the moonlight starts at 1°
+  down). Since the disc cannot show a phase, only a nearly full moon has
+  one, fading in from 85% to 95% lit; other moons have none.
+- **Screenshots:** at Lindenhof looking east 25° up on 21 December (92%
+  lit), at 16:50, 17:00 and 18:00 the moon is a small white disc, about
+  5 pixels, with little bloom (at 18:00, 28 pixels more than 60 levels
+  above the sky and 69 more than 10, against 118 and 519 before); it is
+  pale against the twilight at 16:50, as a real moon is. At 22:30 on 21
+  June (50% lit) the half moon no longer shows as a full bright disc.
+
+**The rest unchanged:** 12:00 and 18:00 on 21 December at the three stops
+against main. The street, the sky and the roofs are within run-to-run
+noise (the street: 0.28 to 0.45 of 255 against 0.44 to 0.62 between two
+runs of main at noon, 0.06 to 0.10 against 0.05 to 0.07 at 18:00). Over
+the whole picture the mean difference is 0.7 to 7.7 against 0.05 to 0.33,
+all of it on facades: windows moved on walls made of several triangles,
+which each had their own frame (1.2% of pixels changed by more than 20
+levels at Lindenhof, 6.0% to 7.4% at Hirschenplatz and Rathaus, against
+0.01% between two runs of main); at 18:00 some of those walls' windows
+light differently.
+
+**Checks:**
+- `cargo fmt --all --check` and `cargo clippy --workspace --all-targets
+  --locked -- -D warnings`: pass.
+- `cargo test --workspace --locked`: 272 passed, 1 ignored. New in
+  `op_client`: a bent wall far from the origin draws as one plane, with
+  one normal between its halves' and the same texture coordinates at
+  every shared corner, a sliver included; a triangle wound the other way
+  is turned to face its wall's way; a narrow return keeps its own
+  normal; the moon's disc is 0.518°, smaller than the sun's; it is drawn
+  at the luminance asked for, white but at most 6 times white (1,800
+  times before); only a nearly full moon has one, from 1° to 3° after
+  sunset.
+- `op_replay check fixtures/replays/sample.oprep`: ok, 20 checkpoints,
+  final state `212bd353…`, unchanged.
+
+**Still open:**
+- Where a facade steps or bends by more than 0.2 m (two planes), each
+  plane keeps its own fit of bays and storeys, so a window can still be
+  cut along a vertical line there, as on the west front of the corner
+  building at Rathausbrücke (a 0.45 m step).
+- A moon with its phase needs a disc the client draws itself; Bevy's is
+  round.
+- The disc's 6 times white and the phase threshold are starting values
+  for ADR-0022's open question 2.

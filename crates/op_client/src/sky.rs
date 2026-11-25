@@ -7,7 +7,10 @@
 //! everything between the lights would otherwise be black:
 //! - **moonlight:** a dim, bluish directional light from the moon's real
 //!   position, following its phase and height, without shadows (as Far Cry
-//!   5 treats it). It is brighter than the real moon: a look choice;
+//!   5 treats it). It is brighter than the real moon: a look choice. Near
+//!   full moon the sky shows its disc, the moon's size, white but not
+//!   blooming like a second sun; Bevy cannot draw a phase, so other moons
+//!   have no disc;
 //! - **the city's glow:** a dim, warm glow on the sky, brightest at the
 //!   horizon, and the light it and the city give: a warm ambient fill. It
 //!   stands in for the light of street lamps and windows on the street
@@ -110,6 +113,25 @@ const MOON_EXTINCTION_MAG: f64 = 0.2;
 /// Moonlight's colour (linear RGB): bluish, the usual way to show night
 /// vision, rather than the moon's real, slightly warm colour.
 const MOON_COLOUR: [f32; 3] = [0.62, 0.74, 1.0];
+/// The moon's disc: its mean apparent diameter (degrees), 31.1 arcminutes;
+/// it goes from 29.4 to 33.5 with the moon's distance. Bevy's default disc,
+/// the sun's, is 32 arcminutes.
+const MOON_DISC_DEG: f32 = 0.518;
+/// The brightest the moon's disc is drawn: this many times the exposure's
+/// white (a luminance that the exposure brings to 1). White, with a little
+/// bloom; the real moon, about 4,800 cd/m² when full, would be 500 times
+/// white at the night's exposure and bloom like a second sun. A look
+/// choice.
+const MOON_DISC_WHITES: f32 = 6.0;
+/// Bevy draws the disc as a round, evenly bright disc, without a phase, so
+/// only a moon nearly full (the share of its disc lit) gets one: none
+/// below the first share, fading in to the full disc at the second.
+const MOON_DISC_LIT: [f64; 2] = [0.85, 0.95];
+/// The disc appears as the sun goes from the first to the second elevation
+/// (degrees): the moon's light, which Bevy draws the disc for, is hidden
+/// until the sun is 1° down, and by 3° down a real moon stands out white
+/// against the twilight.
+const MOON_DISC_APPEARS_DEG: [f64; 2] = [-1.0, -3.0];
 
 /// The city's glow on the sky at the horizon and overhead (cd/m²): an
 /// overcast sky lit orange-brown by the city, as in the photographs. Far
@@ -245,8 +267,10 @@ fn spawn_sky(
         }
         .build(),
     ));
-    // No disc: the light only, hidden while it gives none. Shadows would
-    // bring back the sun's cascades at night (ADR-0022).
+    // Hidden while it gives no light. Shadows would bring back the sun's
+    // cascades at night (ADR-0022). Without a `SunDisk` of its own, Bevy
+    // would draw the sun's disc for it, as bright as its light spread over
+    // that disc: about 1,800 times white at 18:00 on 21 December.
     commands.spawn((
         Moon,
         Visibility::Hidden,
@@ -255,6 +279,10 @@ fn spawn_sky(
             color: Color::linear_rgb(MOON_COLOUR[0], MOON_COLOUR[1], MOON_COLOUR[2]),
             shadow_maps_enabled: false,
             ..default()
+        },
+        SunDisk {
+            angular_size: moon_disc_size(),
+            intensity: 0.0,
         },
         Transform::default(),
     ));
@@ -391,13 +419,58 @@ pub fn moonlight_lux(moon: &MoonPosition) -> f32 {
     if el <= -0.5 {
         return 0.0;
     }
-    let a = moon.phase_angle.abs();
-    let phase = 10f64.powf(-0.4 * (0.026 * a + 4e-9 * a.powi(4)));
+    let phase = moon_phase_factor(moon);
     let h = el.max(0.0);
     let airmass = 1.0 / (h.to_radians().sin() + 0.505_72 * (h + 6.079_95).powf(-1.6364));
     let air = 10f64.powf(-0.4 * MOON_EXTINCTION_MAG * airmass);
     let rise = smoothstep((el + 0.5) / 1.5);
     FULL_MOON_LX * MOON_GAIN * (phase * air) as f32 * rise
+}
+
+/// The moon's light as a share of a full moon's, from its phase angle
+/// (Krisciunas and Schaefer 1991's magnitude law).
+fn moon_phase_factor(moon: &MoonPosition) -> f64 {
+    let a = moon.phase_angle.abs();
+    10f64.powf(-0.4 * (0.026 * a + 4e-9 * a.powi(4)))
+}
+
+/// The moon's disc's diameter (radians), for Bevy's [`SunDisk`].
+pub fn moon_disc_size() -> f32 {
+    MOON_DISC_DEG.to_radians()
+}
+
+/// The solid angle (sr) of a disc of a diameter (radians), as Bevy's
+/// atmosphere spreads a light over its disc.
+fn disc_solid_angle(diameter: f32) -> f32 {
+    std::f32::consts::FRAC_PI_4 * diameter * diameter
+}
+
+/// The moon disc's luminance (cd/m²), before the air along the view dims
+/// it: the real moon's (a full moon's light over its disc, about 4,800
+/// cd/m², dimmed by the phase), but at most [`MOON_DISC_WHITES`] times the
+/// exposure's white; nothing unless the moon is nearly full
+/// ([`MOON_DISC_LIT`]), since Bevy's disc is round; and appearing at dusk
+/// ([`MOON_DISC_APPEARS_DEG`]) for a sun elevation.
+pub fn moon_disc_luminance(moon: &MoonPosition, ev100: f32, sun_elevation_deg: f64) -> f32 {
+    let [from, to] = MOON_DISC_LIT;
+    let full = smoothstep((moon.illuminated - from) / (to - from));
+    let [top, bottom] = MOON_DISC_APPEARS_DEG;
+    let dusk = smoothstep((top - sun_elevation_deg) / (top - bottom));
+    let real = FULL_MOON_LX / disc_solid_angle(moon_disc_size()) * moon_phase_factor(moon) as f32;
+    real.min(MOON_DISC_WHITES / exposure_scale(ev100)) * full * dusk
+}
+
+/// The moon's [`SunDisk`] intensity that draws its disc at `luminance`
+/// (cd/m², from [`moon_disc_luminance`]) while its light gives `light_lx`.
+/// Bevy draws the disc as bright as the light spread over the disc, times
+/// this intensity.
+pub fn moon_disc_intensity(light_lx: f32, luminance: f32) -> f32 {
+    if light_lx <= 0.0 {
+        return 0.0;
+    }
+    let [r, g, b] = MOON_COLOUR;
+    let colour = 0.2126 * r + 0.7152 * g + 0.0722 * b;
+    luminance * disc_solid_angle(moon_disc_size()) / (colour * light_lx)
 }
 
 /// A colour temperature's linear RGB, mixed towards grey by `grey` and
@@ -466,7 +539,12 @@ fn update_sky(
     mut ambient: ResMut<GlobalAmbientLight>,
     mut sun: Single<(&mut Transform, &mut DirectionalLight), (With<Sun>, Without<Moon>)>,
     mut moon: Single<
-        (&mut Transform, &mut DirectionalLight, &mut Visibility),
+        (
+            &mut Transform,
+            &mut DirectionalLight,
+            &mut SunDisk,
+            &mut Visibility,
+        ),
         (With<Moon>, Without<Sun>, Without<SkyGlow>),
     >,
     glow: Single<
@@ -511,9 +589,11 @@ fn update_sky(
     }
     let dir = to_sun(m.azimuth, m.elevation);
     let up = if dir.y.abs() > 0.99 { Vec3::Z } else { Vec3::Y };
-    let (transform, light, visibility) = &mut *moon;
+    let (transform, light, disc, visibility) = &mut *moon;
     **transform = Transform::IDENTITY.looking_to(-dir, up);
     light.illuminance = moon_lx * dark;
+    disc.intensity =
+        moon_disc_intensity(light.illuminance, moon_disc_luminance(&m, ev100, elevation));
     // Without light, hidden: the renderer and the atmosphere then skip it.
     **visibility = if light.illuminance > 0.0 {
         Visibility::Inherited
@@ -766,6 +846,114 @@ mod tests {
             ..full(90.0)
         };
         assert!(moonlight_lux(&new) / overhead < 0.001);
+    }
+
+    /// The moon at 18:00 on 21 December 2026 over the old town: 92% lit,
+    /// 37° up in the east.
+    fn december_moon() -> MoonPosition {
+        let (days, minute) = geo::swiss_to_utc(DateTime {
+            year: 2026,
+            month: 12,
+            day: 21,
+            minute: 18 * 60,
+        });
+        geo::moon_position(days, minute, 8.5409, 47.3729)
+    }
+
+    /// The disc Bevy draws for the moon's light: as bright as the light's
+    /// illuminance spread over the disc, times the intensity (cd/m²).
+    fn drawn_disc(light_lx: f32, disc: &SunDisk) -> f32 {
+        let [r, g, b] = MOON_COLOUR;
+        let colour = 0.2126 * r + 0.7152 * g + 0.0722 * b;
+        colour * light_lx / disc_solid_angle(disc.angular_size) * disc.intensity
+    }
+
+    #[test]
+    fn the_moon_disc_is_the_moons_size() {
+        let deg = moon_disc_size().to_degrees();
+        assert!((deg - 0.518).abs() < 1e-4, "{deg}");
+        // Within the moon's range with its distance, and smaller than the
+        // sun's disc Bevy draws by default.
+        assert!((29.4 / 60.0..33.5 / 60.0).contains(&deg));
+        assert!(moon_disc_size() < SunDisk::EARTH.angular_size);
+    }
+
+    #[test]
+    fn the_moon_disc_is_white_not_a_second_sun() {
+        let m = december_moon();
+        assert!(
+            (m.illuminated - 0.92).abs() < 0.01 && (m.elevation - 37.4).abs() < 0.5,
+            "{m:?}"
+        );
+        let night_sun = -13.2;
+        let light = moonlight_lux(&m) * night(night_sun);
+        let ev100 = exposure_ev100(night_sun, moonlight_lux(&m));
+        assert_eq!(ev100, NIGHT_EV100);
+        let white = 1.0 / exposure_scale(ev100);
+        // Before: Bevy's default disc, the sun's, at the light's strength,
+        // was about 1,800 times white.
+        let before = drawn_disc(light, &SunDisk::EARTH) / white;
+        assert!((1500.0..2200.0).contains(&before), "{before}");
+        // Now: the disc Bevy draws is the luminance asked for, white but
+        // at most MOON_DISC_WHITES times white, and far below the real
+        // moon's (about 4,800 cd/m² when full), which would be 500 times.
+        let luminance = moon_disc_luminance(&m, ev100, night_sun);
+        let disc = SunDisk {
+            angular_size: moon_disc_size(),
+            intensity: moon_disc_intensity(light, luminance),
+        };
+        let drawn = drawn_disc(light, &disc);
+        assert!(
+            (drawn / luminance - 1.0).abs() < 1e-4,
+            "{drawn} {luminance}"
+        );
+        let whites = drawn / white;
+        assert!(
+            (2.0..=MOON_DISC_WHITES + 1e-3).contains(&whites),
+            "{whites}"
+        );
+        let full = MoonPosition {
+            illuminated: 1.0,
+            phase_angle: 0.0,
+            ..m
+        };
+        let real = FULL_MOON_LX / disc_solid_angle(moon_disc_size());
+        assert!((4500.0..5200.0).contains(&real), "{real}");
+        assert!(
+            (moon_disc_luminance(&full, ev100, night_sun) * exposure_scale(ev100)
+                - MOON_DISC_WHITES)
+                .abs()
+                < 1e-3
+        );
+        // At a bright exposure the real moon is dimmer than the cap: then
+        // it is the real moon's luminance.
+        let day = moon_disc_luminance(&full, 14.0, night_sun);
+        assert!((day / real - 1.0).abs() < 1e-4, "{day} {real}");
+        // No light, no disc.
+        assert_eq!(moon_disc_intensity(0.0, luminance), 0.0);
+    }
+
+    #[test]
+    fn only_a_nearly_full_moon_gets_a_disc_and_it_appears_at_dusk() {
+        let m = |illuminated: f64| MoonPosition {
+            azimuth: 180.0,
+            elevation: 30.0,
+            illuminated,
+            phase_angle: (2.0 * illuminated - 1.0).acos().to_degrees(),
+        };
+        let at = |moon: &MoonPosition, sun: f64| moon_disc_luminance(moon, NIGHT_EV100, sun);
+        // Bevy's disc is round: a half moon (22:30 on 21 June, 49% lit)
+        // gets none, a nearly full one the whole disc.
+        assert_eq!(at(&m(0.49), -9.0), 0.0);
+        assert_eq!(at(&m(0.85), -9.0), 0.0);
+        assert!(at(&m(0.9), -9.0) > 0.0);
+        assert!(at(&m(0.96), -9.0) > 0.9 * at(&m(1.0), -9.0));
+        // None until the sun is 1° down, all of it from 3° down.
+        let full = m(1.0);
+        assert_eq!(at(&full, 0.0), 0.0);
+        assert_eq!(at(&full, -1.0), 0.0);
+        assert!(at(&full, -2.0) > 0.0);
+        assert_eq!(at(&full, -3.0), at(&full, -10.0));
     }
 
     #[test]
