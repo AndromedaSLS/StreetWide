@@ -2253,3 +2253,39 @@ reports and logs, the 4 cost reports, and the screenshots), and
   for).
 - **One jump** at Lindenhof in June, not traced.
 - **RFC 0005:** the points above.
+
+### RFC 0005 revised after the crowd prototype (2026-11-25)
+
+[RFC 0005](../rfcs/0005-navigation-data.md) said it would be revised
+after ADR-0021's client prototype; this is that revision, on branch
+`nav-rfc-prototype`. It stays a Draft, with comments until at least
+2026-12-09. **Nothing is decided.**
+
+| What the prototype found | What changed in the RFC |
+|---|---|
+| Per-lane numbers were met only by calibrating walk weights at load, with a factor per time | The numbers are targets. New choice N1 to N3 (who calibrates): **N2**, the population function calibrates within its version, over a unit the data fixes, never over what is loaded; place trips become weights that the function scales, and lanes and areas win. Agreement is checked by G1's listing of nodes no walk can meet and by the function's census |
+| One centred width was not enough | New `room_mm` per segment (room free of walls on each side, measured every 0.5 m against shells cut 0.5 m up) and `clearance_mm` per node, from the matching. New choice R1 to R4: **R1**, stored; G11 checks the room claimed. Width narrowing near walls is gone |
+| Area lanes were 38% of lane length | Areas carry `curve` and `people_per_ha`; `area` lanes carry no number of their own |
+| Standing spots on lanes put walkers through groups | New `spots_mm` on stops, squares, viewpoints and fountains, at least 1.8 m from every lane; seats outside every lane's band; G1 checks both |
+| 98 lanes (2.4 km) were dropped | The ingest never drops a lane: it marks `blocked`. Probes every 0.5 m, not 1 m, in the ingest and G11 |
+| No benches, terraces, entrances or tram stops in the cache | Evidence added for the node query |
+| Both kinds of avoidance were needed | The client section names the near tier and what it needs from the data (room on each side); sub-lanes by direction need no data of their own |
+| About 2 ms a tick at the 99th percentile | Named as the client's cost; precomputed weights (N3) would save load time, not this |
+
+- **Also:** the reference for numbers of people present (the busiest
+  weekday hour at a month factor of 1,000, as the prototype set its
+  densities); the prototype's starting values (densities per lane kind,
+  200 people per hectare of square, occupancy shares, month factors)
+  in the ingest section; K1's amendment now covers measuring room and
+  choosing spots; the size estimate rises to about 3 to 3.5 MB for the
+  district.
+- **Unresolved, updated:** what the prototype did not exercise (tile
+  cuts and joining, `forward_permille`, opening hours, holidays,
+  sitting, a walking camera, more than one seed); calibration at a
+  city's scale; how area lanes are laid and walkers spread over squares;
+  doors in view.
+- **No code, schema, fixture or replay changes.**
+
+**Waiting for the maintainer,** besides the list in the RFC's first
+entry: N2 against N3 (who calibrates), and R1 (room stored in the data)
+against computing it in the client.
