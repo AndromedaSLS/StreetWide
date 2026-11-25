@@ -24,8 +24,12 @@
 //! glow (ADR-0022). Which windows are lit is invented, seeded from the
 //! building, wall, window and clock, never from data about real homes. F2
 //! shows the data alone.
+//!
+//! The crowd prototype (`crowd_proto`, branch `crowd-prototype`) adds
+//! options of its own, all off by default; `--help` lists them.
 
 mod controls;
+mod crowd_proto;
 mod geo;
 mod grid;
 mod heights;
@@ -71,6 +75,8 @@ pub struct Options {
     pub details: bool,
     /// Start in inspect mode (I).
     pub inspect: bool,
+    /// The crowd prototype's options (`crowd_proto`): all off by default.
+    pub crowd: crowd_proto::CrowdOptions,
 }
 
 const USAGE: &str = "usage: op_client [--world <dir>] [--seed <n>] [--place <name|number> | --at <lon>,<lat>[,<heading>]] [--pitch <degrees>] [--time <HH:MM>] [--date <YYYY-MM-DD>] [--view walk|fly|map] [--details] [--inspect] [--replay <file.oprep>] [--exit-when-done] [--screenshot <file.png> [--screenshot-tick <n>]]";
@@ -141,8 +147,15 @@ fn parse_args() -> Result<Options, String> {
                 }
                 o.view = Some(v)
             }
-            "-h" | "--help" => return Err(USAGE.into()),
-            other => return Err(format!("unknown argument {other}\n{USAGE}")),
+            "-h" | "--help" => return Err(format!("{USAGE}\n{}", crowd_proto::USAGE)),
+            other => {
+                if !crowd_proto::parse_arg(&mut o.crowd, other, &mut value)? {
+                    return Err(format!(
+                        "unknown argument {other}\n{USAGE}\n{}",
+                        crowd_proto::USAGE
+                    ));
+                }
+            }
         }
     }
     Ok(o)
@@ -176,9 +189,22 @@ fn main() -> ExitCode {
         debug: options.details,
     };
     let inspect = inspect::Inspect::new(options.inspect);
+    // The crowd prototype's benchmark: 1920 x 1080 physical pixels, vsync
+    // off.
+    let window = if options.crowd.bench.is_some() {
+        Window {
+            title,
+            resolution: bevy::window::WindowResolution::new(1920, 1080)
+                .with_scale_factor_override(1.0),
+            present_mode: bevy::window::PresentMode::AutoNoVsync,
+            ..default()
+        }
+    } else {
+        Window { title, ..default() }
+    };
     let exit = App::new()
         .add_plugins(DefaultPlugins.set(WindowPlugin {
-            primary_window: Some(Window { title, ..default() }),
+            primary_window: Some(window),
             ..default()
         }))
         .insert_resource(options)
@@ -195,6 +221,7 @@ fn main() -> ExitCode {
             travel::TravelPlugin,
             inspect::InspectPlugin,
             hud::HudPlugin,
+            crowd_proto::CrowdPlugin,
         ))
         .run();
     match exit {
