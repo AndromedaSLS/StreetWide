@@ -250,6 +250,29 @@ fn the_command_line_exits_0_with_findings() {
     );
 }
 
+/// `--replay` takes a regular file of at most `MAX_REPLAY_BYTES`, as every
+/// command that loads a replay does, and the error names it.
+#[test]
+fn a_replay_that_is_not_a_file_is_refused() {
+    let t = Temp::new("compare-replay-dir");
+    let dir = t.join("not-a-replay");
+    std::fs::create_dir(&dir).unwrap();
+    let (code, _, err) = op_replay(&[
+        &"compare-worlds",
+        &fixture_world(),
+        &fixture_world(),
+        &"--replay",
+        &dir,
+    ]);
+    assert_eq!(
+        (code, err.trim_end()),
+        (
+            2,
+            format!("error: {}: not a regular file", dir.display()).as_str()
+        )
+    );
+}
+
 /// The district's water, added by the ingest (local stores, gitignored).
 #[test]
 fn the_district_water_needs_no_simulation() {

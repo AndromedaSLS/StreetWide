@@ -283,6 +283,21 @@ fn the_command_line_merges_with_the_full_gate() {
     let r = op_world::contrib::MergeRecord::from_bytes(&read(&record)).unwrap();
     assert_eq!(r.check_report_id, Some(ContentId::of(&read(&report))));
 
+    // A replay is loaded like every replay: a regular file, named in the
+    // error.
+    let dir = t.join("not-a-replay");
+    std::fs::create_dir(&dir).unwrap();
+    let mut with_dir: Vec<&dyn AsRef<std::ffi::OsStr>> = without.clone();
+    with_dir.extend([&"--replay" as &dyn AsRef<std::ffi::OsStr>, &dir]);
+    let (code, _, err) = op_replay(&with_dir);
+    assert_eq!(
+        (code, err.trim_end()),
+        (
+            2,
+            format!("error: {}: not a regular file", dir.display()).as_str()
+        )
+    );
+
     // Usage errors.
     let (code, _, err) = op_replay(&[&"merge", &world, &bundle, &"--log", &log]);
     assert_eq!(code, 2);

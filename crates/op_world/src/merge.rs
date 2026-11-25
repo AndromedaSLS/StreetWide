@@ -3,16 +3,21 @@
 //!
 //! These functions work on local directories; where the canonical store and
 //! the world log are hosted is decided separately (ADR-0010). A merge never
-//! leaves the store half-changed by a refused change set: the gate runs and
-//! the record is built and validated first, then the new objects are copied
-//! in, and `world.json` is written last.
+//! leaves the store half-changed by a refused change set: the gate runs, the
+//! record is built and validated, and with `--log` the log is checked to
+//! take the record ([`WorldLog::check_append`]); then the new objects are
+//! copied in, and `world.json` is written last.
 //!
 //! One merge at a time: a merge holds a lock file in the store
-//! ([`STORE_LOCK`]) and, with `--log`, one in the log ([`LOG_LOCK`]), from
-//! before it reads them until it has written them. A second merge finds the
-//! file and stops before it reads anything. Two merges that both started
-//! from the same world would otherwise leave the store and the log naming
-//! different worlds.
+//! ([`STORE_LOCK`]) and, with `--log`, one in the log ([`LOG_LOCK`]).
+//! [`MergeArgs::run`] takes both before it reads the store or the log and
+//! keeps them until it has written the store and appended the record;
+//! [`merge_with`] alone holds the store's until it has written `world.json`.
+//! A second merge finds a lock file and stops before it writes anything.
+//! Two merges that both started from the same world would otherwise leave
+//! the store and the log naming different worlds. An empty path names the
+//! current directory here, as it does for [`Store`] and [`WorldLog`], so
+//! its lock is taken there.
 //!
 //! - [`merge`] runs `op_world`'s gate (G1 to G8). [`merge_with`] takes the
 //!   gate as a function, so `op_replay merge` can run the complete gate (G1
@@ -20,10 +25,15 @@
 //! - [`WorldLog`] keeps a world log in a local directory.
 //! - [`MergeArgs`] is what `op_world merge` and `op_replay merge` share: the
 //!   same options, checks and outputs, with a different gate.
+//!
+//! Bundles, previous records and world logs may come from elsewhere, so
+//! every file is read with [`read_file`]: a regular file of at most
+//! [`MAX_FILE_BYTES`], never a link, a FIFO or a device. A world log holds
+//! no links at all (see [`WorldLog`]).
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::fs;
-use std::io;
+use std::io::{self, Write as _};
 use std::path::{Path, PathBuf};
 
 use crate::contrib::{
@@ -49,21 +59,61 @@ struct Lock(PathBuf);
 impl Lock {
     /// Takes the lock `name` in `dir`, or says why it cannot. A lock that
     /// exists is never removed here: it belongs to another merge, or to one
-    /// that stopped before it could remove it.
+    /// that stopped before it could remove it. Something else at that path
+    /// (a directory, a link) is refused with what it is; Windows reports it
+    /// as access denied rather than as existing.
     fn take(dir: &Path, name: &str, what: &str) -> Result<Lock> {
         let path = dir.join(name);
-        match fs::OpenOptions::new()
+        let opened = fs::OpenOptions::new()
             .write(true)
             .create_new(true)
-            .open(&path)
-        {
-            Ok(_) => Ok(Lock(path)),
-            Err(e) if e.kind() == io::ErrorKind::AlreadyExists => Err(Error::Invalid(format!(
+            .open(&path);
+        let err = match opened {
+            Ok(_) => return Ok(Lock(path)),
+            Err(e) => e,
+        };
+        match fs::symlink_metadata(&path) {
+            Ok(meta) if meta.is_file() => Err(Error::Invalid(format!(
                 "{} exists: another merge is running on this {what}, or one stopped before it could remove the file; if no merge is running, delete the file and merge again",
                 path.display()
             ))),
-            Err(e) => Err(Error::Io(format!("{}: {e}", path.display()))),
+            Ok(meta) => Err(Error::Invalid(format!(
+                "{} exists and is {}, not a lock file; if no merge is running, remove it and merge again",
+                path.display(),
+                kind_of(&meta)
+            ))),
+            Err(_) => Err(Error::Io(format!("{}: {err}", path.display()))),
         }
+    }
+
+    /// The lock `name` in `dir` (the current directory for an empty path),
+    /// or none when `dir` is not a directory: the merge then fails on
+    /// reading it, with its own message.
+    fn take_in(dir: &Path, name: &str, what: &str) -> Result<Option<Lock>> {
+        let dir = if dir.as_os_str().is_empty() {
+            Path::new(".")
+        } else {
+            dir
+        };
+        if dir.is_dir() {
+            Lock::take(dir, name, what).map(Some)
+        } else {
+            Ok(None)
+        }
+    }
+}
+
+/// What is at a path that should be a regular file, in words.
+fn kind_of(meta: &fs::Metadata) -> &'static str {
+    let kind = meta.file_type();
+    if kind.is_symlink() {
+        "a link"
+    } else if kind.is_dir() {
+        "a directory"
+    } else if kind.is_file() {
+        "a file"
+    } else {
+        "neither a file nor a directory"
     }
 }
 
@@ -97,6 +147,9 @@ pub struct Merged {
     pub record: MergeRecord,
     pub record_bytes: Vec<u8>,
     pub report_bytes: Vec<u8>,
+    /// The bundle's `change.json` as the merge read it: the change set the
+    /// gate checked, which hashes to the record's `change_id`.
+    pub change_bytes: Vec<u8>,
 }
 
 /// Merges (or, with [`Decision::Takedown`], takes down) the change set in
@@ -141,7 +194,11 @@ pub fn merge(
 /// The merge holds the store's lock ([`STORE_LOCK`]) from before it reads
 /// the store until it has written `world.json`, and refuses if the lock is
 /// taken. Before writing, it reads the store's world again and refuses if
-/// it moved, which only a tool that ignores the lock can do.
+/// it moved, which only a tool that ignores the lock can do. It also reads
+/// the bundle's `change.json` once more, to copy its objects, and refuses
+/// if it is not the change set the gate checked, and it refuses a
+/// candidate world in `candidate_dir` that is not the one the gate's report
+/// names: nothing is written then.
 #[allow(
     clippy::too_many_arguments,
     reason = "the arguments of merge() plus the gate"
@@ -151,23 +208,51 @@ pub fn merge_with(
     bundle_dir: &Path,
     previous_record: &[u8],
     decision: Decision,
+    reviews: Vec<Review>,
+    reasons: &str,
+    scratch_dir: &Path,
+    gate: impl FnOnce(&Path, &Path, &Path) -> Result<CheckReport>,
+) -> Result<Merged> {
+    let _lock = Lock::take_in(world_dir, STORE_LOCK, "store")?;
+    merge_locked(
+        world_dir,
+        bundle_dir,
+        previous_record,
+        decision,
+        reviews,
+        reasons,
+        scratch_dir,
+        gate,
+        |_, _| Ok(()),
+    )
+}
+
+/// [`merge_with`] under a store lock the caller holds. `before_write(merged,
+/// world)` runs once everything is checked, just before the store is
+/// written, with the merge's outputs and the bytes of the new
+/// `world.json`; an error there stops the merge with nothing written.
+#[allow(
+    clippy::too_many_arguments,
+    reason = "the arguments of merge_with() plus the check before writing"
+)]
+fn merge_locked(
+    world_dir: &Path,
+    bundle_dir: &Path,
+    previous_record: &[u8],
+    decision: Decision,
     mut reviews: Vec<Review>,
     reasons: &str,
     scratch_dir: &Path,
     gate: impl FnOnce(&Path, &Path, &Path) -> Result<CheckReport>,
+    before_write: impl FnOnce(&Merged, &[u8]) -> Result<()>,
 ) -> Result<Merged> {
     if decision == Decision::Baseline {
         return Err(Error::Invalid("use baseline() to start a world log".into()));
     }
     let previous = MergeRecord::from_bytes(previous_record)?;
     let previous_id = ContentId::of(previous_record);
-    let world = Store::new(world_dir);
     // A store that does not exist is reported by `read_world`.
-    let _lock = if world_dir.is_dir() {
-        Some(Lock::take(world_dir, STORE_LOCK, "store")?)
-    } else {
-        None
-    };
+    let world = Store::new(world_dir);
     let (world_id, _) = world.read_world()?;
     if previous.world_after != world_id {
         return Err(Error::Invalid(format!(
@@ -220,12 +305,39 @@ pub fn merge_with(
         )));
     }
 
+    let change_bytes = read_file(&bundle_dir.join("change.json"), MAX_FILE_BYTES)
+        .map_err(|e| Error::Io(format!("change.json: {e}")))?;
+    if ContentId::of(&change_bytes) != report.change_id {
+        return Err(Error::Invalid(format!(
+            "the bundle's change.json changed during the merge (the gate checked change {}), so nothing was written",
+            report.change_id
+        )));
+    }
+    let change = ChangeSet::from_bytes(&change_bytes)?;
+    // The candidate world as the gate left it in `candidate_dir`: it must
+    // be the one the gate's report names, or something changed it since.
+    let candidate = Store::layered(
+        &candidate_dir,
+        vec![bundle_dir.to_path_buf(), world_dir.to_path_buf()],
+    );
+    let (built, candidate_world) = candidate.read_world()?;
+    let world_bytes = candidate_world.to_bytes()?;
+    if built != candidate_id || ContentId::of(&world_bytes) != candidate_id {
+        return Err(Error::Invalid(format!(
+            "the candidate world in {} is not the gate's candidate {candidate_id}; it changed after the gate built it, so nothing was written",
+            candidate_dir.display()
+        )));
+    }
+    let merged = Merged {
+        record,
+        record_bytes,
+        report_bytes,
+        change_bytes,
+    };
+    before_write(&merged, &world_bytes)?;
+
     // Copy the new objects in: the change set's manifests and meshes, then
     // the candidate's tile indexes; `world.json` last.
-    let change = ChangeSet::from_bytes(
-        &read_file(&bundle_dir.join("change.json"), MAX_FILE_BYTES)
-            .map_err(|e| Error::Io(format!("change.json: {e}")))?,
-    )?;
     let bundle = Store::layered(bundle_dir, vec![world_dir.to_path_buf()]);
     for c in &change.changes {
         let Some(manifest_id) = c.manifest_id else {
@@ -239,11 +351,6 @@ pub fn merge_with(
         )?;
         world.write_object(&bytes, ObjectKind::Json)?;
     }
-    let candidate = Store::layered(
-        &candidate_dir,
-        vec![bundle_dir.to_path_buf(), world_dir.to_path_buf()],
-    );
-    let (_, candidate_world) = candidate.read_world()?;
     for t in &candidate_world.tiles {
         if !world.has_object(&t.tile_id, ObjectKind::Json) {
             world.write_object(
@@ -258,11 +365,7 @@ pub fn merge_with(
             "the written world differs from the gate's candidate".into(),
         ));
     }
-    Ok(Merged {
-        record,
-        record_bytes,
-        report_bytes,
-    })
+    Ok(merged)
 }
 
 fn failing(report: &CheckReport) -> String {
@@ -286,7 +389,7 @@ fn failing(report: &CheckReport) -> String {
 /// mandatory for refreshes is amendment A7, which is not adopted.
 pub fn require_base(world_dir: &Path, bundle_dir: &Path) -> Result<()> {
     let (world_id, _) = Store::new(world_dir).read_world()?;
-    let bytes = fs::read(bundle_dir.join("change.json"))
+    let bytes = read_file(&bundle_dir.join("change.json"), MAX_FILE_BYTES)
         .map_err(|e| Error::Io(format!("change.json: {e}")))?;
     let change = ChangeSet::from_bytes(&bytes)?;
     if change.base_world_id != world_id {
@@ -300,12 +403,23 @@ pub fn require_base(world_dir: &Path, bundle_dir: &Path) -> Result<()> {
 
 /// The directory of merge records in a [`WorldLog`].
 const RECORDS_DIR: &str = "log";
+
+/// A file a merge writes into a log: its path, as parts, and its bytes.
+type LogFile<'a> = (Vec<String>, &'a [u8]);
 /// The highest record number with 8 digits.
 const MAX_RECORD: usize = 99_999_999;
 
 /// The file name of record `n`: 8 digits, from `00000000.json`.
 fn record_name(n: usize) -> String {
     format!("{n:08}.json")
+}
+
+/// `log` is there but is not a directory: a file, or a link (to a
+/// directory or not), which is not followed.
+fn not_a_records_dir() -> Error {
+    Error::Invalid(format!(
+        "the world log's {RECORDS_DIR} is not a directory; a world log holds its records in a directory {RECORDS_DIR}/, not in a link to one"
+    ))
 }
 
 /// `dir` joined with `parts`, and the same path as POSIX text for messages.
@@ -317,36 +431,138 @@ fn log_path(dir: &Path, parts: &[&str]) -> (PathBuf, String) {
     (path, parts.join("/"))
 }
 
-/// Writes through a temporary file next to `path`, then renames it. A
-/// temporary file left in `log/` by a crash makes [`WorldLog::open`] refuse
-/// the log until someone looks at it.
+/// Checks that every directory on the way to the file `parts` in the log
+/// directory `dir` is a directory itself, not a link to one. A directory
+/// that does not exist ends the check: the file is missing, and a write
+/// creates it.
+fn check_dirs(dir: &Path, parts: &[&str]) -> io::Result<()> {
+    let mut path = dir.to_path_buf();
+    for k in 0..parts.len().saturating_sub(1) {
+        path.push(parts[k]);
+        let meta = match fs::symlink_metadata(&path) {
+            Ok(meta) => meta,
+            Err(e) if e.kind() == io::ErrorKind::NotFound => return Ok(()),
+            Err(e) => return Err(e),
+        };
+        if !meta.is_dir() {
+            let what = if meta.file_type().is_symlink() {
+                "a link"
+            } else {
+                "not a directory"
+            };
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidData,
+                format!("{} is {what}", parts[..=k].join("/")),
+            ));
+        }
+    }
+    Ok(())
+}
+
+/// The bytes of the file `parts` in the log directory `dir`: a regular file
+/// of at most `limit` bytes, under directories that are not links (see
+/// [`WorldLog`]).
+fn read_in_log(dir: &Path, parts: &[&str], limit: u64) -> io::Result<Vec<u8>> {
+    check_dirs(dir, parts)?;
+    read_file(&log_path(dir, parts).0, limit)
+}
+
+/// The temporary path [`write_atomically`] writes `path` through.
+fn tmp_path(path: &Path) -> PathBuf {
+    let mut tmp = path.as_os_str().to_owned();
+    tmp.push(".tmp");
+    PathBuf::from(tmp)
+}
+
+/// Writes through a temporary file next to `path`, then renames it.
+/// Whatever is at the temporary path (a file left by a crash, a link, a
+/// FIFO) is removed first and the temporary file is created anew, so the
+/// write never follows a link or waits on a FIFO; a directory there stops
+/// the write. If the write or the rename fails, the temporary file is
+/// removed again. A temporary file left in `log/` by a crash makes
+/// [`WorldLog::open`] refuse the log until someone looks at it, so records
+/// are never written over one.
 fn write_atomically(path: &Path, bytes: &[u8]) -> io::Result<()> {
     if let Some(parent) = path.parent() {
         fs::create_dir_all(parent)?;
     }
-    let mut tmp = path.as_os_str().to_owned();
-    tmp.push(".tmp");
-    let tmp = PathBuf::from(tmp);
-    fs::write(&tmp, bytes)?;
-    fs::rename(&tmp, path)
+    let tmp = tmp_path(path);
+    match fs::remove_file(&tmp) {
+        Err(e) if e.kind() != io::ErrorKind::NotFound => return Err(e),
+        _ => {}
+    }
+    let written = fs::OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .open(&tmp)
+        .and_then(|mut file| file.write_all(bytes))
+        .and_then(|()| fs::rename(&tmp, path));
+    if written.is_err() {
+        let _ = fs::remove_file(&tmp);
+    }
+    written
+}
+
+/// Whether the file `parts` of the log in `dir`, named by its content, must
+/// be written to hold `bytes`: false when it already holds exactly these
+/// bytes. Anything else there is refused: other bytes, or something that
+/// is not a regular file (a directory, a link, a FIFO), which is never
+/// opened or followed, and so is a directory at its temporary path, which
+/// [`write_atomically`] could not remove. At most `bytes.len()` bytes are
+/// read: a longer file cannot hold these bytes.
+fn must_write(dir: &Path, parts: &[&str], bytes: &[u8]) -> Result<bool> {
+    let (path, rel) = log_path(dir, parts);
+    let io_error = |e: io::Error| Error::Io(format!("{rel}: {e}"));
+    let other = || Error::Invalid(format!("the world log's {rel} holds other bytes"));
+    check_dirs(dir, parts).map_err(io_error)?;
+    match fs::symlink_metadata(&path) {
+        Err(e) if e.kind() == io::ErrorKind::NotFound => {
+            return match fs::symlink_metadata(tmp_path(&path)) {
+                Ok(meta) if meta.is_dir() => Err(Error::Invalid(format!(
+                    "the world log has a directory at {rel}.tmp, where a merge writes {rel} through a temporary file"
+                ))),
+                _ => Ok(true),
+            };
+        }
+        Err(e) => return Err(io_error(e)),
+        Ok(meta) if meta.is_file() && meta.len() != bytes.len() as u64 => return Err(other()),
+        Ok(_) => {}
+    }
+    match read_file(&path, bytes.len() as u64) {
+        Ok(existing) if existing == bytes => Ok(false),
+        Ok(_) => Err(other()),
+        Err(e) => Err(io_error(e)),
+    }
 }
 
 /// Writes a file named by its content, unless it already holds exactly
-/// these bytes.
+/// these bytes ([`must_write`] says what is refused).
 fn write_content(dir: &Path, parts: &[&str], bytes: &[u8]) -> Result<String> {
     let (path, rel) = log_path(dir, parts);
-    match fs::read(&path) {
-        Ok(existing) if existing == bytes => return Ok(rel),
-        Ok(_) => {
-            return Err(Error::Invalid(format!(
-                "the world log's {rel} holds other bytes"
-            )));
-        }
-        Err(e) if e.kind() == io::ErrorKind::NotFound => {}
-        Err(e) => return Err(Error::Io(format!("{rel}: {e}"))),
+    if must_write(dir, parts, bytes)? {
+        write_atomically(&path, bytes).map_err(|e| Error::Io(format!("{rel}: {e}")))?;
     }
-    write_atomically(&path, bytes).map_err(|e| Error::Io(format!("{rel}: {e}")))?;
     Ok(rel)
+}
+
+/// Whether the log in `dir` keeps world `id` in `worlds/<hex>.json`, as a
+/// regular file that hashes to it.
+fn keeps_world(dir: &Path, id: ContentId) -> bool {
+    let name = format!("{}.json", id.hex());
+    read_in_log(dir, &["worlds", &name], MAX_FILE_BYTES).is_ok_and(|b| ContentId::of(&b) == id)
+}
+
+/// How to put world `id` back into the store: from the log in `dir` when
+/// it keeps that world, else in words.
+fn put_back(dir: &Path, id: ContentId) -> String {
+    if keeps_world(dir, id) {
+        format!(
+            "copy the log's worlds/{}.json over the store's world.json",
+            id.hex()
+        )
+    } else {
+        format!("put back the store's world.json of world {id}")
+    }
 }
 
 /// A world log kept in a local directory:
@@ -365,6 +581,13 @@ fn write_content(dir: &Path, parts: &[&str], bytes: &[u8]) -> Result<String> {
 /// This is the layout of ADR-0010 option A with the two changes that
 /// ADR-0020 recommends for a local log. Both ADRs are Proposed, so the
 /// layout is a default until the maintainer decides.
+///
+/// A log may come from elsewhere (git keeps links), so inside its directory
+/// every directory must be a directory and every file a regular file of at
+/// most [`MAX_FILE_BYTES`]. A link, a FIFO, a device or a directory where a
+/// file should be is refused, and so is a link where a directory should be:
+/// none is ever opened or followed, for reading or for writing. The log's
+/// own directory, the `--log` argument, may be a link.
 pub struct WorldLog {
     dir: PathBuf,
     records: Vec<(ContentId, MergeRecord)>,
@@ -373,11 +596,19 @@ pub struct WorldLog {
 
 impl WorldLog {
     /// Opens the world log in `dir`. The records in `log/` must be numbered
-    /// from `00000000.json` with no gaps and no other files, and must form a
-    /// chain ([`verify_log`]). The change set of every merged or takedown
+    /// from `00000000.json` with no gaps and no other entries, and must form
+    /// a chain ([`verify_log`]). The change set of every merged or takedown
     /// record must be in `changes/<hex>/change.json` and hash to its id, as
     /// the refresh planner requires, so that a merge never extends a log
     /// that the planner refuses.
+    ///
+    /// `log/` must be a directory, not a link to one. Its entries are
+    /// sorted by name and taken as they are, without following links: a
+    /// regular file with the next record's name is read and checked; any
+    /// other name (a temporary file left by a crash, for one) and anything
+    /// that is not a regular file (a directory, a link, a FIFO, a socket, a
+    /// device) is refused unopened, and the message names it. Each change
+    /// set is read once, however many records name it.
     pub fn open(dir: &Path) -> Result<WorldLog> {
         let records_dir = dir.join(RECORDS_DIR);
         let no_records = || {
@@ -386,29 +617,39 @@ impl WorldLog {
                     .into(),
             )
         };
-        let entries = match fs::read_dir(&records_dir) {
-            Ok(entries) => entries,
+        let listing = |e: io::Error| Error::Io(format!("{RECORDS_DIR}/: {e}"));
+        match fs::symlink_metadata(&records_dir) {
+            Ok(meta) if meta.is_dir() => {}
+            Ok(_) => return Err(not_a_records_dir()),
             Err(e) if e.kind() == io::ErrorKind::NotFound => return Err(no_records()),
-            Err(e) => return Err(Error::Io(format!("{RECORDS_DIR}/: {e}"))),
-        };
-        let mut names = Vec::new();
-        for entry in entries {
-            names.push(entry?.file_name().to_string_lossy().into_owned());
+            Err(e) => return Err(listing(e)),
         }
-        if names.is_empty() {
+        let mut entries = Vec::new();
+        for entry in fs::read_dir(&records_dir).map_err(listing)? {
+            let entry = entry.map_err(listing)?;
+            // The entry itself: a link here is a link, whatever it names.
+            let kind = entry.file_type().map_err(listing)?;
+            entries.push((entry.file_name().to_string_lossy().into_owned(), kind));
+        }
+        if entries.is_empty() {
             return Err(no_records());
         }
-        names.sort();
-        let mut records = Vec::with_capacity(names.len());
+        entries.sort_by(|a, b| a.0.cmp(&b.0));
+        let mut records = Vec::with_capacity(entries.len());
         let mut head = Vec::new();
-        for (n, name) in names.iter().enumerate() {
+        for (n, (name, kind)) in entries.iter().enumerate() {
             let expected = record_name(n);
             if *name != expected {
                 return Err(Error::Invalid(format!(
                     "the world log has {RECORDS_DIR}/{name} where {RECORDS_DIR}/{expected} should be; records are numbered from 00000000, with no gaps and no other files"
                 )));
             }
-            let bytes = fs::read(records_dir.join(name))
+            if !kind.is_file() {
+                return Err(Error::Invalid(format!(
+                    "the world log's {RECORDS_DIR}/{name} is not a regular file; records are regular files, not links, directories or pipes"
+                )));
+            }
+            let bytes = read_file(&records_dir.join(name), MAX_FILE_BYTES)
                 .map_err(|e| Error::Io(format!("{RECORDS_DIR}/{name}: {e}")))?;
             let record = MergeRecord::from_bytes(&bytes)
                 .map_err(|e| Error::Invalid(format!("{RECORDS_DIR}/{name}: {e}")))?;
@@ -416,24 +657,30 @@ impl WorldLog {
             head = bytes;
         }
         verify_log(&records)?;
+        let mut checked = BTreeSet::new();
         for (n, (_, record)) in records.iter().enumerate() {
             let Some(change_id) = record.change_id else {
                 continue;
             };
-            let hex = change_id.hex();
-            let (path, rel) = log_path(dir, &["changes", &hex, "change.json"]);
-            match fs::read(&path) {
-                Ok(bytes) if ContentId::of(&bytes) == change_id => {
-                    ChangeSet::from_bytes(&bytes)
-                        .map_err(|e| Error::Invalid(format!("{rel}: {e}")))?;
-                }
-                _ => {
-                    return Err(Error::Invalid(format!(
-                        "the world log names change set {change_id} ({RECORDS_DIR}/{}) but {rel} is missing or has another id",
-                        record_name(n)
-                    )));
-                }
+            if !checked.insert(change_id) {
+                continue;
             }
+            let hex = change_id.hex();
+            let parts = ["changes", hex.as_str(), "change.json"];
+            let rel = parts.join("/");
+            let missing = || {
+                Error::Invalid(format!(
+                    "the world log names change set {change_id} ({RECORDS_DIR}/{}) but {rel} is missing or has another id",
+                    record_name(n)
+                ))
+            };
+            let bytes = match read_in_log(dir, &parts, MAX_FILE_BYTES) {
+                Ok(bytes) if ContentId::of(&bytes) == change_id => bytes,
+                Ok(_) => return Err(missing()),
+                Err(e) if e.kind() == io::ErrorKind::NotFound => return Err(missing()),
+                Err(e) => return Err(Error::Io(format!("{rel}: {e}"))),
+            };
+            ChangeSet::from_bytes(&bytes).map_err(|e| Error::Invalid(format!("{rel}: {e}")))?;
         }
         Ok(WorldLog {
             dir: dir.to_path_buf(),
@@ -459,10 +706,22 @@ impl WorldLog {
             )));
         }
         let records_dir = dir.join(RECORDS_DIR);
-        if fs::read_dir(&records_dir).is_ok_and(|mut entries| entries.next().is_some()) {
-            return Err(Error::Invalid(format!(
-                "the world log already has records in {RECORDS_DIR}/; a baseline record starts a new log"
-            )));
+        let listing = |e: io::Error| Error::Io(format!("{RECORDS_DIR}/: {e}"));
+        match fs::symlink_metadata(&records_dir) {
+            Ok(meta) if meta.is_dir() => {
+                if fs::read_dir(&records_dir)
+                    .map_err(listing)?
+                    .next()
+                    .is_some()
+                {
+                    return Err(Error::Invalid(format!(
+                        "the world log already has records in {RECORDS_DIR}/; a baseline record starts a new log"
+                    )));
+                }
+            }
+            Ok(_) => return Err(not_a_records_dir()),
+            Err(e) if e.kind() == io::ErrorKind::NotFound => {}
+            Err(e) => return Err(listing(e)),
         }
         let bytes = record.to_bytes()?;
         write_content(
@@ -498,12 +757,17 @@ impl WorldLog {
             .expect("a world log has at least its baseline record")
     }
 
-    /// Appends a merge or takedown: its change set (`change`, the bytes of
-    /// `change.json`), the gate's report, and the world after it (`world`,
-    /// the bytes of the store's new `world.json`), then its record as the
-    /// next `log/NNNNNNNN.json`, which is written last. Returns the record's
-    /// path in the log, such as `log/00000001.json`.
-    pub fn append(&mut self, merged: &Merged, change: &[u8], world: &[u8]) -> Result<String> {
+    /// What [`WorldLog::append`] writes for `merged`: the change set, the
+    /// report and the world, in that order, and the record's file name.
+    /// Checks that the record continues the log and names these bytes, and
+    /// that the record's path is free (anything there, even a link to
+    /// nothing, or anything at its temporary path).
+    fn appended<'a>(
+        &self,
+        merged: &'a Merged,
+        change: &'a [u8],
+        world: &'a [u8],
+    ) -> Result<(Vec<LogFile<'a>>, String)> {
         let record = &merged.record;
         let (head_id, head) = self
             .records
@@ -538,24 +802,69 @@ impl WorldLog {
                 "the world log is full: record numbers have 8 digits".into(),
             ));
         }
-        write_content(
-            &self.dir,
-            &["changes", &change_id.hex(), "change.json"],
-            change,
-        )?;
-        write_content(
-            &self.dir,
-            &["reports", &format!("{}.json", report_id.hex())],
-            &merged.report_bytes,
-        )?;
-        write_content(
-            &self.dir,
-            &["worlds", &format!("{}.json", record.world_after.hex())],
-            world,
-        )?;
         let name = record_name(n);
         let (path, rel) = log_path(&self.dir, &[RECORDS_DIR, &name]);
-        if path.exists() {
+        // `open` took every entry of `log/`, so only a tool that ignores the
+        // lock can have put something at these paths since.
+        for (taken, rel) in [
+            (path.clone(), rel.clone()),
+            (tmp_path(&path), format!("{rel}.tmp")),
+        ] {
+            if fs::symlink_metadata(&taken).is_ok() {
+                return Err(Error::Invalid(format!(
+                    "{rel} appeared during the merge; did another merge run at the same time?"
+                )));
+            }
+        }
+        let files = vec![
+            (
+                vec!["changes".into(), change_id.hex(), "change.json".into()],
+                change,
+            ),
+            (
+                vec!["reports".into(), format!("{}.json", report_id.hex())],
+                merged.report_bytes.as_slice(),
+            ),
+            (
+                vec![
+                    "worlds".into(),
+                    format!("{}.json", record.world_after.hex()),
+                ],
+                world,
+            ),
+        ];
+        Ok((files, name))
+    }
+
+    /// Checks, without writing anything, that [`WorldLog::append`] can
+    /// append `merged` with these bytes: the record continues the log and
+    /// names them, its path is free, and each file it writes is missing or
+    /// already holds exactly its bytes, as [`WorldLog::append`] requires. A
+    /// merge with `--log` runs this before it writes the store, so a log
+    /// that cannot take the merge leaves the store as it was.
+    pub fn check_append(&self, merged: &Merged, change: &[u8], world: &[u8]) -> Result<()> {
+        let (files, _) = self.appended(merged, change, world)?;
+        for (parts, bytes) in &files {
+            let parts: Vec<&str> = parts.iter().map(String::as_str).collect();
+            must_write(&self.dir, &parts, bytes)?;
+        }
+        Ok(())
+    }
+
+    /// Appends a merge or takedown: its change set (`change`, the bytes of
+    /// `change.json`), the gate's report, and the world after it (`world`,
+    /// the bytes of the store's new `world.json`), then its record as the
+    /// next `log/NNNNNNNN.json`, which is written last. Returns the record's
+    /// path in the log, such as `log/00000001.json`.
+    pub fn append(&mut self, merged: &Merged, change: &[u8], world: &[u8]) -> Result<String> {
+        let (files, name) = self.appended(merged, change, world)?;
+        for (parts, bytes) in &files {
+            let parts: Vec<&str> = parts.iter().map(String::as_str).collect();
+            write_content(&self.dir, &parts, bytes)?;
+        }
+        let (path, rel) = log_path(&self.dir, &[RECORDS_DIR, &name]);
+        // Anything there, even a link to nothing.
+        if fs::symlink_metadata(&path).is_ok() {
             return Err(Error::Invalid(format!(
                 "{rel} appeared during the merge; did another merge run at the same time?"
             )));
@@ -563,9 +872,33 @@ impl WorldLog {
         write_atomically(&path, &merged.record_bytes)
             .map_err(|e| Error::Io(format!("{rel}: {e}")))?;
         self.records
-            .push((ContentId::of(&merged.record_bytes), record.clone()));
+            .push((ContentId::of(&merged.record_bytes), merged.record.clone()));
         self.head = merged.record_bytes.clone();
         Ok(rel)
+    }
+
+    /// Why the store, which holds world `store`, cannot take a merge with
+    /// this log, which ends at another world. A merge that stopped between
+    /// writing the store and appending its record leaves exactly this: the
+    /// log keeps the store's world in `worlds/`, but no record names it.
+    /// The message then says so, and how to undo that merge.
+    fn behind(&self, store: ContentId) -> Error {
+        let head = self.world_id();
+        let mut message =
+            format!("the store holds world {store}, but the log's last record ends at {head}");
+        let named = self.records.iter().any(|(_, r)| r.world_after == store);
+        if !named && keeps_world(&self.dir, store) {
+            message.push_str(&format!(
+                ", and the log keeps world {store} in worlds/ without a record that names it: a merge stopped after it wrote the store and before it appended its record. To undo that merge, {}, then merge again",
+                put_back(&self.dir, head)
+            ));
+        } else {
+            message.push_str(&format!(
+                ". If a merge stopped after it wrote the store and before it appended its record, {} and merge again; otherwise check that --log is this store's log",
+                put_back(&self.dir, head)
+            ));
+        }
+        Error::Invalid(message)
     }
 }
 
@@ -628,11 +961,20 @@ impl MergeArgs {
     /// Parses `<world-dir> <bundle-dir>` and the options of
     /// [`MergeArgs::USAGE`]. `--log` replaces `--previous`, `--record` and
     /// `--report`, so it cannot be combined with them; without it, all
-    /// three are required. Errors are usage messages.
+    /// three are required. The two directories come first, so neither may
+    /// start with `--`, and an option's value may not either. No path may
+    /// be empty: an unset shell variable gives an empty argument, which
+    /// would name the current directory. Errors are usage messages.
     pub fn parse(args: &[String]) -> std::result::Result<MergeArgs, String> {
         let [world_dir, bundle_dir, options @ ..] = args else {
             return Err(format!("merge takes {}", Self::USAGE));
         };
+        if world_dir.starts_with("--") || bundle_dir.starts_with("--") {
+            return Err(format!("merge takes {}", Self::USAGE));
+        }
+        if world_dir.is_empty() || bundle_dir.is_empty() {
+            return Err("<world-dir> and <bundle-dir> must not be empty".into());
+        }
         let mut values: BTreeMap<&str, String> = BTreeMap::new();
         let (mut reviews, mut takedown, mut require_base) = (Vec::new(), false, false);
         let mut it = options.iter().peekable();
@@ -655,6 +997,9 @@ impl MergeArgs {
                 "--review" => reviews.push(parse_review(value.as_deref().unwrap_or(""))?),
                 o @ ("--previous" | "--record" | "--report" | "--log" | "--reason") => {
                     let value = value.ok_or(format!("{o} <value> is required"))?;
+                    if value.is_empty() && o != "--reason" {
+                        return Err(format!("{o} must not be empty"));
+                    }
                     if values.insert(o, value).is_some() {
                         return Err(format!("{o} is given twice"));
                     }
@@ -706,11 +1051,19 @@ impl MergeArgs {
     }
 
     /// Runs the merge with `gate` (see [`merge_with`]) and writes its
-    /// outputs. Checks the world log (with `--log`) and the base world
-    /// (with `--require-base`) before the gate runs. With `--log`, the merge
-    /// holds the log's lock ([`LOG_LOCK`]) from before it opens the log
-    /// until it has appended the record. `scratch_dir` is a directory of its
-    /// own for the candidate world: it is deleted before and after the
+    /// outputs. Before the gate runs, it checks the world log (with
+    /// `--log`), that the store holds the world the previous record ends
+    /// at, and the base world (with `--require-base`). With `--log`, it
+    /// also checks that the log can take the record before it writes the
+    /// store ([`WorldLog::check_append`]).
+    ///
+    /// The merge takes the log's lock ([`LOG_LOCK`], with `--log`) and the
+    /// store's ([`STORE_LOCK`]) before it reads either, and keeps them until
+    /// it has written the store and the record. `scratch_dir` is for the
+    /// candidate world: whatever is there is removed, and the merge makes
+    /// the directory anew and refuses to go on if it cannot (one made by
+    /// someone else in a shared temporary directory, which cannot be
+    /// removed, is never written into). It is removed again after the
     /// merge. Returns the line the commands print.
     pub fn run(
         &self,
@@ -718,20 +1071,22 @@ impl MergeArgs {
         gate: impl FnOnce(&Path, &Path, &Path) -> Result<CheckReport>,
     ) -> Result<String> {
         enum Target<'a> {
-            Log(WorldLog, &'a Path),
+            Log(WorldLog),
             Files { record: &'a Path, report: &'a Path },
         }
         // A log directory that does not exist has no lock to take, and
-        // `WorldLog::open` says how to start one.
-        let _lock = match &self.output {
-            MergeOutput::Log(dir) if dir.is_dir() => Some(Lock::take(dir, LOG_LOCK, "world log")?),
-            _ => None,
+        // `WorldLog::open` says how to start one; a store that does not
+        // exist is reported when it is read.
+        let _log_lock = match &self.output {
+            MergeOutput::Log(dir) => Lock::take_in(dir, LOG_LOCK, "world log")?,
+            MergeOutput::Files { .. } => None,
         };
+        let _store_lock = Lock::take_in(&self.world_dir, STORE_LOCK, "store")?;
         let (mut target, previous) = match &self.output {
             MergeOutput::Log(dir) => {
                 let log = WorldLog::open(dir)?;
                 let previous = log.head().to_vec();
-                (Target::Log(log, dir), previous)
+                (Target::Log(log), previous)
             }
             MergeOutput::Files {
                 previous,
@@ -739,14 +1094,38 @@ impl MergeArgs {
                 report,
             } => (
                 Target::Files { record, report },
-                fs::read(previous).map_err(|e| Error::Io(format!("--previous: {e}")))?,
+                read_file(previous, MAX_FILE_BYTES)
+                    .map_err(|e| Error::Io(format!("--previous {}: {e}", previous.display())))?,
             ),
         };
+        // The store must hold the world the previous record ends at, which
+        // `merge_with` checks too. Checked here first, before
+        // `--require-base`, so that a log left behind by an interrupted
+        // merge is reported as such.
+        let ends_at = MergeRecord::from_bytes(&previous)?.world_after;
+        let (store_world, _) = Store::new(&self.world_dir).read_world()?;
+        if store_world != ends_at {
+            return Err(match &target {
+                Target::Log(log) => log.behind(store_world),
+                Target::Files { .. } => Error::Invalid(format!(
+                    "the store holds world {store_world}, but the log's last record ends at {ends_at}"
+                )),
+            });
+        }
         if self.require_base {
             require_base(&self.world_dir, &self.bundle_dir)?;
         }
         let _ = fs::remove_dir_all(scratch_dir);
-        let result = merge_with(
+        if let Some(parent) = scratch_dir.parent().filter(|p| !p.as_os_str().is_empty()) {
+            fs::create_dir_all(parent)?;
+        }
+        fs::create_dir(scratch_dir).map_err(|e| {
+            Error::Io(format!(
+                "cannot make the scratch directory {} anew: {e}",
+                scratch_dir.display()
+            ))
+        })?;
+        let result = merge_locked(
             &self.world_dir,
             &self.bundle_dir,
             &previous,
@@ -755,6 +1134,10 @@ impl MergeArgs {
             &self.reasons,
             scratch_dir,
             gate,
+            |merged, world| match &target {
+                Target::Log(log) => log.check_append(merged, &merged.change_bytes, world),
+                Target::Files { .. } => Ok(()),
+            },
         );
         let _ = fs::remove_dir_all(scratch_dir);
         let merged = result?;
@@ -768,25 +1151,19 @@ impl MergeArgs {
         // where the bucket is written before the log. A failure now says
         // so, and how to undo the merge where that is possible.
         let place = match &mut target {
-            Target::Log(log, dir) => {
+            Target::Log(log) => {
                 let mut append = || -> Result<String> {
-                    let change = fs::read(self.bundle_dir.join("change.json"))
-                        .map_err(|e| Error::Io(format!("change.json: {e}")))?;
-                    let world = fs::read(Store::new(&self.world_dir).world_path())
-                        .map_err(|e| Error::Io(format!("world.json: {e}")))?;
-                    log.append(&merged, &change, &world)
+                    let path = Store::new(&self.world_dir).world_path();
+                    let world = read_file(&path, MAX_FILE_BYTES)
+                        .map_err(|e| Error::Io(format!("{}: {e}", path.display())))?;
+                    log.append(&merged, &merged.change_bytes, &world)
                 };
                 let rel = append().map_err(|e| {
                     // The log still ends at `before`: no other merge could
                     // append while this one held the log's lock.
-                    let kept = format!(
-                        "worlds/{}.json",
-                        before.trim_start_matches(ContentId::PREFIX)
-                    );
-                    let undo = if dir.join(&kept).is_file() {
-                        format!("copy the log's {kept} over the store's world.json")
-                    } else {
-                        format!("put back the store's world.json of world {before}")
+                    let undo = match merged.record.world_before {
+                        Some(w) => put_back(&log.dir, w),
+                        None => format!("put back the store's world.json of world {before}"),
                     };
                     Error::Io(format!(
                         "the store now holds world {after}, but the world log was not updated ({e}); to undo the merge, {undo}"
@@ -809,5 +1186,29 @@ impl MergeArgs {
             "record {}{place}: world {before} -> {after}",
             ContentId::of(&merged.record_bytes)
         ))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Found by review: a write that failed (here the rename, onto a
+    /// directory) left its temporary file behind, which in `log/` makes
+    /// `WorldLog::open` refuse the whole log. It is removed again.
+    #[test]
+    fn a_failed_write_leaves_no_temporary_file() {
+        let dir = std::env::temp_dir().join(format!("op_world-merge-tmp-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&dir);
+        let path = dir.join("log/00000001.json");
+        fs::create_dir_all(path.join("inside")).unwrap();
+        assert!(write_atomically(&path, b"{}").is_err());
+        assert!(fs::symlink_metadata(tmp_path(&path)).is_err());
+        assert_eq!(
+            fs::read_dir(dir.join("log")).unwrap().count(),
+            1,
+            "only the directory that was there"
+        );
+        fs::remove_dir_all(&dir).ok();
     }
 }

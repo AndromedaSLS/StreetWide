@@ -169,3 +169,76 @@ fn the_command_line_rerecords_in_place() {
         (2, "error: --world <dir> is required")
     );
 }
+
+/// The replay is loaded like every replay (a regular file of at most
+/// `MAX_REPLAY_BYTES`), and the output is written through a temporary file
+/// made anew: a file a crash left there is replaced, a directory there
+/// stops the command, and a link there is removed, never written through.
+/// Found by review: the temporary file was opened with `fs::write`, which
+/// follows links.
+#[test]
+fn rerecord_reads_and_writes_only_regular_files() {
+    let t = Temp::new("rerecord-files");
+    let world = fixture_world();
+    let out = t.join("out.oprep");
+    let rerecord = |replay: &std::path::Path| {
+        op_replay(&[&"rerecord", &replay, &"--world", &world, &"--out", &out])
+    };
+    let not_a_file = t.join("not-a-replay");
+    std::fs::create_dir(&not_a_file).unwrap();
+    let (code, _, err) = rerecord(&not_a_file);
+    assert_eq!(
+        (code, err.trim_end()),
+        (
+            2,
+            format!("error: {}: not a regular file", not_a_file.display()).as_str()
+        )
+    );
+    assert!(!out.exists());
+
+    let tmp = t.join("out.oprep.tmp");
+    std::fs::write(&tmp, b"left by a crash").unwrap();
+    let (code, _, err) = rerecord(&sample_path_file());
+    assert_eq!(code, 0, "{err}");
+    assert!(!tmp.exists());
+    assert_eq!(
+        read(&out),
+        read(sample_path_file()),
+        "rerecorded in its own world, the sample is unchanged"
+    );
+
+    std::fs::remove_file(&out).unwrap();
+    std::fs::create_dir(&tmp).unwrap();
+    let (code, _, err) = rerecord(&sample_path_file());
+    assert_eq!(code, 2);
+    assert!(
+        err.starts_with(&format!("error: {}: ", out.display())),
+        "{err}"
+    );
+    assert!(!out.exists());
+    std::fs::remove_dir(&tmp).unwrap();
+
+    // A rename that fails (a directory where the replay goes) leaves no
+    // temporary file behind. Found by review: it stayed there.
+    std::fs::create_dir_all(out.join("inside")).unwrap();
+    let (code, _, err) = rerecord(&sample_path_file());
+    assert_eq!(code, 2);
+    assert!(
+        err.starts_with(&format!("error: {}: ", out.display())),
+        "{err}"
+    );
+    assert!(std::fs::symlink_metadata(&tmp).is_err(), "{err}");
+    std::fs::remove_dir_all(&out).unwrap();
+
+    #[cfg(unix)]
+    {
+        let outside = t.join("outside.txt");
+        std::fs::write(&outside, b"not a replay").unwrap();
+        std::os::unix::fs::symlink(&outside, &tmp).unwrap();
+        let (code, _, err) = rerecord(&sample_path_file());
+        assert_eq!(code, 0, "{err}");
+        assert_eq!(read(&outside), b"not a replay");
+        assert!(std::fs::symlink_metadata(&tmp).is_err());
+        assert_eq!(read(&out), read(sample_path_file()));
+    }
+}

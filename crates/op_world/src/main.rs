@@ -19,16 +19,21 @@
 //! `baseline` starts it, and `merge` takes the previous record from it and
 //! appends the new record, the change set, the report and the new world.
 //! `--require-base` refuses a change set that was planned on another world.
-//! A merge holds `merge.lock` in the store, and with `--log` `log.lock` in
-//! the log, until it has written both; a second merge stops when it finds
-//! one. `op_replay merge` takes the same arguments and runs the complete
-//! gate.
+//! A merge takes `merge.lock` in the store, and with `--log` `log.lock` in
+//! the log, before it reads them, and keeps them until it has written the
+//! store and the record; a second merge that finds one stops before it
+//! writes anything. `op_replay merge` takes the same arguments and runs the
+//! complete gate.
+//!
+//! `id` reads each file as a store read does: a regular file itself (not a
+//! link, a directory or a FIFO) of at most 64 MiB.
 
 use std::path::Path;
 use std::process::ExitCode;
 
 use op_world::contrib::Outcome;
 use op_world::merge::{MergeArgs, WorldLog};
+use op_world::store::{MAX_FILE_BYTES, read_file};
 use op_world::validate::validate_store;
 use op_world::{ContentId, Store, gate};
 
@@ -79,7 +84,7 @@ fn validate(dir: &Path) -> ExitCode {
 fn print_ids(files: &[String]) -> ExitCode {
     let mut status = ExitCode::SUCCESS;
     for f in files {
-        match std::fs::read(f) {
+        match read_file(Path::new(f), MAX_FILE_BYTES) {
             Ok(bytes) => println!("{}  {f}", ContentId::of(&bytes)),
             Err(e) => {
                 eprintln!("{f}: {e}");
@@ -218,8 +223,10 @@ fn baseline(args: &[String]) -> ExitCode {
             op_world::merge::baseline(world, &one(&f, "--reason")?).map_err(|e| e.to_string())?;
         let bytes = record.to_bytes().map_err(|e| e.to_string())?;
         let place = if log {
-            let world_bytes = std::fs::read(Store::new(world).world_path())
-                .map_err(|e| format!("world.json: {e}"))?;
+            // The bytes the record names: `WorldLog::start` refuses others.
+            let path = Store::new(world).world_path();
+            let world_bytes =
+                read_file(&path, MAX_FILE_BYTES).map_err(|e| format!("{}: {e}", path.display()))?;
             WorldLog::start(Path::new(&one(&f, "--log")?), &record, &world_bytes)
                 .map_err(|e| e.to_string())?;
             " (log/00000000.json)"

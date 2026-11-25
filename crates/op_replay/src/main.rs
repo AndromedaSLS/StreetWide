@@ -363,16 +363,33 @@ fn cmd_merge(args: &[String]) -> Result<ExitCode, String> {
 }
 
 /// Writes through a temporary file next to `path`, so that rewriting a
-/// replay in place never leaves half a file.
+/// replay in place never leaves half a file. Whatever is at the temporary
+/// path (a file left by a crash, a link, a FIFO) is removed first and the
+/// temporary file is created anew: a replay suite may come from elsewhere,
+/// and the write must not follow a link out of it or wait on a FIFO. If the
+/// write or the rename fails, the temporary file is removed again.
 fn write_atomically(path: &Path, bytes: &[u8]) -> Result<(), String> {
-    let shown = || path.display().to_string();
+    use std::io::Write as _;
+    let failed = |e: std::io::Error| format!("{}: {e}", path.display());
     if let Some(parent) = path.parent().filter(|p| !p.as_os_str().is_empty()) {
-        std::fs::create_dir_all(parent).map_err(|e| format!("{}: {e}", shown()))?;
+        std::fs::create_dir_all(parent).map_err(failed)?;
     }
     let mut tmp = path.as_os_str().to_owned();
     tmp.push(".tmp");
-    std::fs::write(&tmp, bytes).map_err(|e| format!("{}: {e}", shown()))?;
-    std::fs::rename(&tmp, path).map_err(|e| format!("{}: {e}", shown()))
+    match std::fs::remove_file(&tmp) {
+        Err(e) if e.kind() != std::io::ErrorKind::NotFound => return Err(failed(e)),
+        _ => {}
+    }
+    let written = std::fs::OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .open(&tmp)
+        .and_then(|mut f| f.write_all(bytes))
+        .and_then(|()| std::fs::rename(&tmp, path));
+    if written.is_err() {
+        let _ = std::fs::remove_file(&tmp);
+    }
+    written.map_err(failed)
 }
 
 fn cmd_rerecord(file: &str, world: Option<&Path>, out: Option<&Path>) -> Result<ExitCode, String> {
