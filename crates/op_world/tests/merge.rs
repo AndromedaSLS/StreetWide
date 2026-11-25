@@ -22,8 +22,8 @@ fn copy_dir(from: &Path, to: &Path) {
 }
 
 /// A private copy of the ingest fixture to merge into.
-fn world_copy(name: &str) -> PathBuf {
-    let dir = common::temp_dir(name).join("world");
+fn world_copy(name: &str) -> common::TempPath {
+    let dir = common::temp_path(name, "world");
     copy_dir(&common::repo_root().join("fixtures/world"), &dir);
     dir
 }
@@ -40,8 +40,8 @@ fn review(verdict: Verdict) -> Review {
     }
 }
 
-fn scratch(name: &str) -> PathBuf {
-    common::temp_dir(name).join("scratch")
+fn scratch(name: &str) -> common::TempPath {
+    common::temp_path(name, "scratch")
 }
 
 #[test]

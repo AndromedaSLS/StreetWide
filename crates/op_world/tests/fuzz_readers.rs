@@ -584,7 +584,7 @@ fn store_reads() {
                 assert_eq!(id, ContentId::of(bytes));
                 assert!(store.has_object(&id, kind));
                 assert!(store.read_object(&id, kind).expect("read back") == bytes);
-                let layered = Store::layered(&empty_root, vec![dir.clone()]);
+                let layered = Store::layered(&empty_root, vec![dir.to_path_buf()]);
                 assert!(layered.read_object(&id, kind).expect("found in a fallback") == bytes);
                 // Under any other id, a hash mismatch.
                 let other = ContentId::of(&[bytes, b"~".as_slice()].concat());

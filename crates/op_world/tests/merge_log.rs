@@ -18,7 +18,7 @@ use op_world::store::MAX_FILE_BYTES;
 use op_world::{ContentId, Error, Layer, ObjectKind, Store, TileIndex, WorldManifest, gate};
 
 /// A fresh temporary directory, deleted again at the end of the test.
-struct Temp(PathBuf);
+struct Temp(common::TempDir);
 
 impl Temp {
     fn new(name: &str) -> Temp {
@@ -27,12 +27,6 @@ impl Temp {
 
     fn join(&self, path: &str) -> PathBuf {
         self.0.join(path)
-    }
-}
-
-impl Drop for Temp {
-    fn drop(&mut self) {
-        let _ = std::fs::remove_dir_all(&self.0);
     }
 }
 

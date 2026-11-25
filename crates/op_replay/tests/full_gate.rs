@@ -22,11 +22,28 @@ fn world() -> PathBuf {
     repo().join("fixtures/world")
 }
 
-fn temp(name: &str) -> PathBuf {
+/// A fresh temporary directory, deleted again when this is dropped.
+struct Temp(PathBuf);
+
+impl std::ops::Deref for Temp {
+    type Target = Path;
+
+    fn deref(&self) -> &Path {
+        &self.0
+    }
+}
+
+impl Drop for Temp {
+    fn drop(&mut self) {
+        let _ = std::fs::remove_dir_all(&self.0);
+    }
+}
+
+fn temp(name: &str) -> Temp {
     let dir = std::env::temp_dir().join(format!("op_replay-gate-{name}-{}", std::process::id()));
     let _ = std::fs::remove_dir_all(&dir);
     std::fs::create_dir_all(&dir).unwrap();
-    dir
+    Temp(dir)
 }
 
 fn sample_replay() -> Replay {
@@ -43,8 +60,8 @@ fn run(name: &str, edit: impl FnOnce(&mut Draft)) -> CheckReport {
 }
 
 fn gate(bundle: &Path, name: &str) -> CheckReport {
-    let candidate = temp(&format!("candidate-{name}")).join("candidate");
-    check_change(&world(), bundle, &candidate, &[sample_replay()]).unwrap()
+    let dir = temp(&format!("candidate-{name}"));
+    check_change(&world(), bundle, &dir.join("candidate"), &[sample_replay()]).unwrap()
 }
 
 fn outcome(r: &CheckReport, id: &str) -> Outcome {
