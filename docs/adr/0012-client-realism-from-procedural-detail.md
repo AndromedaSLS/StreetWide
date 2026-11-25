@@ -3,7 +3,8 @@
 - **Status:** Proposed
 - **Date:** 2026-11-24
 - **Deciders:** @victorpicaud
-- **Supersedes / superseded by:** none (extends ADR-0008)
+- **Supersedes / superseded by:** none (extends ADR-0008; extended by
+  ADR-0022)
 
 ## Context
 

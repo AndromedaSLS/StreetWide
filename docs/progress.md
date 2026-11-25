@@ -1247,3 +1247,148 @@ frames cost 1.5 to 1.8 times these medians (7.8–8.0 ms, 47–48%, for
    `computeNewVelocity`, which is Apache-2.0, so in the repository that
    file would need RVO2's notice and stay Apache-2.0 only, or variant b
    could be kept as results without its code.
+
+### Drawing ADR drafted (2026-11-25)
+
+[ADR-0022](adr/0022-drawing-trees-lamps-and-windows.md) drafts how the
+client draws trees, street lamps and lit windows, the decision that RFC
+0004 asks for before that client work. It extends ADR-0012. **Nothing
+is decided;** the maintainer decides.
+
+| Part | Options | Recommended |
+|---|---|---|
+| Trees | T0 proxies; T1 models generated per genus group, with levels of detail; T2 T1 plus impostors; T3 one model per tree; T4 a crate or virtual geometry | **T1**, sun shadows from the nearest level only, shadow-only crowns tried before merging; no wind or impostors in M2 |
+| Street lamps | L0 glowing heads only; L1 painted pools of light; L2 heads plus a pool of real lights near the camera; L3 plus a few shadowed lamps; L4 every lamp a light, or ray tracing | **L2**: 64 shadowless point lights of 20 m range; mounts inferred in the client |
+| Lit windows | W0 a glow per building; W1 a seeded share of the procedural windows; W2, W3 fictional rooms behind them | **W1**, one share curve for all buildings |
+| Night exposure and sky | N1 a lower floor only; N2 a floor plus moonlight and sky glow; N3 automatic exposure | **N2**, under ADR-0018's floor, EV100 3 as the starting value (3 or 4, ADR-0022 open question 2) |
+| Floodlit landmarks | F0 none; F1 by building type; F2 a source decision or contributions | **F0** in M2 |
+
+- **The recommendation:** spend where the look is. Lights and windows
+  cost a few tenths of a millisecond; trees in leaf cost 2.5 ms at
+  Lindenhof, mostly in shadows and overdraw near the camera. Everything
+  invented (models, leaf dates, mounts, heights, colours, which window
+  is lit) stays client code. RFC 0004 needs no new attribute for M2's
+  drawing, and leaf habit comes from a client table, since RFC 0004
+  does not let the world estimate it.
+- **The night is part of the decision.** At EV100 3, lamps alone gave
+  a black sky and black ground between lamps, so the draft adds
+  moonlight without shadows and a sky glow, and asks for the floor, the
+  fill and the window and shop luminance to be chosen by comparing
+  screenshots with two 2025 photos of the old town at night (exposed at
+  EV100 3.0 and 4.0).
+- **Evidence,** gathered on 2026-11-25 in three research notes and a
+  prototype. The notes and measurements are outside the repository; the
+  prototype's code is on branch `drawing-prototype`. The ADR cites the
+  sources:
+  - **the engine:** Bevy 0.20.1 clusters any number of lights on the
+    GPU, but a shadowed spot light costs a 64 MiB layer and a full
+    shadow pass in this client; alpha-tested leaves are drawn in the
+    prepass, the main pass and every cascade; an RX 6600 is about 1.65
+    times slower than the RTX 3070 (1.33 to 1.93, press), so ADR-0018's
+    16.7 ms is about 8.8 to 10.1 ms of GPU time on the RTX 3070;
+  - **games and Zurich:** games split a lamp into near light and far
+    glow, ration lamp shadows and retarget night exposure (Far Cry 5);
+    lit flats average 6 cd/m² and shop windows 50 cd/m² (CIE 2025);
+    the Plan Lumière's open concept plan has no landmark in the
+    district;
+  - **the data:** 1,005 trees, 94.3% deciduous by genus, and 1,959
+    light records at 1,717 positions; no mount, height or colour for
+    any light; an unvalidated mount heuristic from the building shells.
+
+**The prototype:** branch `drawing-prototype` (commit 68b149f), about
+3,650 lines in `op_client`, not for merging. Without its options
+(`--proto-*`, `--bench`, `--preset`), the client behaves as before. It
+draws procedural trees per genus group with three levels of detail and
+leaves by date (MeteoSwiss's medians where they exist; lime's leaf fall
+and other genera assumed); lamp models per mount with glowing heads and
+a pool of real shadowless lights; and a seeded share of the procedural
+windows lit at night, from one repeating mask per facade style. It has
+a benchmark mode. Its input is a scratch file converted from the city's
+data, not world data and not committed. RTX 3070 on Vulkan, Ryzen 9
+3900, Windows 11, 1920 x 1080 without vsync, one camera turn over 600
+frames per run (2.5 to 4.7 s, against ADR-0018's 20 s), night exposure
+EV100 3. 88 runs: a matrix of 80, then 8 on the committed build; the
+matrix's first 70 runs came from an earlier build, which narrowed 100
+more tree crowns at facades and picked levels differently. One run per
+configuration, on a machine that may have been in use.
+
+In the default configuration (two tree levels casting shadows, 32 spot
+lights), earlier build:
+
+| Stop, 18:00 | GPU median, today | With trees, lamps (32 lights) and windows | GPU p99 | Frame p99 |
+|---|---|---|---|---|
+| Lindenhof, 21 June | 4.18 ms | 6.79 ms | 7.80 ms | 9.29 ms |
+| Hirschenplatz, 21 June | 4.71 ms | 5.30 ms | 5.56 ms | 9.09 ms |
+| Rathausbrücke, 21 June | 4.62 ms | 4.79 ms | 5.17 ms | 9.93 ms |
+| Lindenhof, 21 December | 2.77 ms | 3.32 ms | 3.60 ms | 6.82 ms |
+| Hirschenplatz, 21 December | 2.97 ms | 3.31 ms | 3.44 ms | 6.59 ms |
+| Rathausbrücke, 21 December | 2.89 ms | 3.11 ms | 3.28 ms | 8.12 ms |
+
+In the recommended configuration (shadows from the nearest tree level,
+64 point lights, trees and windows), committed build:
+
+| Stop and time | GPU median | GPU p99 | Frame p99 |
+|---|---|---|---|
+| Lindenhof, 21 June 18:00 | 6.69 ms | 7.77 ms | 9.25 ms |
+| Lindenhof, 21 December 18:00 | 3.47 ms | 3.76 ms | 8.00 ms |
+| Hirschenplatz, 21 December 18:00 | 3.44 ms | 3.60 ms | 6.32 ms |
+| Lindenhof, 21 June 22:30 | 3.87 ms | 4.36 ms | 7.06 ms |
+
+- **Lights:** 0 to 256 shadowless spot lights added 0.08 to 0.20 ms of
+  GPU median; point lights cost 0.03 to 0.28 ms more than spot lights;
+  64 point lights cost 0.19 to 0.31 ms over none in December.
+- **Windows:** 0.04 to 0.06 ms at night.
+- **Trees:** in leaf at Lindenhof, +2.49 ms (+2.50 on the committed
+  build): the sun's shadow pass went from 1.28 to 2.89 ms, and
+  main-pass fragments per pixel from 0.59 to 2.67. Bare December trees
+  added 0.04 to 0.40 ms. Tree shadows cost 1.5 to 1.7 ms there, about
+  85% of it from the nearest level, so shadows from that level only
+  save little against two levels. On one build, trees drawn to 300 m
+  were not cheaper than to 600 m.
+- **The worst case,** Lindenhof in June in the recommended
+  configuration (GPU p99 7.77 ms), would take about 12.8 to 14.8 ms of
+  GPU time on the reference class (estimate), against 16.7 ms for the
+  whole frame, leaving little for the rest of M2. The default
+  configuration measured the same (7.80 ms).
+- **CPU:** about 9,500 more entities; frame median 0.58 to 0.74 ms
+  higher at the December stops, where the frame is not GPU-bound.
+- **The look:** June at Lindenhof (limes and dappled shade) looks
+  right, and December at Hirschenplatz reads as an old town at night.
+  But shop windows blow out to white, the sky is pitch black with no
+  city glow or moon, the ground away from lamps is nearly black, and
+  spot lights aimed down leave the facades and crowns above the
+  lanterns dark, where point lights show them.
+- **Determinism:** on the prototype's build, the client played the
+  sample replay matching every checkpoint, and `op_replay check` passed
+  (20 checkpoints).
+- **Not measured:** an AMD card, DX12, video memory, popping and
+  shimmer in motion, shadow-only crowns, occlusion culling, wind.
+- **Also changed:** the ADR index, the roadmap's "Now" and section 8,
+  RFC 0004's lines on its follow-ups, a pointer in ADR-0018, and
+  ADR-0012's header ("extended by ADR-0022").
+- **No code, schema, fixture or replay changes** on this branch. The
+  prototype's code is on its own branch; its input file and
+  measurements are kept outside the repository.
+
+**Waiting for the maintainer:**
+1. ADR-0022: an option per part (trees, lamps, lit windows, night,
+   landmarks). It builds on RFC 0004 and ADR-0018, and can be decided
+   with them.
+2. A share of the budget for trees, lamps and windows: none, or 2 ms of
+   GPU time at the 99th percentile on the RTX 3070 as a starting value
+   (ADR-0022, open question 1), with ADR-0018.
+3. The night's values: the exposure floor, moonlight, sky glow, and
+   window and shop luminance, chosen by screenshots against the photos
+   (ADR-0022, open question 2), with ADR-0018's night exposure.
+4. MeteoSwiss's leaf dates: their licence ("CC-BY" with no version) and
+   the credit "Source: MeteoSwiss" (ADR-0022, open question 6), with
+   ADR-0017.
+5. Lamps stood on bridge decks or quays, and the inputs of the mount
+   inference (ADR-0022, Consequences), with ADR-0019's question 5.
+6. A card of the RX 6600 class to run the prototype's matrix on, two
+   runs per configuration (ADR-0018's open question on who buys or
+   lends it).
+7. Where to keep the prototype: on branch `drawing-prototype` until the
+   reference card's run, as the ADR proposes, then reused in pieces once
+   RFC 0004's points load. Its input conversion and raw reports are
+   kept outside the repository for now.

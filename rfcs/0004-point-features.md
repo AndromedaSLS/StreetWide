@@ -32,13 +32,14 @@ and [ADR-0016](../docs/adr/0016-swisssurface3d-heights.md) for the
 sources, [ADR-0017](../docs/adr/0017-licence-allowlist.md) and
 [ADR-0019](../docs/adr/0019-odbl-and-the-published-world.md) for the
 licences, [ADR-0018](../docs/adr/0018-performance-tier.md) for the
-client's budget. Two follow-ups are not drafted yet:
+client's budget. Two follow-ups:
 - **Navigation data,** which the [roadmap](../docs/roadmap.md) groups
-  with this RFC, gets its own RFC after the pedestrian ADR
+  with this RFC, gets its own RFC, not drafted yet, after the pedestrian ADR
   ([ADR-0021](../docs/adr/0021-pedestrians.md)): if pedestrians
   enter `op_sim`, it is simulation input, not a visual layer.
 - **How the client draws trees, lamps and lit windows** needs its own ADR
-  extending ADR-0012, before that client work.
+  extending ADR-0012, before that client work: drafted since as
+  [ADR-0022](../docs/adr/0022-drawing-trees-lamps-and-windows.md).
 
 **Nothing here is decided.** The maintainer, @victorpicaud, decides after
 the comment period. Each open choice is drafted with a recommendation.

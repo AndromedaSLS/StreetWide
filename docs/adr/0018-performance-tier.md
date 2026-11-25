@@ -357,7 +357,8 @@ are accepted, this replaces its night exposure.
   3. trees, lamps and lit windows measured on the route as they arrive.
 - **What the trees and lights work should bring.** Recommended here,
   from the review, for the client ADR on trees, lamps and lit windows
-  that RFC 0004 names, extending ADR-0012 and not yet drafted:
+  that RFC 0004 names, extending ADR-0012 and not yet drafted then (now
+  [ADR-0022](0022-drawing-trees-lamps-and-windows.md)):
   - **trees:** levels of detail by distance; no shadows from distant
     levels or impostors; occlusion culling on the camera (TAA and
     ambient occlusion already give it the depth prepass it needs); a
