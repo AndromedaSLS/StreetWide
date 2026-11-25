@@ -34,7 +34,8 @@ sources, [ADR-0017](../docs/adr/0017-licence-allowlist.md) and
 licences, [ADR-0018](../docs/adr/0018-performance-tier.md) for the
 client's budget. Two follow-ups are not drafted yet:
 - **Navigation data,** which the [roadmap](../docs/roadmap.md) groups
-  with this RFC, gets its own RFC after the pedestrian ADR: if pedestrians
+  with this RFC, gets its own RFC after the pedestrian ADR
+  ([ADR-0021](../docs/adr/0021-pedestrians.md)): if pedestrians
   enter `op_sim`, it is simulation input, not a visual layer.
 - **How the client draws trees, lamps and lit windows** needs its own ADR
   extending ADR-0012, before that client work.
@@ -42,7 +43,8 @@ client's budget. Two follow-ups are not drafted yet:
 **Nothing here is decided.** The maintainer, @victorpicaud, decides after
 the comment period. Each open choice is drafted with a recommendation.
 Two choices are tied to other documents:
-- **The pedestrian ADR first (recommended).** If it puts agents into
+- **The pedestrian ADR, [ADR-0021](../docs/adr/0021-pedestrians.md),
+  first (recommended).** If it puts agents into
   `op_sim` in M2, trunks and poles become obstacles within M2, and
   section 7's colliders join this RFC before it is accepted. Deciding it
   first avoids declaring points visual only and reversing that in the

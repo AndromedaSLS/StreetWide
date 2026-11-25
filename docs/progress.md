@@ -1126,3 +1126,124 @@ branch's first Linux CI run, with all 12 jobs green.
    busy for a minute or two. Recommended: leave it until the gate runs as
    a service; a budget shared by the change set would make one facade's
    outcome depend on the others.
+
+### Pedestrian ADR drafted (2026-11-25)
+
+[ADR-0021](adr/0021-pedestrians.md) drafts the pedestrian decision that
+M2 opens with and that RFC 0004 asks to settle first. **Nothing is
+decided;** the maintainer decides. It is numbered 0021 because ADR-0020
+(baseline refreshes) is drafted on branch `refresh`.
+
+| Option | Recommended |
+|---|---|
+| A. In the client only, not colliding | no; seeded, the fallback if C2's prototype fails |
+| B. Deterministic agents in `op_sim`, recorded in replays | no |
+| C1. A near population in `op_sim`, ambient people in the client | left to M4 and M5 |
+| C2. People in the client from a shared seed | **yes, for M2** |
+| D. Not in M2 | no |
+| E. Pedestrians as Rapier bodies | rejected by measurement |
+
+- **The recommendation:** the client draws people from a population
+  that is a pure function of the world's lanes, places and population
+  profiles, the session seed, the crowd's clock (a full date and time,
+  plus ticks), the population's version and the character-asset
+  catalogue. People stay outside the simulation's state, schedule and
+  hash and do not collide, so trunks and poles stay visual (RFC 0004 as
+  drafted), and navigation data becomes a world layer that the client
+  reads, shaped to become simulation input later. At a pinned crowd
+  tick, screenshots and benchmark stops show the same people on every
+  machine; in M5, every player sees the same people if the sessions
+  agree on the crowd's inputs. A seeded A gives the same on one machine,
+  so C2's larger benefits arrive in M4 and M5, and its risk, an
+  unproven look, in M2.
+- **What the crowd must do:** trips that start and end only at places
+  in the world data, never at the edge of the area the client works
+  out; people who avoid each other, sit and stand; speeds by trip
+  purpose, group and steps; a month factor in the profiles; levels of
+  detail; and pass-or-fail checks for a client prototype, which comes
+  first.
+- **Evidence,** gathered on 2026-11-25 in three research notes and a
+  prototype, none of them in the repository; the ADR cites the sources:
+  - **open-world games:** tiers everywhere (Assassin's Creed Unity: 40
+    full AIs and 10,000 crowd NPCs on screen, the far ones on fixed
+    paths); crowds online owned by a client or a server; For Honor's
+    hundred soldiers in a deterministic simulation with rollback; no
+    published game with rollback networking and hundreds of ambient
+    pedestrians;
+  - **crowd models:** following a graph with separation needs only the
+    simulation's basic arithmetic, but lets bodies overlap in dense
+    head-on flows; social force diverged at 60 Hz; no crowd crate fits
+    `op_sim` as it is; `f32::min` and `max` do not fix which zero they
+    return, which ADR-0003 does not cover;
+  - **open data:** OSM's paths are nearly complete in the district, but
+    the ingest keeps no walking graph; hourly counts exist for
+    Bahnhofstrasse (licence version unclear) and, under CC0, for the
+    Limmatquai until 2024; VBZ publishes boardings per stop and trip,
+    as computed averages; Bahnhofstrasse had 1.4 to 2.6 times as many
+    people at 18:00 in December as in June.
+
+**The prototype:** pedestrians in a module written like `op_sim`'s, on
+the district's walk graph from the ingest's OSM cache (59.98 km): graph
+and separation (a), graph and ORCA (b), and capsules moved by `op_sim`'s
+character controller against the real shells of 4 tiles (c). AMD Ryzen
+9 3900 shared with other work, Windows 11, Rust 1.100.0, release
+build, one thread, 3,600 measured ticks, every configuration run twice,
+each tick hashed the way `op_sim` hashes the player. The worst-case
+rollback re-simulates 8 ticks on every frame.
+
+| Variant | Agents | Per tick, median | Worst rollback frame, median |
+|---|---|---|---|
+| a | 500 | 0.12–0.13 ms | 1.15–1.16 ms (6.9% of 16.7 ms) |
+| a | 2,000 | 0.52–0.53 ms | 4.9–5.2 ms (29–31%) |
+| a | 10,000 | 3.04 ms | 28.6–29.5 ms |
+| b | 2,000 | 0.62 ms | 6.4–6.6 ms |
+| c, 4 tiles | 100 | 3.6–3.9 ms | 31.6 ms; 423 of 28,800 re-simulated ticks gave another hash |
+
+At the 99th percentile, which ADR-0018 budgets, the worst rollback
+frames cost 1.5 to 1.8 times these medians (7.8–8.0 ms, 47–48%, for
+2,000 agents of a).
+
+- **Hashing** was about two thirds to four fifths of a's tick (64 to
+  79%). A hasher that buffers the same bytes would keep every hash and
+  cost about an eighth as much from 2,000 agents up (a quarter at 100).
+  ADR-0003's rule 9 also hashes every re-simulated tick, so the ADR
+  gives its rollback estimates with and without that.
+- **Determinism:** every configuration gave the same hash chain in both
+  runs, and a Linux build matched Windows. Only c broke exact rollback,
+  which the prototype traces to Rapier's broad phase. arm64 and macOS
+  were not tested.
+- **Paths and shells:** in the 4 tiles, 269 of 1,120 graph edges have
+  at least one point where the capsule overlaps a shell. Part of it is
+  by design (paths that end at doors, building passages), so lanes must
+  be matched to the shells, keeping those, before anyone walks on them.
+- **Review:** three reviews of the draft (architecture, a player's
+  view, sources) were applied on 2026-11-25. Among the changes: the
+  rollback costs under rule 9 and at the 99th percentile; the crowd's
+  clock; where the code lives (`op_sim`, a crate of its own or the
+  client); the hand-back from `op_sim`; players blocked by people (an
+  ADR-0004 change); the client's CPU cost for ADR-0018; the rule for
+  fictional people stated as new; and an open question on the lane and
+  profile licences.
+- **Also changed:** the ADR index, the roadmap's "Now" and section 8,
+  and two links to ADR-0021 in RFC 0004.
+- **No code, schema, fixture or replay changes.** The prototype's code
+  is not in the repository; the ADR asks for it to be kept before M4 or
+  M5 relies on its numbers.
+
+**Waiting for the maintainer:**
+1. ADR-0021: C2 or another option, a seeded A among them. The answer
+   unblocks RFC 0004 (with RFC 0003, one contract-version choice) and
+   then the navigation-data RFC.
+2. hystreet's licence version, before its counts shape the crowd
+   (ADR-0021, open question 2).
+3. The lane and profile licences, with ADR-0019 (ADR-0021, open
+   question 6).
+4. Whether "Private by design" extends to people (ADR-0021, Privacy).
+5. Whether replays should record the date and time for playback
+   (ADR-0021, open question 1).
+6. Where to keep the prototype: a branch, or a folder with a README
+   (ADR-0021, Consequences). It is kept outside the repository for now.
+   Its ORCA solver (variant b) follows the RVO2 library's
+   `computeNewVelocity`, which is Apache-2.0, so in the repository that
+   file would need RVO2's notice and stay Apache-2.0 only, or variant b
+   could be kept as results without its code.
