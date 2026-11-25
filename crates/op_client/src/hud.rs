@@ -2,6 +2,7 @@
 //! details (F3), loading and replay results, and inspect mode's crosshair
 //! and panel; and the end of `--replay --exit-when-done` runs.
 
+use bevy::camera::Exposure;
 use bevy::prelude::*;
 use bevy::render::view::screenshot::{Screenshot, save_to_disk};
 use bevy::window::{CursorGrabMode, CursorOptions, PrimaryWindow};
@@ -12,7 +13,7 @@ use crate::inspect::{self, Inspect, InspectStats, InspectSystems};
 use crate::materials::MaterialSet;
 use crate::scene::{PlayerCamera, Quality, StreamStats};
 use crate::session::{Playback, Session};
-use crate::sky::{Clock, MoonState, SunState, exposure_ev100};
+use crate::sky::{Clock, MoonState, SunState};
 use crate::travel::{Travel, View};
 
 #[derive(Component)]
@@ -310,7 +311,7 @@ fn update_panels(
     set: Res<MaterialSet>,
     stats: Res<StreamStats>,
     (inspect, pick, moon): (Res<Inspect>, Res<InspectStats>, Res<MoonState>),
-    camera: Single<&Transform, With<PlayerCamera>>,
+    camera: Single<(&Transform, &Exposure), With<PlayerCamera>>,
     mut help: Single<(&mut Text, &mut Visibility), (With<HelpText>, Without<DebugText>)>,
     mut debug: Single<(&mut Text, &mut Visibility), (With<DebugText>, Without<HelpText>)>,
     mut fps: Local<f32>,
@@ -337,6 +338,7 @@ fn update_panels(
     if !panels.debug {
         return;
     }
+    let (camera, exposure) = *camera;
     let cam = session.render_to_region(camera.translation);
     let (lon, lat, h) = session.frame().unproject(cam);
     let sim = session.sim();
@@ -373,9 +375,7 @@ fn update_panels(
         ),
         format!(
             "sun azimuth {:.0}°, elevation {:.1}°, EV100 {:.1}",
-            sun.azimuth,
-            sun.elevation,
-            exposure_ev100(sun.elevation)
+            sun.azimuth, sun.elevation, exposure.ev100
         ),
         format!(
             "moon azimuth {:.0}°, elevation {:.1}°, {:.0}% lit",

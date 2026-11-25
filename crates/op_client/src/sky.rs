@@ -17,8 +17,18 @@
 //! All of it fades in after sunset, so daytime is unchanged. The values
 //! are starting values, set by eye against two photographs of the old town
 //! at night; the maintainer sets the final ones (ADR-0022, open question 2).
-//! The plain look (F2) has none of the fill: only the sun and the
-//! exposure, as before.
+//!
+//! **Dusk:** between sunset and the night the sky keeps lighting the
+//! street, as real twilight does. Below the horizon the sun only lights
+//! the atmosphere (the atmosphere hides its direct light), so the sun keeps
+//! the strength that makes the atmosphere's light on the ground follow
+//! measured twilight ([`TWILIGHT_LX`]) instead of fading out at 3° down. The
+//! exposure then follows the light in the scene (the atmosphere's, the
+//! moon's and the fill's) between the night floor and the daylight curve,
+//! so the picture darkens smoothly instead of going black.
+//!
+//! The plain look (F2) has none of this: only the sun, faded out at 3°
+//! down, and the exposure curve, as before.
 //!
 //! The clock is Swiss civil time: the worlds are in Switzerland. It never
 //! reaches the simulation; light is rendering only.
@@ -48,6 +58,43 @@ pub const NIGHT_EV100: f32 = 3.0;
 /// The floor the client used before ADR-0022 (EV100), which the daylight
 /// curve still runs down to.
 const DUSK_EV100: f32 = 6.5;
+
+/// The highest sun elevation (degrees) the dusk tables cover: from here up
+/// the sun has its full strength and the exposure is the daylight curve.
+const DUSK_TOP_DEG: f64 = 2.0;
+/// The lowest (degrees): below it the sun gives nothing, as before.
+const DUSK_END_DEG: f64 = -10.0;
+/// Sun and sky light on level ground under a clear sky (lx) for the sun's
+/// elevation in whole degrees from [`DUSK_TOP_DEG`] down to
+/// [`DUSK_END_DEG`]: the U.S. Naval Observatory's model (Janiczek and
+/// DeYoung, "Computer Programs for Sun and Moon Illuminance With Contingent
+/// Tables and Diagrams", USNO Circular 171, 1987: its subroutines REFR and
+/// ATMOS, 133,775 lx times ATMOS's factor), to three figures. Hundreds of
+/// lux at sunset, tens with the sun 3° down, a few at 6° down (the end of
+/// civil twilight).
+const TWILIGHT_LX: [f32; 13] = [
+    1950.0, 1430.0, 984.0, 387.0, 169.0, 66.4, 24.4, 8.65, 2.99, 1.02, 0.345, 0.116, 0.0389,
+];
+/// What Bevy's atmosphere gives level ground (lx) when the sun keeps its
+/// full strength ([`lux::RAW_SUNLIGHT`]) at the same elevations: measured
+/// with the release client (Bevy 0.20.1, the default atmosphere settings)
+/// at Hirschenplatz on 21 December, from screenshots without tonemapping
+/// against a known ambient light, between measured elevations about 0.7°
+/// apart; Lindenhof agreed within 14%. It falls far more slowly than real
+/// twilight: three times the USNO figure with the sun on the horizon, a
+/// hundred times at 10° down. Measure again if Bevy or the atmosphere's
+/// settings change.
+const ATMOSPHERE_LX: [f32; 13] = [
+    5070.0, 3970.0, 2910.0, 1970.0, 1200.0, 743.0, 432.0, 215.0, 97.8, 48.1, 23.1, 9.12, 4.21,
+];
+/// The light (lx) at which the exposure reaches the night floor: the
+/// fill's 5.7 lx and a full moon's 5.0 lx before the air dims it, more than
+/// the brightest night the client draws, so every night stays at the floor.
+const FLOOR_LX: f32 = std::f32::consts::PI * FILL_CD_M2 + FULL_MOON_LX * MOON_GAIN;
+/// How far the exposure follows the light at dusk (EV per doubling): 1
+/// would keep every surface as bright on screen as the light falls; a
+/// little less lets dusk darken. A look choice.
+const DUSK_FOLLOW: f32 = 0.9;
 
 /// A full moon overhead, outside the atmosphere, lights the ground with
 /// about 0.31 lx (Krisciunas and Schaefer, "A model of the brightness of
@@ -252,12 +299,81 @@ pub fn night(elevation_deg: f64) -> f32 {
     smoothstep((-1.0 - elevation_deg) / 7.0)
 }
 
-/// Camera exposure (EV100) for a sun elevation: daylight, dimmer at dusk,
-/// down to [`NIGHT_EV100`] at night. Above 1° below the horizon it is the
-/// curve the client always had.
-pub fn exposure_ev100(elevation_deg: f64) -> f32 {
-    let day = DUSK_EV100 + 7.3 * smoothstep((elevation_deg + 10.0) / 25.0);
-    day - (DUSK_EV100 - NIGHT_EV100) * night(elevation_deg)
+/// The daylight exposure curve (EV100) the client always had: 13.8 with
+/// the sun high, 6.5 with it 10° down.
+fn daylight_ev100(elevation_deg: f64) -> f32 {
+    DUSK_EV100 + 7.3 * smoothstep((elevation_deg + 10.0) / 25.0)
+}
+
+/// The plain look's exposure (EV100): the daylight curve, pulled down to
+/// [`NIGHT_EV100`] as the night comes, as before the dusk fix.
+pub fn plain_ev100(elevation_deg: f64) -> f32 {
+    daylight_ev100(elevation_deg) - (DUSK_EV100 - NIGHT_EV100) * night(elevation_deg)
+}
+
+/// A table by whole degrees from [`DUSK_TOP_DEG`] down to
+/// [`DUSK_END_DEG`], read at an elevation between its ends, in logarithms.
+fn by_elevation(table: &[f32; 13], elevation_deg: f64) -> f32 {
+    let x = (DUSK_TOP_DEG - elevation_deg).clamp(0.0, 12.0);
+    let i = (x as usize).min(11);
+    let t = (x - i as f64) as f32;
+    (table[i].ln() * (1.0 - t) + table[i + 1].ln() * t).exp()
+}
+
+/// Real twilight's light on level ground (lx), clear sky: [`TWILIGHT_LX`]
+/// between its ends.
+pub fn twilight_lux(elevation_deg: f64) -> f32 {
+    by_elevation(&TWILIGHT_LX, elevation_deg)
+}
+
+/// The sun's fade (0 to 1) as it sets, the one the client always had:
+/// full from 2° up, nothing from 3° down.
+fn sun_fade(elevation_deg: f64) -> f32 {
+    ((elevation_deg + 3.0) / 5.0).clamp(0.0, 1.0) as f32
+}
+
+/// The sun light's strength, as a share of [`lux::RAW_SUNLIGHT`]. In the
+/// plain look, the fade. In the detailed look, below the horizon, at least
+/// the strength that makes the atmosphere's light on the ground the real
+/// twilight's ([`TWILIGHT_LX`] over [`ATMOSPHERE_LX`]), down to 10° below.
+/// The atmosphere hides the sun's direct light once it has set, so the
+/// strength left there only lights the sky and the light the sky gives.
+pub fn sun_strength(elevation_deg: f64, detailed: bool) -> f32 {
+    let fade = sun_fade(elevation_deg);
+    if !detailed || elevation_deg >= DUSK_TOP_DEG {
+        return fade;
+    }
+    if elevation_deg < DUSK_END_DEG {
+        return 0.0;
+    }
+    fade.max(twilight_lux(elevation_deg) / by_elevation(&ATMOSPHERE_LX, elevation_deg))
+}
+
+/// The light in the detailed look's scene (lx) below [`DUSK_TOP_DEG`], as
+/// the exposure meters it: the atmosphere's on level ground, the moon's
+/// (`moon_lx`, from [`moonlight_lux`]) as it fades in, and the fill's.
+pub fn scene_lux(elevation_deg: f64, moon_lx: f32) -> f32 {
+    let sky = if elevation_deg < DUSK_END_DEG {
+        0.0
+    } else {
+        sun_strength(elevation_deg, true) * by_elevation(&ATMOSPHERE_LX, elevation_deg)
+    };
+    let dark = night(elevation_deg);
+    sky + (moon_lx + std::f32::consts::PI * FILL_CD_M2) * dark
+}
+
+/// The detailed look's exposure (EV100) for a sun elevation and the
+/// moon's light (`moon_lx`, from [`moonlight_lux`]): the daylight curve
+/// from 2° up; below, it follows the light in the scene ([`scene_lux`],
+/// by [`DUSK_FOLLOW`]), never above the daylight curve and never below
+/// [`NIGHT_EV100`], which it reaches at [`FLOOR_LX`].
+pub fn exposure_ev100(elevation_deg: f64, moon_lx: f32) -> f32 {
+    let day = daylight_ev100(elevation_deg);
+    if elevation_deg >= DUSK_TOP_DEG {
+        return day;
+    }
+    let light = scene_lux(elevation_deg, moon_lx);
+    (NIGHT_EV100 + DUSK_FOLLOW * (light / FLOOR_LX).log2()).clamp(NIGHT_EV100, day)
 }
 
 /// What the exposure multiplies scene luminance (cd/m²) by, as Bevy does.
@@ -339,7 +455,7 @@ fn glow_dome() -> Mesh {
 }
 
 /// Sets the sun, the moon, the exposure and the night fill for the clock
-/// (and the look: the plain look has no fill).
+/// (and the look: the plain look has no fill and no twilight).
 #[allow(clippy::too_many_arguments, clippy::type_complexity)]
 fn update_sky(
     clock: Res<Clock>,
@@ -374,25 +490,30 @@ fn update_sky(
     let up = if dir.y.abs() > 0.99 { Vec3::Z } else { Vec3::Y };
     let (transform, light) = &mut *sun;
     **transform = Transform::IDENTITY.looking_to(-dir, up);
-    // Fade out as the sun sets, instead of lighting from below.
-    let day = ((elevation + 3.0) / 5.0).clamp(0.0, 1.0) as f32;
-    light.illuminance = lux::RAW_SUNLIGHT * day;
-    light.shadow_maps_enabled = day > 0.0;
-    let ev100 = exposure_ev100(elevation);
-    for mut e in &mut exposure {
-        e.ev100 = ev100;
-    }
+    // The detailed look keeps the twilight in the sky; shadows end with the
+    // fade, as before, since nothing on the ground sees the sun by then.
+    let detailed = set.as_ref().is_none_or(|s| s.detailed_on);
+    light.illuminance = lux::RAW_SUNLIGHT * sun_strength(elevation, detailed);
+    light.shadow_maps_enabled = sun_fade(elevation) > 0.0;
 
     // The night fill, in the detailed look only.
-    let detailed = set.as_ref().is_none_or(|s| s.detailed_on);
     let dark = if detailed { night(elevation) } else { 0.0 };
     let m = geo::moon_position(days, minute, lon, lat);
     moon_state.0 = m;
+    let moon_lx = moonlight_lux(&m);
+    let ev100 = if detailed {
+        exposure_ev100(elevation, moon_lx)
+    } else {
+        plain_ev100(elevation)
+    };
+    for mut e in &mut exposure {
+        e.ev100 = ev100;
+    }
     let dir = to_sun(m.azimuth, m.elevation);
     let up = if dir.y.abs() > 0.99 { Vec3::Z } else { Vec3::Y };
     let (transform, light, visibility) = &mut *moon;
     **transform = Transform::IDENTITY.looking_to(-dir, up);
-    light.illuminance = moonlight_lux(&m) * dark;
+    light.illuminance = moon_lx * dark;
     // Without light, hidden: the renderer and the atmosphere then skip it.
     **visibility = if light.illuminance > 0.0 {
         Visibility::Inherited
@@ -428,6 +549,8 @@ fn follow_camera(
 
 #[cfg(test)]
 mod tests {
+    use std::f32::consts::PI;
+
     use super::*;
 
     #[test]
@@ -443,28 +566,168 @@ mod tests {
         assert!((d.x - 1.0).abs() < 1e-6 && d.y.abs() < 1e-6, "{d}");
     }
 
+    /// Sun elevations from 90° up to 90° down, every tenth of a degree.
+    fn elevations() -> impl Iterator<Item = f64> {
+        (-900..=900).rev().map(|e| f64::from(e) / 10.0)
+    }
+
+    /// The daylight curve as the client always had it.
+    fn daylight(e: f64) -> f32 {
+        6.5 + 7.3 * smoothstep((e + 10.0) / 25.0)
+    }
+
+    /// No moon, the moon at 18:00 on 21 December (about 1.6 lx), and the
+    /// brightest the client draws (full, overhead).
+    fn moons() -> [f32; 3] {
+        let full = MoonPosition {
+            azimuth: 180.0,
+            elevation: 90.0,
+            illuminated: 1.0,
+            phase_angle: 0.0,
+        };
+        [0.0, 1.6, moonlight_lux(&full)]
+    }
+
     #[test]
     fn exposure_drops_at_night() {
-        assert!(exposure_ev100(40.0) > 13.0);
-        assert!(exposure_ev100(0.0) < exposure_ev100(10.0));
-        // Daylight and sunset as before ADR-0022.
-        let before = |e: f64| 6.5 + 7.3 * smoothstep((e + 10.0) / 25.0);
+        assert!(exposure_ev100(40.0, 0.0) > 13.0);
+        assert!(exposure_ev100(0.0, 0.0) < exposure_ev100(10.0, 0.0));
+        // The plain look: daylight and sunset as before ADR-0022, then down
+        // to the floor by 8° down, as before the dusk fix.
         for e in [60.0, 31.6, 19.6, 10.0, 0.0, -1.0] {
-            assert_eq!(exposure_ev100(e), before(e), "{e}");
+            assert_eq!(plain_ev100(e), daylight(e), "{e}");
         }
-        // The floor: EV100 3 once the sun is 8° down, so at both night
-        // stops (18:00 on 21 December, sun 13.2° down; 22:30 on 21 June,
-        // 8.7° down).
-        assert_eq!(NIGHT_EV100, 3.0);
-        assert!((exposure_ev100(-13.2) - 3.0).abs() < 1e-6);
-        assert!((exposure_ev100(-8.7) - 3.0).abs() < 0.1);
-        assert!((exposure_ev100(-90.0) - 3.0).abs() < 1e-6);
-        // Never brighter than the floor, and darker as the sun goes down.
+        for e in elevations() {
+            assert_eq!(plain_ev100(e), daylight(e) - 3.5 * night(e), "{e}");
+        }
+        for m in moons() {
+            // Unchanged with the sun 2° up or higher.
+            for e in elevations().filter(|&e| e >= 2.0) {
+                assert_eq!(exposure_ev100(e, m), daylight(e), "{e}");
+            }
+            // The floor, EV100 3, from 7° down whatever the moon, so at
+            // both night stops (18:00 on 21 December, sun 13.2° down;
+            // 22:30 on 21 June, 8.7° down).
+            assert_eq!(NIGHT_EV100, 3.0);
+            for e in elevations().filter(|&e| e <= -7.0) {
+                assert_eq!(exposure_ev100(e, m), NIGHT_EV100, "{e} {m}");
+            }
+            // Never above the daylight curve, never below the floor, and
+            // darker as the sun goes down.
+            let mut last = f32::MAX;
+            for e in elevations() {
+                let ev = exposure_ev100(e, m);
+                assert!(ev >= NIGHT_EV100 && ev <= daylight(e), "{e} {m}");
+                assert!(ev <= last + 1e-6, "{e} {m}");
+                last = ev;
+            }
+        }
+    }
+
+    #[test]
+    fn the_twilight_table_is_the_usno_model() {
+        // USNO Circular 171's REFR and ATMOS (degrees), and its sun's
+        // illuminance under a clear sky, 133,775 lx times ATMOS's factor.
+        fn usno(h: f64) -> f64 {
+            let dr = std::f64::consts::PI / 180.0;
+            let ha = if h < -5.0 / 6.0 {
+                h
+            } else {
+                h + 1.0 / ((h + 8.6 / (h + 4.42)) * dr).tan() / 60.0
+            };
+            let u = (ha * dr).sin();
+            let x = 753.661_56;
+            let s = (x * (ha * dr).cos() / (x + 1.0)).asin();
+            let m = x * (s.cos() - u) + s.cos();
+            let m = (-0.21 * m).exp() * u
+                + 0.0289 * (-0.042 * m).exp() * (1.0 + (ha + 90.0) * u / 57.295_779_51);
+            133_775.0 * m
+        }
+        for (i, &lx) in TWILIGHT_LX.iter().enumerate() {
+            let e = DUSK_TOP_DEG - i as f64;
+            let model = usno(e);
+            assert!(
+                ((f64::from(lx) - model) / model).abs() < 0.005,
+                "{e}: {lx} against {model}"
+            );
+            assert!((twilight_lux(e) / lx - 1.0).abs() < 1e-5, "{e}");
+        }
+        // Hundreds of lux at sunset (the sun's upper edge on the horizon),
+        // tens at 3° down, a few at 6° down, and less and less.
+        assert!((300.0..800.0).contains(&twilight_lux(-0.83)));
+        assert!((10.0..100.0).contains(&twilight_lux(-3.0)));
+        assert!((1.0..10.0).contains(&twilight_lux(-6.0)));
+        assert!(TWILIGHT_LX.windows(2).all(|w| w[1] < w[0]));
         let mut last = f32::MAX;
-        for e in (-200..=600).rev() {
-            let ev = exposure_ev100(f64::from(e) / 10.0);
-            assert!(ev >= 3.0 - 1e-6 && ev <= last + 1e-6, "{e}");
-            last = ev;
+        for e in elevations() {
+            assert!(twilight_lux(e) <= last, "{e}");
+            last = twilight_lux(e);
+        }
+    }
+
+    #[test]
+    fn the_sky_keeps_lighting_the_street_at_dusk() {
+        // The measured atmosphere falls far more slowly than real twilight.
+        assert!(ATMOSPHERE_LX.windows(2).all(|w| w[1] < w[0]));
+        for (a, t) in ATMOSPHERE_LX.iter().zip(TWILIGHT_LX) {
+            assert!(*a > 2.5 * t, "{a} {t}");
+        }
+        for e in elevations() {
+            // The plain look: the fade, as before.
+            let fade = ((e + 3.0) / 5.0).clamp(0.0, 1.0) as f32;
+            assert_eq!(sun_strength(e, false), fade, "{e}");
+            // The detailed look: full strength from 2° up, nothing below
+            // 10° down, and never less than the fade.
+            let s = sun_strength(e, true);
+            if e >= 2.0 {
+                assert_eq!(s, 1.0, "{e}");
+            }
+            if e < -10.0 {
+                assert_eq!(s, 0.0, "{e}");
+            }
+            assert!(s >= fade && s <= 1.0, "{e}");
+            // Down to 10° the atmosphere gives the ground at least the real
+            // twilight, and exactly it once the fade has gone.
+            if (-10.0..2.0).contains(&e) {
+                let sky = scene_lux(e, 0.0) - PI * FILL_CD_M2 * night(e);
+                let real = twilight_lux(e);
+                assert!(sky >= real * 0.9999, "{e}: {sky} < {real}");
+                if e <= -3.0 {
+                    assert!((sky / real - 1.0).abs() < 1e-3, "{e}: {sky} {real}");
+                }
+            }
+        }
+        // The brightest night stays below the light that leaves the floor.
+        for m in moons() {
+            assert!(scene_lux(-10.0, m) < FLOOR_LX, "{m}");
+        }
+    }
+
+    #[test]
+    fn exposure_and_light_agree_at_dusk() {
+        // What a mid-grey surface (albedo 0.18) lit by the whole scene
+        // shows on screen: its luminance times the exposure, as Bevy
+        // applies it, before tonemapping.
+        let grey =
+            |e: f64, m: f32| 0.18 / PI * scene_lux(e, m) * exposure_scale(exposure_ev100(e, m));
+        for m in moons() {
+            let at_night = grey(-12.0, m);
+            // 0.03 with no moon, 0.06 under the brightest: dim but
+            // readable, ADR-0022's night.
+            assert!((0.03..0.07).contains(&at_night), "{at_night}");
+            // From sunset to the night, never darker than the night and at
+            // most four times brighter, darker as the sun goes down. Before
+            // the fix, the same grey went below a tenth of the night's at
+            // 4° down: the exposure was still near daylight while the sky
+            // had gone out.
+            let mut last = f32::MAX;
+            for e in elevations().filter(|&e| (-12.0..=-0.8).contains(&e)) {
+                let g = grey(e, m);
+                assert!(g >= at_night * 0.9999, "{e} {m}: {g} < {at_night}");
+                assert!(g <= at_night * 4.0, "{e} {m}: {g} > 4 x {at_night}");
+                assert!(g <= last * 1.0001, "{e} {m}: {g} > {last}");
+                last = g;
+            }
         }
     }
 

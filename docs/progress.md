@@ -2253,3 +2253,145 @@ reports and logs, the 4 cost reports, and the screenshots), and
   for).
 - **One jump** at Lindenhof in June, not traced.
 - **RFC 0005:** the points above.
+
+### Dusk (2026-11-25, ADR-0022 N2)
+
+At 17:00 on 21 December (sun 4° down, civil twilight) the client showed
+an almost black picture, lit windows only, although real civil twilight
+is bright: hundreds of lux at sunset, tens with the sun 3° down, a few at
+6° down. Only `op_client` changed (`sky.rs`, and the F3 panel in
+`hud.rs`); the simulation, the world format and the replays did not. No
+ADR changed: N2's starting values at night are kept.
+
+**The cause** (checked before changing anything):
+- The client faded the sun's light out as it went from 2° up to 3° down.
+  The sun is also what lights Bevy's atmosphere, so the sky and the light
+  it gives the scene (the atmosphere's environment light) went out with
+  it: from 3° down the sky was black and only the night fill, still
+  fading in, lit the street.
+- The exposure was still close to daylight: the old curve, only partly
+  pulled down by the night factor (0 at 1° down, 1 at 8° down). The F3
+  panel read EV100 7.6 at 16:50 (2.6° down), 6.2 at 17:00 (4.0° down)
+  and 4.7 at 17:10 (5.5° down).
+- Together, a grey surface showed about a twentieth of its night
+  brightness at 4° down. Main's screenshots at Hirschenplatz: readable at
+  16:40 (1.2° down), dark at 16:50, black at 17:00 and 17:10, readable
+  again from 17:30 (8.5° down). Lindenhof and Rathaus were black at 17:00
+  too, and Hirschenplatz at 21:50 on 21 June (3.9° down).
+
+**What Bevy does with a sun below the horizon** (measured for this fix):
+- Its lighting already hides a directional light that has set (the
+  atmosphere's transmittance and the share of the sun's disc above the
+  horizon, in `pbr_lighting.wesl`), so a sun kept on below the horizon
+  only lights the sky and the light the sky gives.
+- But its atmosphere's twilight falls far more slowly than the real one.
+  With the sun at full strength, its light on level ground was 2,900 lx
+  with the sun on the horizon, 430 lx at 4° down and 4 lx at 10° down, against 980, 24 and
+  0.04 lx in the USNO model below: three, eighteen and a hundred times too
+  bright. Measured with the release client at Hirschenplatz on 21
+  December, every five minutes (about 0.7°) from 2.2° up to 11.6° down,
+  from screenshots without tonemapping at a known exposure, against a
+  known ambient light (a temporary patch, not committed). Lindenhof
+  agreed within 14% at three elevations, and a repeat within 0.1%.
+
+**The fix (detailed look only):**
+- **Twilight from the sky:** below the horizon the sun keeps the strength
+  that makes the atmosphere's light on level ground the real twilight's
+  (the USNO table over the measured one), and at least the old fade, down
+  to 10° below; below that nothing, as before. Measured again with the
+  fix: 100, 25 and 5.5 lx at 2.6°, 4.0° and 5.5° down, against the
+  model's 99, 24 and 5.2. The sky and the light it gives stay one thing,
+  coloured and directional by the atmosphere (lavender overhead, rose
+  towards the sunset), cooler than the warm fill that takes over.
+- **Exposure from the light in the scene:** below 2° up, EV100 = 3 + 0.9
+  × log2(light / 10.6 lx), never above the daylight curve and never below
+  the floor of 3. The light is the atmosphere's (as above), the moon's
+  and the fill's, as they fade in. 10.6 lx is the fill's 5.7 lx plus a
+  full moon's 5.0 lx before the air dims it, so every night stays on the
+  floor; the slope 0.9 (a look choice) lets dusk darken a little where 1
+  would keep surfaces as bright on screen as the light falls.
+- **Why not an ambient twilight term,** as suggested: it would have lit
+  the street from the same table, but the atmosphere stays black from 3°
+  down, so the sky would have needed an invented dome of its own. Scaling
+  the sun keeps the sky and its light in agreement, with the atmosphere's
+  colour and direction, and adds no mesh or light. The price is a
+  measured table, to measure again if Bevy or the atmosphere's settings
+  change.
+- **Unchanged:** everything with the sun 2° up or higher, and with it 10°
+  or more down (no sun, the floor); ADR-0022's night values (EV100 3, the
+  moon, the glow, the fill); and the plain look (F2), which keeps the old
+  fade and exposure, and so is still dark at dusk. Shadows still end with
+  the old fade at 3° down: nothing on the ground sees the sun by then.
+  The floor is now reached between 5.2° and 6.2° down (6.2° under the
+  brightest moon) instead of at 8°.
+- **The F3 panel** shows the camera's exposure instead of the old curve.
+
+| Value | Value | Source |
+|---|---|---|
+| Twilight on level ground, clear sky | 1950 lx at 2° up, 984 at 0°, 387 at 1° down, 169 at 2°, 66 at 3°, 24 at 4°, 8.7 at 5°, 3.0 at 6°, 0.35 at 8°, 0.04 at 10°, by whole degrees | U.S. Naval Observatory: Janiczek and DeYoung, "Computer Programs for Sun and Moon Illuminance With Contingent Tables and Diagrams", USNO Circular 171, 1987 (its REFR and ATMOS, 133,775 lx times ATMOS's factor) |
+| Bevy's atmosphere, sun at full strength | 5070 lx at 2° up, 2910 at 0°, 432 at 4° down, 4.2 at 10° down | measured, above |
+| Dusk exposure | 3 + 0.9 × log2(light / 10.6 lx), between 3 and the daylight curve | 0.9 a look choice |
+
+**Exposure** at Hirschenplatz on 21 December, before and after: 16:20
+(1.6° up) 9.7 and 9.7; 16:40 (1.2° down) 8.6 and 8.4; 16:50 (2.6° down)
+7.6 and 5.9; 17:00 (4.0° down) 6.2 and 4.2; 17:10 (5.5° down) 4.7 and
+3.0; from 17:20 (7.0° down) 3.0 (before: 3.5, then 3.1 at 17:30). On 21
+June, after: 21:10 (1.4° up) 9.7; 21:30 (1.3° down) 8.1; 21:50 (3.9°
+down) 4.3; 22:30 (8.7° down) 3.0 (before 3.06).
+
+**What the screenshots show** (1280 × 720, high, release build; kept
+outside the repository):
+- **Hirschenplatz every ten minutes from 16:20 to 18:10 on 21
+  December:** the picture darkens smoothly and never goes black. The sky
+  goes from pale blue through lavender (16:40 to 17:10) to the night's
+  orange-brown (from 17:20); facades and setts stay readable at every
+  step, and lit windows appear from 16:50 and brighten as the exposure
+  falls. Mean pixel level of the setts, of 255: 73, 57, 35, 30, 26, 22,
+  16, 15, then 15 to the end (before: 73, 57, 31, 5, 0, 1, 8, 13, 15).
+- **Lindenhof and Rathaus at 16:40, 17:00 and 17:20:** a rose sunset sky
+  over the city at 16:40, lavender at 17:00 with the far city's windows
+  coming on, the night's sky at 17:20; before, both were black at 17:00.
+- **21 June at 21:10, 21:30, 21:50 and 22:30:** the same; 21:50 (3.9°
+  down) was black before. 22:30 is 8% brighter on average than before
+  (the floor reached, and the last of the twilight).
+- **12:00 and 18:00 on 21 December at the three stops:** unchanged.
+  Against main, the mean difference per pixel was 0.19 to 0.28 (of 255)
+  at noon and 0.06 to 0.08 at 18:00; between two runs of the same build,
+  0.15 to 0.31 at noon and 0.03 to 0.08 at 18:00 (seven runs at
+  Lindenhof at 18:00: 0.04 to 0.08 among main's, 0.05 to 0.08 between
+  main and the fix).
+- **Found on the way:** the moon is drawn as a small bright disc wherever
+  it is in view, at dusk as at night, on main too: the moon's light has
+  no `SunDisk`, and Bevy then gives it the sun's.
+
+**Checks:**
+- `cargo fmt --all --check` and `cargo clippy --workspace --all-targets
+  --locked -- -D warnings`: pass.
+- `cargo test --workspace --locked`: 266 passed, 1 ignored. New or
+  changed in `op_client`: the twilight table matches the USNO model
+  (within 0.5%), with hundreds of lux at sunset, tens at 3° down and a
+  few at 6° down; the sun's strength is the old fade in the plain look
+  and from 2° up, nothing below 10° down, and from 3° down gives the
+  ground exactly the table's light; the exposure is the daylight curve
+  from 2° up, the floor from 7° down whatever the moon, and never rises
+  as the sun goes down; and a mid-grey surface under the scene's light,
+  as exposed, stays between the night's brightness and four times it
+  from sunset to night, darkening all the way (before the fix it fell
+  below a tenth of the night's at 4° down). The plain look's exposure is
+  the old one.
+- `op_replay check fixtures/replays/sample.oprep`: ok, 20 checkpoints,
+  final state `212bd353…`, unchanged.
+
+**Still open:**
+- **ADR-0022's open question 2:** the slope 0.9 joins the night's
+  starting values; the maintainer sets the final ones.
+- **The plain look at dusk** is still dark, as it was: it keeps the old
+  fade and exposure on purpose.
+- **Clear skies only:** the USNO figures are for a clear sky; weather is
+  not in M2.
+- **The atmosphere table** was measured at street level at one stop on
+  one date and checked at a second; the map view and high flying were
+  not measured, and the table must be measured again when Bevy or the
+  atmosphere's settings change.
+- **The moon's disc** (above): give the moon a `SunDisk` of its own size,
+  or none.
