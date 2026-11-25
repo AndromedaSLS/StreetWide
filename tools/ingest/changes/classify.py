@@ -264,8 +264,9 @@ class Classification:
     draped: dict[Key, list[Item]] = field(default_factory=dict)
     """For each current terrain asset not made by the ingest, the pending
     adds, replaces and moves draped on the height model (their new
-    manifest lists DEM data) whose new bounds overlap it, in key order
-    (Q17). While that terrain stays, they would float or sink on it."""
+    manifest lists DEM data, and their mesh changes) whose new bounds
+    overlap it, in key order (Q17). While that terrain stays, they would
+    float or sink on it."""
 
 
 # ---------------------------------------------------------------- origin --
@@ -590,14 +591,15 @@ def build_draped(cur: StoreView, items: list[Item], origins: dict[Key, Origin],
     pending adds, replaces and moves of other layers whose new manifest
     lists DEM data and whose new bounds overlap the terrain's by a positive
     area. The ingest drapes them on the height model, not on that
-    terrain."""
+    terrain. A replace that keeps its mesh (manifest only) is not among
+    them: its mesh is where it is now, so it cannot come to float or sink."""
     grid = BoxGrid()
     for key, asset in cur.assets.items():
         if asset.layer == "terrain" and origins[key].kind != "ingest":
             grid.add(asset.box, asset)
     found: dict[Key, list[Item]] = {}
     for i in items:
-        if i.op == "remove" or i.layer == "terrain" or not dem_entries(i.new, dem):
+        if i.op == "remove" or i.layer == "terrain" or i.manifest_only or not dem_entries(i.new, dem):
             continue
         for box, terrain in grid.near(i.new.box):
             if touches(i.new.box, box):

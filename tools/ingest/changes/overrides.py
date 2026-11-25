@@ -30,18 +30,21 @@ order mark, spacing or key order, which differ between editors and
 platforms. Everything that cannot be right in any plan is refused here,
 as a PlanError (exit code 2): an unknown field or code, a missing reason
 or scope, a code no accept can lift, a key both held and accepted,
-duplicate entries, and a number canonical JSON cannot hold.
+duplicate entries, and a number or a text canonical JSON cannot hold. So
+is a file that is not a regular file of at most 64 MiB
+(`common.read_input`), or not JSON.
 """
 
 from __future__ import annotations
 
 import json
+import sys
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
 from tools.ingest.changes import codes
-from tools.ingest.changes.common import Key, PlanError, key_order, show, text_order
+from tools.ingest.changes.common import Key, PlanError, UnreadableFile, read_input, show
 from tools.worldfmt import cjson
 from tools.worldfmt.changes import is_feature_id, is_text
 from tools.worldfmt.ids import content_id, is_content_id
@@ -110,6 +113,17 @@ class Overrides:
 NONE = Overrides(id=None)
 
 
+def _text_order(s: str) -> bytes:
+    # `common.text_order`, for text that may hold a lone surrogate (JSON's
+    # escapes allow one): the same order for every other text, and no
+    # error before `overrides_id` refuses it.
+    return s.encode("utf-8", "surrogatepass")
+
+
+def _key_order(key: Key) -> tuple[bytes, bytes]:
+    return _text_order(key[0]), _text_order(key[1])
+
+
 def _reject_duplicates(pairs: list[tuple[str, Any]]) -> dict:
     out: dict[str, Any] = {}
     for k, v in pairs:
@@ -119,19 +133,37 @@ def _reject_duplicates(pairs: list[tuple[str, Any]]) -> dict:
     return out
 
 
+def _parse_int(token: str) -> int:
+    try:
+        return int(token)
+    except ValueError:  # more digits than Python converts (sys.get_int_max_str_digits)
+        raise PlanError(f"overrides: not valid JSON: a number has more than {sys.get_int_max_str_digits()} "
+                        "digits") from None
+
+
 def read_overrides(path: Path | None) -> Overrides:
-    """Reads and checks the overrides file at `path` (None: no overrides).
-    Raises PlanError with "overrides: ..." messages."""
+    """Reads and checks the overrides file at `path` (None: no overrides):
+    a regular file of at most `common.MAX_INPUT_BYTES` (`read_input`), then
+    `loads_overrides`. Raises PlanError with "overrides: ..." messages."""
     if path is None:
         return NONE
     try:
-        data = Path(path).read_bytes()
-    except OSError as e:
-        raise PlanError(f"overrides: cannot read {path}: {e.strerror or e}") from e
+        data = read_input(Path(path))
+    except UnreadableFile as e:
+        raise PlanError(f"overrides: {e}") from e
+    return loads_overrides(data)
+
+
+def loads_overrides(data: bytes) -> Overrides:
+    """Parses and checks the bytes of an overrides file: JSON in UTF-8, with
+    or without a byte order mark, then `parse_overrides`. Raises PlanError
+    with "overrides: ..." messages."""
     try:
-        doc = json.loads(data.decode("utf-8-sig"), object_pairs_hook=_reject_duplicates)
-    except (UnicodeDecodeError, json.JSONDecodeError) as e:
+        doc = json.loads(data.decode("utf-8-sig"), object_pairs_hook=_reject_duplicates, parse_int=_parse_int)
+    except ValueError as e:  # invalid UTF-8 or JSON (JSONDecodeError is a ValueError)
         raise PlanError(f"overrides: not valid JSON: {e}") from e
+    except RecursionError as e:
+        raise PlanError("overrides: not valid JSON: arrays and objects are nested too deeply") from e
     return parse_overrides(doc)
 
 
@@ -147,9 +179,11 @@ def overrides_id(doc: dict) -> str:
 
 
 def parse_overrides(doc: Any) -> Overrides:
+    """Checks a parsed overrides document (any JSON value). Raises
+    PlanError with "overrides: ..." messages."""
     if not isinstance(doc, dict):
         raise PlanError("overrides: the file must hold a JSON object")
-    for name in sorted(doc, key=text_order):
+    for name in sorted(doc, key=_text_order):
         if name not in ("overrides_version", *_FIELDS):
             raise PlanError(f"overrides: unknown field {json.dumps(name)}")
     if doc.get("overrides_version") != VERSION:
@@ -162,7 +196,7 @@ def parse_overrides(doc: Any) -> Overrides:
         for i, item in enumerate(items):
             if not isinstance(item, dict):
                 raise PlanError(f"overrides: {kind}[{i}] must be an object")
-            for name in sorted(item, key=text_order):
+            for name in sorted(item, key=_text_order):
                 if name not in _FIELDS[kind]:
                     raise PlanError(f"overrides: {kind}[{i}] has an unknown field {json.dumps(name)}")
         entries[kind] = items
@@ -227,14 +261,14 @@ def parse_overrides(doc: Any) -> Overrides:
             raise PlanError(f"overrides: {layer}/{dataset} has two allow_removals entries")
         allowances[(layer, dataset)] = Allowance(layer, dataset, at_most, reason)
 
-    for key in sorted(holds, key=key_order):
+    for key in sorted(holds, key=_key_order):
         if key in accepts:
             raise PlanError(f"overrides: {show(key)} is both held and accepted")
     return Overrides(
         id=overrides_id(doc),
-        holds={k: holds[k] for k in sorted(holds, key=key_order)},
-        accepts={k: accepts[k] for k in sorted(accepts, key=key_order)},
-        allowances={g: allowances[g] for g in sorted(allowances, key=key_order)},
+        holds={k: holds[k] for k in sorted(holds, key=_key_order)},
+        accepts={k: accepts[k] for k in sorted(accepts, key=_key_order)},
+        allowances={g: allowances[g] for g in sorted(allowances, key=_key_order)},
     )
 
 

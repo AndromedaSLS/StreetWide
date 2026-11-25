@@ -7,6 +7,12 @@ tile-index entry agreeing with its manifest. Meshes and other content are
 read only on request: to copy them into a bundle, and for the terrain-edge
 rule (H8) and the spawn rule (H14).
 
+A store may come from elsewhere, so every file is read as `op_world` reads
+a store (RFC 0001, section 7): with `common.read_input`, which takes only
+a regular file itself (never a link, a directory or a FIFO) of at most
+`common.MAX_INPUT_BYTES`. An object that is not such a file does not count
+as present (`has_object`, `object_names`), and reading it is an error.
+
 `content_key` is rule C of ADR-0020 (Q1, Proposed): an asset's content is
 its mesh and its manifest, except `parent_version_id`,
 `generator.version` and each source's `version`.
@@ -14,15 +20,18 @@ its mesh and its manifest, except `parent_version_id`,
 
 from __future__ import annotations
 
+from collections.abc import Iterator, Mapping
 from dataclasses import dataclass, field
 from functools import cached_property
 from pathlib import Path
 
 from tools.ingest import GENERATOR as INGEST_GENERATOR
-from tools.ingest.changes.common import Box, Key, PlanError, key_order, show, text_order
+from tools.ingest.changes.common import (
+    Box, Key, PlanError, UnreadableFile, is_regular_file, key_order, name_order, read_input, show,
+)
 from tools.worldfmt import cjson, glb, schemas
 from tools.worldfmt.changes import ChangeError, Objects, tile_xy
-from tools.worldfmt.ids import content_id, hex_of
+from tools.worldfmt.ids import PREFIX, content_id, hex_of, is_content_id
 from tools.worldfmt.store import Store
 
 CONTRIBUTIONS_DATASET = "StreetWide contributions"
@@ -45,17 +54,64 @@ _INDEX_FIELDS = (
 )
 
 
+class StoreObjects(Mapping):
+    """The JSON objects (`objects/<aa>/<hex>.json`) of the store in `root`,
+    by content id: a source for `Objects` that reads every file with
+    `read_input`, where a `Store` source would follow a link and read a file
+    of any size. An object counts as present only as a regular file itself.
+
+    Reading one that is there but is not a regular file, or is larger than
+    `common.MAX_INPUT_BYTES`, raises ChangeError ("object <id>: <why>"),
+    where `op_world`'s layered store would look in its next layer. The
+    planner and `verify` always put a store last, so the two only differ in
+    the message."""
+
+    def __init__(self, root: Path):
+        self.store = Store(Path(root))
+
+    def __getitem__(self, cid: str) -> bytes:
+        if not is_content_id(cid):
+            raise KeyError(cid)
+        try:
+            return read_input(self.store.object_path(cid, "json"))
+        except UnreadableFile as e:
+            if e.missing:
+                raise KeyError(cid) from None
+            raise ChangeError(f"object {cid}: {e.why}") from e
+
+    def __iter__(self) -> Iterator[str]:
+        """Every content id with a JSON object file here; `Objects` never
+        asks."""
+        for path in sorted((self.store.root / "objects").glob("*/*.json")):
+            cid = PREFIX + path.stem
+            if is_content_id(cid) and path.parent.name == path.stem[:2] and is_regular_file(path):
+                yield cid
+
+    def __len__(self) -> int:
+        return sum(1 for _ in self)
+
+
 class SharedObjects(Objects):
     """`Objects` whose checked tile indexes and manifests are shared with the
     other readers of one plan. Ids are content ids, so a document that passed
     its schema once passes everywhere; each reader still reads the object
     from its own sources and checks its hash, so a missing or broken object
     is reported by the store that lacks it. This keeps the planner from
-    checking the same 1,500 district manifests three times."""
+    checking the same 1,500 district manifests three times.
+
+    A store given as a source, as a `Store` or a directory, is read as
+    `StoreObjects` reads it."""
 
     def __init__(self, *sources, checked: dict | None = None):
         super().__init__(*sources)
         self.checked = {} if checked is None else checked
+
+    def push(self, source) -> None:
+        if isinstance(source, Store):
+            source = StoreObjects(source.root)
+        elif isinstance(source, (str, Path)):
+            source = StoreObjects(Path(source))
+        super().push(source)
 
     def _shared(self, cid: str, fmt: str, read) -> dict:
         doc = self.checked.get((cid, fmt))
@@ -197,30 +253,39 @@ class StoreView:
         return tuple(self.world["spawn"]["position_mm"])
 
     def has_object(self, cid: str, ext: str) -> bool:
-        return Store(self.root).object_path(cid, ext).is_file()
+        """Whether this store has object `cid` as a regular file itself, as
+        `op_world`'s `Store::has_object` asks: a link, a directory or a FIFO
+        does not count."""
+        return is_regular_file(Store(self.root).object_path(cid, ext))
 
-    def object_names(self, cid: str) -> list[str]:
+    def object_names(self, cid: str, *, regular: bool = True) -> list[str]:
         """The files of object `cid` in this store (`<hex>.<ext>`), in byte
-        order: an object keeps the extension it was written with."""
+        order: an object keeps the extension it was written with. Only
+        regular files count, unless `regular` is false."""
         h = hex_of(cid)
         folder = self.root / "objects" / h[:2]
         if not folder.is_dir():
             return []
-        return sorted((p.name for p in folder.glob(f"{h}.*") if p.is_file()), key=text_order)
+        return sorted((p.name for p in folder.glob(f"{h}.*") if not regular or is_regular_file(p)), key=name_order)
 
     def content(self, asset: Asset) -> tuple[str, bytes]:
         """The extension and bytes of `asset`'s content (its mesh, or another
-        content object), as the store keeps them. The extension is read from
-        the file name, never assumed. Raises PlanError."""
+        content object), as the store keeps them, read with `read_input`.
+        The extension is read from the file name, never assumed. Raises
+        PlanError."""
         cid = asset.content_id
         found = self._content.get(cid)
         if found is None:
             names = self.object_names(cid)
             where = f"the {self.label} store: tile {asset.tile}, {show(asset.key)}"
             if not names:
-                raise PlanError(f"{where}: content {cid}: not found")
+                why = "not a regular file" if self.object_names(cid, regular=False) else "not found"
+                raise PlanError(f"{where}: content {cid}: {why}")
             ext = names[0].split(".", 1)[1]
-            data = (self.root / "objects" / names[0][:2] / names[0]).read_bytes()
+            try:
+                data = read_input(self.root / "objects" / names[0][:2] / names[0])
+            except UnreadableFile as e:
+                raise PlanError(f"{where}: content {cid}: {e.why}") from e
             if content_id(data) != cid:
                 raise PlanError(f"{where}: content {cid}: its bytes hash to {content_id(data)}")
             if len(data) != asset.manifest["size_bytes"]:
@@ -230,7 +295,8 @@ class StoreView:
         return found
 
     def mesh(self, asset: Asset) -> glb.Mesh:
-        """`asset`'s mesh, read with the strict profile reader."""
+        """`asset`'s mesh, read with the strict profile reader. Raises
+        PlanError, as `content` does or naming why the mesh is refused."""
         mesh = self._meshes.get(asset.content_id)
         if mesh is None:
             ext, data = self.content(asset)
@@ -249,9 +315,11 @@ def read_store(root: Path, label: str, checked: dict | None = None) -> StoreView
     root = Path(root)
     where = f"the {label} store"
     try:
-        world_bytes = (root / "world.json").read_bytes()
-    except OSError:
-        raise PlanError(f"{where} has no world.json ({root})") from None
+        world_bytes = read_input(root / "world.json")
+    except UnreadableFile as e:
+        if e.missing:
+            raise PlanError(f"{where} has no world.json ({root})") from None
+        raise PlanError(f"{where}: {e}") from e
     try:
         world = cjson.loads(world_bytes)
     except cjson.CanonicalError as e:

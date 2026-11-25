@@ -107,6 +107,38 @@ def grid_mesh(name: str, heights: Sequence[Sequence[int]], *, x0: int = 0, z0: i
     return _mesh(name, material, positions, indices)
 
 
+def box_part(lo: Sequence[int], hi: Sequence[int]) -> tuple[list, list[int]]:
+    """The positions and indices of a closed box, for `parts_mesh`."""
+    (x0, y0, z0), (x1, y1, z1) = lo, hi
+    positions = [(x, y, z) for x in (x0, x1) for y in (y0, y1) for z in (z0, z1)]
+    faces = [(0, 1, 3, 2), (4, 6, 7, 5), (0, 4, 5, 1), (2, 3, 7, 6), (0, 2, 6, 4), (1, 5, 7, 3)]
+    return positions, [i for a, b, c, d in faces for i in (a, b, c, a, c, d)]
+
+
+def grid_part(heights: Sequence[Sequence[int]], size: int = TILE_MM) -> tuple[list, list[int]]:
+    """The positions and indices of `grid_mesh`'s grid, for `parts_mesh`."""
+    n = len(heights) - 1
+    step = size // n
+    positions = [(i * step, heights[j][i], j * step) for j in range(n + 1) for i in range(n + 1)]
+    indices = []
+    for j in range(n):
+        for i in range(n):
+            a, b = j * (n + 1) + i, j * (n + 1) + i + 1
+            c, d = a + n + 1, b + n + 1
+            indices += [a, c, d, a, d, b]
+    return positions, indices
+
+
+def parts_mesh(name: str, material: str, parts: Sequence[tuple[list, list[int]]]) -> Mesh:
+    """One primitive made of several parts, each `(positions, indices)`."""
+    positions: list = []
+    indices: list[int] = []
+    for pos, idx in parts:
+        indices += [len(positions) + i for i in idx]
+        positions += [tuple(p) for p in pos]
+    return _mesh(name, material, positions, indices)
+
+
 def flat(n: int = 4, height: int = GROUND_MM) -> list[list[int]]:
     return [[height] * (n + 1) for _ in range(n + 1)]
 

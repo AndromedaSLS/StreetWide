@@ -66,6 +66,11 @@ Exit codes: 0 every set passes the gate and every id matches (comparison
 findings do not change it); 1 a set fails the gate, an id differs, the
 final world does not validate, or the plan made again differs; 2 a usage
 or input error, or a tool that could not run.
+
+Every file `verify` reads is read with `common.read_input`: a regular file
+itself, never a link, a directory or a FIFO, of at most
+`common.MAX_INPUT_BYTES` (a replay: `MAX_REPLAY_BYTES`). A file it cannot
+read is an input error.
 """
 
 from __future__ import annotations
@@ -82,10 +87,13 @@ from dataclasses import dataclass, field
 from pathlib import Path, PurePosixPath
 
 from tools.ingest.changes import COMMAND, VERSION
-from tools.ingest.changes.common import InternalError, PlanError, counted
+from tools.ingest.changes.common import (
+    InternalError, PlanError, UnreadableFile, counted, entries_under, is_regular_file, printable, read_input,
+)
 from tools.ingest.changes.layout import (
     REPORT_JSON, REPORT_MD, SETS, PlanFileError, PlannedBundle, WrittenPlan, read_plan,
 )
+from tools.ingest.changes.stores import SharedObjects
 from tools.worldfmt import cjson, schemas
 from tools.worldfmt.changes import INGEST_AUTHOR, ChangeError, Objects, apply
 from tools.worldfmt.ids import content_id
@@ -93,6 +101,13 @@ from tools.worldfmt.store import Store
 
 DEFAULT_OP_REPLAY = "cargo run -q -p op_replay --locked --"
 DEFAULT_OP_WORLD = "cargo run -q -p op_world --locked --"
+
+_REPLAY_TICKS = 60 * 60 * 60 * 24
+MAX_REPLAY_BYTES = 16 + 64 * 1024 + _REPLAY_TICKS * 8 + 4 + _REPLAY_TICKS * (8 + 32)
+"""The largest replay `verify` reads (to take its content id), about
+237 MiB: `op_replay::format::MAX_REPLAY_BYTES`, the largest header, one
+day of input records at 60 Hz and a checkpoint at every tick. `op_replay`
+refuses a longer file too."""
 
 SUMMARY = "streetwide refresh verification"
 SUMMARY_VERSION = "0.1.0"
@@ -214,10 +229,11 @@ def _inside(path: Path, other: Path) -> bool:
 
 
 def check_paths(o: Options) -> None:
-    """The checks on the directories and files, before anything is read."""
-    if not (o.current / "world.json").is_file():
+    """The checks on the directories and files, before anything is read.
+    Whatever is there must then be readable (`read_input`)."""
+    if not os.path.lexists(o.current / "world.json"):
         raise VerifyError(f"{o.current} is not a world store: it has no world.json")
-    if not (o.plan / REPORT_JSON).is_file():
+    if not os.path.lexists(o.plan / REPORT_JSON):
         raise VerifyError(f"{o.plan} holds no plan: it has no {REPORT_JSON}")
     inputs = [("--current", o.current), ("--plan", o.plan)]
     if o.replan is not None:
@@ -230,25 +246,64 @@ def check_paths(o: Options) -> None:
     # The work store in --scratch holds hard links to the canonical objects.
     if o.report is not None and _inside(o.report, o.scratch):
         raise VerifyError("--report must not be inside --scratch")
-    if o.scratch.exists() and (not o.scratch.is_dir() or any(o.scratch.iterdir())):
+    try:
+        busy = o.scratch.exists() and (not o.scratch.is_dir() or any(o.scratch.iterdir()))
+    except OSError as e:
+        raise VerifyError(f"cannot read {o.scratch}: {e.strerror or e}") from e
+    if busy:
         raise VerifyError(f"{o.scratch} exists and is not empty")
     for replay in o.replays:
-        if not replay.is_file():
+        if not os.path.lexists(replay):
             raise VerifyError(f"--replay {replay}: no such file")
 
 
 # ------------------------------------------------------------- work store --
 
 
+def read_world(store: Path, what: str) -> tuple[str, dict]:
+    """The id and manifest of the world in `store`: `world.json`, read with
+    `read_input`, in canonical JSON that passes the world-manifest schema.
+    Raises VerifyError naming the store as `what`."""
+    try:
+        data = read_input(store / "world.json")
+    except UnreadableFile as e:
+        raise VerifyError(f"{what}: world.json: {e.why}") from e
+    try:
+        world = cjson.loads(data)
+    except cjson.CanonicalError as e:
+        raise VerifyError(f"{what}: world.json: not canonical JSON: {e}") from e
+    errors = _document_errors(world, "streetwide.world")
+    if errors:
+        raise VerifyError(f"{what}: world.json is not a streetwide.world document: {'; '.join(errors)}")
+    return content_id(data), world
+
+
+def _files_under(root: Path, *, follow_root: bool = False) -> list[Path]:
+    """Every entry under directory `root` that is not a directory itself,
+    links included, in order; [] if `root` is not a directory itself.
+    Links to directories, and Windows junctions, are entries, never
+    searched (`common.entries_under`). With `follow_root`, `root` may be
+    a link to a directory, as the canonical store's `objects` may be."""
+    return entries_under(root, follow_root=follow_root)
+
+
 def build_work_store(current: Path, work: Path) -> tuple[int, int]:
     """Copies `current/world.json` into `work` and hard-links every object of
-    `current/objects`, copying where a link fails. Returns the numbers of
-    objects linked and copied."""
+    `current/objects`, copying where a link fails. Only regular files are
+    taken, as `op_world` reads a store: the gate finds a link or a FIFO in
+    `--current` missing from the work store, as it would refuse it there.
+    Returns the numbers of objects linked and copied. Raises VerifyError if
+    `world.json` cannot be read."""
+    try:
+        world = read_input(current / "world.json")
+    except UnreadableFile as e:
+        raise VerifyError(f"{current}: world.json: {e.why}") from e
     work.mkdir(parents=True)
-    shutil.copyfile(current / "world.json", work / "world.json")
+    (work / "world.json").write_bytes(world)
     linked = copied = 0
-    root = current / "objects"
-    for source in sorted(p for p in root.rglob("*") if p.is_file()) if root.is_dir() else []:
+    for source in _files_under(current / "objects", follow_root=True):
+        if not is_regular_file(source):
+            continue
         target = work.joinpath(*source.relative_to(current).parts)
         target.parent.mkdir(parents=True, exist_ok=True)
         try:
@@ -261,19 +316,22 @@ def build_work_store(current: Path, work: Path) -> tuple[int, int]:
 
 
 def copy_bundle_objects(bundle: Path, work: Path) -> list[str]:
-    """Copies into `work` the objects of a bundle that it lacks. Existing
-    files are never touched, since they may be links into the canonical
-    store. Returns the problems found: a file not named after its content
-    id is not copied."""
+    """Copies into `work` the objects of a bundle that it lacks, read with
+    `read_input`. Existing files are never touched, since they may be links
+    into the canonical store. Returns the problems found: a file not named
+    after its content id is not copied. Raises VerifyError for a file that
+    cannot be read (`read_plan` has refused any it knew of)."""
     found = []
-    root = bundle / "objects"
-    for source in sorted(p for p in root.rglob("*") if p.is_file()) if root.is_dir() else []:
-        rel = source.relative_to(bundle).as_posix()
+    for source in _files_under(bundle / "objects"):
+        rel = printable(source.relative_to(bundle).as_posix())
         m = _OBJECT.fullmatch(rel)
         if m is None or m.group(1) != m.group(3)[:2]:
             found.append(f"{rel} is not named objects/<aa>/<hex>.<ext>")
             continue
-        data = source.read_bytes()
+        try:
+            data = read_input(source)
+        except UnreadableFile as e:
+            raise VerifyError(str(e)) from e
         if content_id(data) != "blake3:" + m.group(3):
             found.append(f"{rel} does not hash to its name")
             continue
@@ -285,7 +343,11 @@ def copy_bundle_objects(bundle: Path, work: Path) -> list[str]:
 
 
 def world_id_of(store: Path) -> str:
-    return content_id((store / "world.json").read_bytes())
+    """The content id of `store`'s `world.json`. Raises VerifyError."""
+    try:
+        return content_id(read_input(store / "world.json"))
+    except UnreadableFile as e:
+        raise VerifyError(str(e)) from e
 
 
 def write_replacing(path: Path, data: bytes) -> None:
@@ -303,16 +365,24 @@ def write_replacing(path: Path, data: bytes) -> None:
 
 
 def read_gate_report(data: bytes, name: str) -> dict:
-    """A `streetwide.check` report: canonical JSON that passes its schema."""
+    """A `streetwide.check` report: canonical JSON that passes its schema.
+    Raises VerifyError naming the report as `name`."""
     try:
         report = cjson.loads(data)
     except cjson.CanonicalError as e:
         raise VerifyError(f"{name}: the gate's report is not canonical JSON: {e}") from e
-    errors = schemas.errors(report) if isinstance(report, dict) else ["not a JSON object"]
-    if errors or report.get("format") != "streetwide.check":
-        raise VerifyError(f"{name}: the gate's report is not a streetwide.check document: "
-                          f"{'; '.join(sorted(errors))}")
+    errors = _document_errors(report, "streetwide.check")
+    if errors:
+        raise VerifyError(f"{name}: the gate's report is not a streetwide.check document: {'; '.join(errors)}")
     return report
+
+
+def _document_errors(doc: object, fmt: str) -> list[str]:
+    """Why `doc` is not a valid document of format `fmt`, sorted; [] if it
+    is one."""
+    if isinstance(doc, dict) and doc.get("format") != fmt:
+        return [f"its format is not {fmt}"]
+    return sorted(schemas.errors(doc))
 
 
 def failing(report: dict) -> list[dict]:
@@ -357,18 +427,24 @@ def plan_differences(root: Path, files: dict[str, bytes]) -> list[str]:
     """Every file of a plan made again that is missing from `root` or differs
     there, and every file among `root`'s reports and under `sets/` that the
     plan made again does not have. Other files in `root` are not part of
-    the plan."""
-    on_disk = {p.relative_to(root).as_posix(): p for p in sorted(root.rglob("*")) if p.is_file()}
+    the plan. A file is read with `read_input`, no further than the file
+    made again: one that is longer, or is not a regular file, differs."""
+    on_disk = {p.relative_to(root).as_posix(): p for p in _files_under(root, follow_root=True)}
     found = []
     for rel in sorted(files):
         path = on_disk.get(rel)
         if path is None:
             found.append(f"{rel} is missing from the plan")
-        elif path.read_bytes() != files[rel]:
+            continue
+        try:
+            same = read_input(path, len(files[rel])) == files[rel]
+        except UnreadableFile:
+            same = False
+        if not same:
             found.append(f"{rel} differs")
     for rel in on_disk:
         if rel not in files and (rel in (REPORT_JSON, REPORT_MD) or rel.startswith(SETS + "/")):
-            found.append(f"{rel} was not made by plan")
+            found.append(f"{printable(rel)} was not made by plan")
     return found
 
 
@@ -412,10 +488,7 @@ class Verifier:
             plan = read_plan(self.o.plan)
         except PlanFileError as e:
             raise VerifyError(f"the plan in {self.o.plan}: {e}") from e
-        try:
-            current_id, world = Store(self.o.current).read_world()
-        except (OSError, cjson.CanonicalError) as e:
-            raise VerifyError(f"{self.o.current}: {e}") from e
+        current_id, world = read_world(self.o.current, str(self.o.current))
         planned = plan.report["current_world_id"]
         if current_id != planned:
             raise VerifyError(f"the plan was made on world {planned}, but --current is world {current_id}; "
@@ -423,10 +496,15 @@ class Verifier:
         return plan, current_id, world["name"]
 
     def check_replays(self, current_id: str) -> list[str]:
-        """Each replay must have been recorded in the current world. Returns
-        their content ids."""
+        """Each replay must be readable, a regular file of at most
+        `MAX_REPLAY_BYTES`, and have been recorded in the current world.
+        Returns their content ids."""
         ids = []
         for path in self.o.replays:
+            try:
+                replay_id = content_id(read_input(path, MAX_REPLAY_BYTES))
+            except UnreadableFile as e:
+                raise VerifyError(f"--replay {path}: {e.why}") from e
             done = self.tools.replay("info", path.resolve())
             if done.returncode != 0:
                 raise VerifyError(f"op_replay info {path}: {_tail(done.stderr)}")
@@ -437,7 +515,7 @@ class Verifier:
                 raise VerifyError(f"{path} was recorded in world {m.group(1)}, not in --current "
                                   f"(world {current_id}), so G10 would ignore it; move it with op_replay "
                                   "rerecord, or leave it out")
-            ids.append(content_id(path.read_bytes()))
+            ids.append(replay_id)
         return ids
 
     def replan(self, plan: WrittenPlan) -> dict:
@@ -456,10 +534,7 @@ class Verifier:
         if overrides_id != report["overrides_id"]:
             raise VerifyError(f"--replan: the plan was made with {report['overrides_id'] or 'no overrides file'}, "
                               f"but --overrides gives {overrides_id or 'none'}")
-        try:
-            new_id = Store(r.new).read_world()[0]
-        except (OSError, cjson.CanonicalError) as e:
-            raise VerifyError(f"--new {r.new}: {e}") from e
+        new_id = read_world(r.new, f"--new {r.new}")[0]
         if new_id != report["new_world_id"]:
             raise VerifyError(f"--replan: the plan was made from the new store {report['new_world_id']}, "
                               f"but --new is {new_id}")
@@ -467,6 +542,8 @@ class Verifier:
             head = read_log(r.log).head.record_id
         except LogError as e:
             raise VerifyError(f"--replan: {e}") from e
+        except (OSError, ValueError) as e:  # a log file the log reader could not read
+            raise VerifyError(f"--replan: the world log in {r.log}: {e}") from e
         if head != report["log"]["head_record_id"]:
             raise VerifyError(f"--replan: the plan was made when the world log ended at record "
                               f"{report['log']['head_record_id']}, but --log ends at {head}")
@@ -526,10 +603,13 @@ class Verifier:
         replay_args = [a for p in self.replays for a in ("--replay", p)]
         done = self.tools.replay("check-change", self.work.resolve(), bundle.directory.resolve(), "--report",
                                  gate_path.resolve(), *replay_args)
-        if done.returncode not in (0, 1) or not gate_path.is_file():
+        if done.returncode not in (0, 1) or not os.path.lexists(gate_path):
             raise VerifyError(f"{bundle.path}: op_replay check-change exited with {done.returncode}: "
                               f"{_tail(done.stderr)}")
-        data = gate_path.read_bytes()
+        try:
+            data = read_input(gate_path)
+        except UnreadableFile as e:
+            raise VerifyError(f"{bundle.path}: the gate's report {GATE}/{name}.json: {e.why}") from e
         gate = read_gate_report(data, f"{GATE}/{name}.json")
         entry.update(gate_report_id=content_id(data), passed=gate["passed"],
                      checks=[{"id": c["id"], "outcome": c["outcome"]} for c in gate["checks"]],
@@ -615,9 +695,12 @@ class Verifier:
         replay_args = [a for p in self.o.replays for a in ("--replay", p.resolve())]
         done = self.tools.replay("compare-worlds", self.o.current.resolve(), self.work.resolve(), *replay_args,
                                  "--report", path.resolve())
-        if done.returncode != 0 or not path.is_file():
+        if done.returncode != 0 or not os.path.lexists(path):
             raise VerifyError(f"op_replay compare-worlds exited with {done.returncode}: {_tail(done.stderr)}")
-        data = path.read_bytes()
+        try:
+            data = read_input(path)
+        except UnreadableFile as e:
+            raise VerifyError(f"{COMPARE_JSON}: {e.why}") from e
         try:
             report = cjson.loads(data)
         except cjson.CanonicalError as e:
@@ -645,8 +728,8 @@ class Verifier:
                 replanned = self.replan(plan)
             linked, copied = build_work_store(o.current, self.work)
             self.say(f"Work store: world.json copied, {linked} objects linked and {copied} copied from --current.")
-            self.world = Store(self.work).read_world()[1]
-            objects = Objects(Store(self.work))
+            self.world = read_world(self.work, "the work store")[1]
+            objects = SharedObjects(Store(self.work))
             for k, bundle in enumerate(plan.bundles, 1):
                 self.check_set(k, bundle, objects)
             final_id = world_id_of(self.work)

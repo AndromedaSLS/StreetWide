@@ -16,8 +16,11 @@ must be empty:
 
 Exit codes follow op_world: 0 the plan is written (conflicts included), 2 a
 usage or input error, 1 an internal error found by the plan-time checks
-(nothing is written). A file that cannot be written is an input error,
-and what was written is removed again. Every file is written as bytes
+(nothing is written). The stores and the overrides file are read with
+`common.read_input`: a file that is missing, is not a regular file itself
+(a link, a directory or a FIFO) or is larger than 64 MiB is an input
+error. A file that cannot be written is an input error too, and what was
+written is removed again. Every file is written as bytes
 with LF line endings, every path in a file is POSIX and relative to
 `--out`, and the same inputs give the same bytes on every platform.
 """
@@ -74,7 +77,11 @@ def check_paths(current: Path, new: Path, log_dir: Path, out: Path) -> None:
         base = other.resolve()
         if target == base or base in target.parents:
             raise PlanError("--out must not be inside --current, --new or --log")
-    if out.exists() and (not out.is_dir() or any(out.iterdir())):
+    try:
+        busy = out.exists() and (not out.is_dir() or any(out.iterdir()))
+    except OSError as e:
+        raise PlanError(f"cannot read {out}: {e.strerror or e}") from e
+    if busy:
         raise PlanError(f"{out} exists and is not empty")
 
 
@@ -95,6 +102,8 @@ def read_world_log(log_dir: Path | None, cur: StoreView) -> tuple[WorldLog, list
     except LogError as e:
         hint = f"; {BASELINE_HINT}" if "has no records" in str(e) else ""
         raise PlanError(f"{e}{hint}") from e
+    except (OSError, ValueError) as e:  # a log file the log reader could not read
+        raise PlanError(f"the world log in {log_dir}: {e}") from e
     if wlog.world_id != cur.world_id:
         raise PlanError(f"the world log ends at world {wlog.world_id}, but --current is world {cur.world_id}")
     warnings = []

@@ -1,6 +1,8 @@
 """The refresh planner's command line, inputs, world log and overrides file
 (ADR-0020, sections 2, 4 and 6): every input error exits 2
-with one line naming the problem, and nothing is written."""
+with one line naming the problem, and nothing is written. That includes a
+file that cannot be read: missing, a directory, a link, a FIFO or larger
+than the limit, for `plan` and for `verify`."""
 
 from __future__ import annotations
 
@@ -10,7 +12,12 @@ import subprocess
 import sys
 from pathlib import Path
 
+import pytest
+
+from tools.ingest.changes import common
+from tools.ingest.changes import verify as verify_module
 from tools.ingest.changes.__main__ import main
+from tools.ingest.changes.plan import write_plan
 from tools.ingest.tests.refresh_worlds import (
     A, B, GROUND_MM, ORIGINS, Mesh, Scenario, World, contributed, contribution_source, entry_remove, entry_replace,
     ribbon, swiss_shell, terrain,
@@ -362,3 +369,148 @@ def test_numbers_must_fit_canonical_json(tmp_path: Path, capsys) -> None:
                      b'"reason": "x \\ud800"}]}')
     code, out, err = run(capsys, sc.args(world()) + ["--overrides", str(path)])
     assert (code, out) == (2, "") and err.startswith("error: overrides: not representable as canonical JSON: ")
+
+
+# Files that cannot be read ---------------------------------------------------
+
+KINDS = ("missing", "directory", "link", "fifo", "oversize")
+LIMIT = 1 << 16
+"""`common.MAX_INPUT_BYTES` (and `verify.MAX_REPLAY_BYTES`) in the oversize
+cases: every other file these tests read is smaller."""
+WHY = {"directory": "not a regular file", "link": "not a regular file", "fifo": "not a regular file",
+       "oversize": f"larger than {LIMIT} bytes"}
+
+
+def make_unreadable(path: Path, kind: str, elsewhere: Path, monkeypatch) -> None:
+    """Replaces the file at `path` by what `kind` names: nothing, a
+    directory, a link to a copy of the file kept in `elsewhere` (so that
+    following it would read the right bytes), a FIFO (which would block a
+    read), or a file one byte over LIMIT, with LIMIT as the limit."""
+    data = path.read_bytes()
+    path.unlink()
+    if kind == "directory":
+        path.mkdir()
+    elif kind == "link":
+        elsewhere.mkdir(exist_ok=True)
+        (elsewhere / path.name).write_bytes(data)
+        try:
+            os.symlink(elsewhere / path.name, path)
+        except (OSError, NotImplementedError):
+            pytest.skip("cannot create symbolic links here")
+    elif kind == "fifo":
+        if not hasattr(os, "mkfifo"):
+            pytest.skip("needs FIFOs")
+        os.mkfifo(path)
+    elif kind == "oversize":
+        monkeypatch.setattr(common, "MAX_INPUT_BYTES", LIMIT)
+        monkeypatch.setattr(verify_module, "MAX_REPLAY_BYTES", LIMIT)
+        path.write_bytes(b" " * (LIMIT + 1))
+
+
+def one_error(capsys, args: list[str]) -> str:
+    """Runs the command line, which must exit 2 with one line on the
+    standard error and nothing on the standard output. Returns the line
+    without its "error: "."""
+    code, out, err = run(capsys, args)
+    assert (code, out) == (2, ""), err
+    assert err.startswith("error: ") and err.count("\n") == 1, err
+    return err[len("error: "):-1]
+
+
+def added_shell():
+    return swiss_shell(3, lo=(60_000, GROUND_MM, 60_000), hi=(70_000, GROUND_MM + 6_000, 70_000))
+
+
+@pytest.mark.parametrize("kind", KINDS)
+@pytest.mark.parametrize("what", ["overrides", "current world.json", "new world.json", "current tile index",
+                                  "new manifest", "new mesh"])
+def test_plan_refuses_a_file_it_cannot_read(tmp_path: Path, capsys, monkeypatch, what: str, kind: str) -> None:
+    # Each file is read with common.read_input: a link or a FIFO used to be
+    # followed or block, and a file of any size was read whole.
+    sc = Scenario.start(tmp_path, world())
+    added = added_shell()
+    new = sc.write_new(world().put(added))
+    args = sc.args(new, overrides={"hold": []})
+    overrides = Path(args[args.index("--overrides") + 1])
+    shell = swiss_shell(1)
+    tile_id = next(wt["tile_id"] for wt in Store(sc.current).read_world()[1]["tiles"] if wt["tile"] == A)
+    path, where = {
+        "overrides": (overrides, f"overrides: cannot read {overrides}"),
+        "current world.json": (sc.current / "world.json",
+                               f"the current store: cannot read {sc.current / 'world.json'}"),
+        "new world.json": (new / "world.json", f"the new store: cannot read {new / 'world.json'}"),
+        "current tile index": (Store(sc.current).object_path(tile_id, "json"),
+                               f"the current store: tile {A}: object {tile_id}"),
+        "new manifest": (Store(new).object_path(shell.manifest_id, "json"),
+                         f"the new store: tile {A}, shell {shell.feature_id}: manifest: object {shell.manifest_id}"),
+        "new mesh": (Store(new).object_path(added.content_id, "glb"),
+                     f"the new store: tile {A}, shell {added.feature_id}: content {added.content_id}"),
+    }[what]
+    make_unreadable(path, kind, tmp_path / "elsewhere", monkeypatch)
+    expected = f"{where}: {WHY[kind]}" if kind != "missing" else {
+        "overrides": f"{where}: no such file",
+        "current world.json": f"the current store has no world.json ({sc.current})",
+        "new world.json": f"the new store has no world.json ({new})",
+    }.get(what, f"{where}: not found")
+    assert one_error(capsys, args) == expected
+    assert not (tmp_path / f"out-{sc.plans}").exists()
+
+
+def fresh_plan(tmp_path: Path) -> tuple[Path, Path]:
+    """A plan of one set, written: the current store and the plan."""
+    sc = Scenario.start(tmp_path, world())
+    plan = tmp_path / "plan"
+    write_plan(sc.plan(world().put(added_shell())), plan)
+    return sc.current, plan
+
+
+VERIFY_CASES = [(what, kind) for what in ("world.json", "refresh-report.json", "change.json", "replay")
+                for kind in KINDS] + [("bundle object", kind) for kind in ("link", "fifo", "oversize")]
+
+
+@pytest.mark.parametrize("what, kind", VERIFY_CASES)
+def test_verify_refuses_a_file_it_cannot_read(tmp_path: Path, capsys, monkeypatch, what: str, kind: str) -> None:
+    # Refused before any tool runs: the tool prefixes name no program. A
+    # bundle object that is missing or a directory is not a file a read
+    # refuses; the gate finds the object missing.
+    current, plan = fresh_plan(tmp_path)
+    replay = tmp_path / "suite.oprep"
+    replay.write_bytes(b"SWREPLAY (test)")
+    (glb_file,) = (plan / "sets" / "001" / "objects").rglob("*.glb")
+    bundle_rel = glb_file.relative_to(plan).as_posix()
+    path, where, missing = {
+        "world.json": (current / "world.json", f"{current}: world.json",
+                       f"{current} is not a world store: it has no world.json"),
+        "refresh-report.json": (plan / "refresh-report.json", f"the plan in {plan}: refresh-report.json",
+                                f"{plan} holds no plan: it has no refresh-report.json"),
+        "change.json": (plan / "sets" / "001" / "change.json", f"the plan in {plan}: sets/001/change.json", None),
+        "bundle object": (glb_file, f"the plan in {plan}: {bundle_rel}", None),
+        "replay": (replay, f"--replay {replay}", None),
+    }[what]
+    make_unreadable(path, kind, tmp_path / "elsewhere", monkeypatch)
+    args = ["verify", "--current", str(current), "--plan", str(plan), "--scratch", str(tmp_path / "scratch"),
+            "--op-replay", "no-such-op-replay", "--op-world", "no-such-op-world"]
+    if what == "replay":
+        args += ["--replay", str(replay)]
+    expected = f"{where}: {WHY[kind]}" if kind != "missing" else missing or f"{where}: no such file"
+    assert one_error(capsys, args) == expected
+
+
+@pytest.mark.parametrize("command", ["plan", "verify"])
+def test_python_m_prints_one_line_for_a_file_it_cannot_read(tmp_path: Path, command: str) -> None:
+    # As the maintainer runs it: exit code 2 and one line, no traceback.
+    if command == "plan":
+        sc = Scenario.start(tmp_path, world())
+        args = sc.args(world(), overrides={"hold": []})
+        path = Path(args[args.index("--overrides") + 1])
+    else:
+        current, plan = fresh_plan(tmp_path)
+        path = plan / "refresh-report.json"
+        args = ["verify", "--current", str(current), "--plan", str(plan), "--scratch", str(tmp_path / "scratch")]
+    path.unlink()
+    path.mkdir()
+    done = subprocess.run([sys.executable, "-m", "tools.ingest.changes", *args], cwd=REPO, capture_output=True,
+                          timeout=300)
+    err = done.stderr.decode("utf-8", "replace")
+    assert (done.returncode, done.stdout) == (2, b""), err
+    assert err.startswith("error: ") and err.count("\n") == 1 and "not a regular file" in err, err

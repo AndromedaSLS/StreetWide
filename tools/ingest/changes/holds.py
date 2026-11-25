@@ -7,11 +7,11 @@ Evaluation:
 2. Then H9 and H13 (`unit-held`, `would-empty-tile`) run again and again
    until nothing changes. A code is never removed, so this ends.
 3. Then `would-empty-tile` runs on the change sets in merge order: the
-   emitted units are packed, and a set that would leave a tile with no
-   asset has its removals in that tile held, even when a later set adds
-   to the tile, because the gate judges each set on its own (G1). Step 2
-   runs again after each such hold, and the units are packed again,
-   until no set empties a tile.
+   emitted units are packed, and the first set that would leave a tile
+   with no asset has its removals in that tile held, even when a later
+   set adds to the tile, because the gate judges each set on its own
+   (G1). Step 2 runs again after each such hold, and the units are packed
+   again, until no set empties a tile.
 4. Accepts and allowances remove the codes they name, in every step.
 5. A change is emitted when no code is left on it.
 
@@ -21,9 +21,11 @@ marks the unit for a decision set of its own (ADR-0020, section 5).
 
 from __future__ import annotations
 
+import math
 from collections import Counter
 from collections.abc import Callable
 from dataclasses import dataclass, field
+from fractions import Fraction
 
 from tools.ingest.changes import codes
 from tools.ingest.changes.classify import Classification, Item, Unit
@@ -40,8 +42,9 @@ SPAWN_CLEARANCE_MM = 100
 PLAYER_RADIUS_MM = 300
 PLAYER_HEIGHT_MM = 1_800
 """H14: the player's capsule, as crates/op_sim/src/player.rs defines it
-(`RADIUS`, and twice `HALF_HEIGHT` plus `RADIUS`). Changing it there
-changes the simulation contract, so these change with it."""
+(`RADIUS`, and twice `CENTRE_ABOVE_FEET`, which is `HALF_HEIGHT` plus
+`RADIUS`: from the feet to the top). Changing it there changes the
+simulation contract, so these change with it."""
 
 Chain = Callable[[], list[list[Item]]]
 """Packs the units emitted so far into change sets, as `plan` does, and
@@ -145,15 +148,16 @@ def apply_holds(cls: Classification, cur: StoreView, new: StoreView, ov: Overrid
             item.lifted[code] = "allowance"
         return True
 
-    # 1. The per-key rules and the group rule.
+    # 1. The per-key rules and the group rule. H10b counts every unpaired
+    # removal of the group, per-tile ones too (Q4), as the allowances do;
+    # it counted only per-feature ones (found by review).
     _per_key(cls, cur, new, ov, result, add)
     for group, removals in unpaired.items():
-        per_feature = [i for i in removals if not i.per_tile]
         size = cls.groups.get(group, 0)
         threshold = max(2, (size * 5 + 99) // 100)
-        if len(per_feature) > threshold:
-            for i in per_feature:
-                add(i, "mass-removal", f"{len(per_feature)} unpaired removals in {group[0]}/{group[1]}, more than "
+        if len(removals) > threshold:
+            for i in removals:
+                add(i, "mass-removal", f"{len(removals)} unpaired removals in {group[0]}/{group[1]}, more than "
                                        f"max(2, ceil(5 % of {size})) = {threshold}")
 
     # 2. H9 and H13 until nothing changes.
@@ -325,10 +329,9 @@ def _per_key(cls: Classification, cur: StoreView, new: StoreView, ov: Overrides,
         if item.unit.size > MAX_CHANGES:
             add(item, "unit-too-large", f"its unit has {item.unit.size} changes, more than {MAX_CHANGES}")
         # H14.
-        if item.new is not None and item.op != "remove":
-            why = _spawn(item, new, spawn)
-            if why:
-                add(item, "spawn", why)
+        why = _spawn(item, cur, new, spawn)
+        if why:
+            add(item, "spawn", why)
 
 
 def _grows(old: Box, new: Box) -> bool:
@@ -377,29 +380,35 @@ def _reaches(box: Box, space: Box) -> bool:
     return all(box.lo[k] < space.hi[k] and box.hi[k] > space.lo[k] for k in range(3))
 
 
-def _spawn(item: Item, new: StoreView, spawn: tuple[int, int, int]) -> str | None:
-    """H14: terrain that rises to within 100 mm of the spawn's feet, or a
-    collider whose new bounds reach into the player's space at the spawn
-    (`player_space`) while its current version had no collider there. A
-    replace of the manifest only can switch a collider on, so it counts.
-    Integer millimetres."""
-    sx, sy, sz = spawn
-    asset = item.new
+def _spawn(item: Item, cur: StoreView, new: StoreView, spawn: tuple[int, int, int]) -> str | None:
+    """H14, in integer millimetres in the region frame:
+    - terrain: a change that leaves no ground under the spawn's (x, z), a
+      removal of that ground included; new ground there (`ground_height`,
+      the height of the triangle that holds the point) within
+      `SPAWN_CLEARANCE_MM` of the feet, where the current ground was lower;
+      and new terrain whose triangles reach into the player's space at the
+      spawn (`player_space`) where the current terrain's did not;
+    - other layers: a collider whose new mesh reaches into the player's
+      space or encloses it (`mesh_meets`, as a solid), while its current
+      version had no collider there. A replace of the manifest only can
+      switch a collider on, so it counts.
+    The triangles themselves are tested, not their bounding boxes: a
+    courtyard around the spawn leaves its space free. Found by review: the
+    boxes held harmless buildings and let a buried spawn through, and the
+    terrain was judged by the highest vertex near the spawn, without
+    comparing with the current ground, and not at all when it was
+    removed. A spawn on the shared edge of two terrain tiles counts as on
+    both."""
     if item.layer == "terrain":
-        if item.manifest_only or not asset.box.contains_xz(sx, sz):
-            return None  # the same mesh keeps the ground where it is
-        top = ground_under(new.mesh(asset), new.origins.get(asset.tile) or (0, 0, 0), sx, sz)
-        if top is not None and top > sy - SPAWN_CLEARANCE_MM:
-            gap = sy - top
-            where = f"{gap} mm below" if gap >= 0 else f"{-gap} mm above"
-            return (f"the new ground under the spawn reaches y = {top} mm, {where} the spawn's feet at "
-                    f"y = {sy} mm; at least {SPAWN_CLEARANCE_MM} mm must stay clear")
+        return _spawn_ground(item, cur, new, spawn)
+    asset = item.new
+    if asset is None or item.op == "remove":
         return None
     space = player_space(spawn)
-    if asset.collider != "trimesh" or not _reaches(asset.box, space):
+    if asset.collider != "trimesh" or not _meets(new, asset, space, solid=True):
         return None
     before = item.cur
-    if before is not None and before.collider == "trimesh" and _reaches(before.box, space):
+    if before is not None and before.collider == "trimesh" and _meets(cur, before, space, solid=True):
         return None
     why = (f"its new collider reaches into the player's space at the spawn {list(spawn)} (x and z within "
            f"{PLAYER_RADIUS_MM} mm, from {SPAWN_CLEARANCE_MM} mm below the feet to {PLAYER_HEIGHT_MM} mm above them)")
@@ -408,9 +417,80 @@ def _spawn(item: Item, new: StoreView, spawn: tuple[int, int, int]) -> str | Non
     return f"{why}, and its current version {'has no collider' if before.collider != 'trimesh' else 'does not'}"
 
 
+def _spawn_ground(item: Item, cur: StoreView, new: StoreView, spawn: tuple[int, int, int]) -> str | None:
+    """H14 for a terrain change (see `_spawn`)."""
+    sx, sy, sz = spawn
+    before = None if item.cur is None else _ground(cur, item.cur, sx, sz)
+    if item.op == "remove":
+        if before is None:
+            return None
+        return (f"it removes the ground under the spawn, {sy - math.floor(before)} mm below the spawn's feet, so "
+                "the player would fall")
+    if item.manifest_only:
+        return None  # the same mesh keeps the ground where it is
+    after = _ground(new, item.new, sx, sz)
+    if after is None:
+        if before is not None:
+            return "its new mesh leaves no ground under the spawn, where the current one has it, so the player would fall"
+    elif after > sy - SPAWN_CLEARANCE_MM and (before is None or after > before):
+        top = math.floor(after)
+        gap = sy - top
+        where = f"{gap} mm below" if gap >= 0 else f"{-gap} mm above"
+        return (f"the new ground under the spawn reaches y = {top} mm, {where} the spawn's feet at "
+                f"y = {sy} mm; at least {SPAWN_CLEARANCE_MM} mm must stay clear")
+    space = player_space(spawn)
+    if _meets(new, item.new, space) and not (item.cur is not None and _meets(cur, item.cur, space)):
+        return (f"the new ground reaches into the player's space at the spawn {list(spawn)} (x and z within "
+                f"{PLAYER_RADIUS_MM} mm, from {SPAWN_CLEARANCE_MM} mm below the feet to {PLAYER_HEIGHT_MM} mm "
+                "above them), where the current ground does not")
+    return None
+
+
+def _ground(view: StoreView, asset, x: int, z: int) -> Fraction | None:
+    """`ground_height` of `asset`'s mesh at (x, z), or None outside its
+    bounds."""
+    if not asset.box.contains_xz(x, z):
+        return None
+    return ground_height(view.mesh(asset), view.origins.get(asset.tile) or (0, 0, 0), x, z)
+
+
+def _meets(view: StoreView, asset, space: Box, *, solid: bool = False) -> bool:
+    """`mesh_meets` for `asset`'s mesh, after a test of its bounds."""
+    return _reaches(asset.box, space) and mesh_meets(view.mesh(asset), view.origins.get(asset.tile) or (0, 0, 0),
+                                                     space, solid=solid)
+
+
+def ground_height(mesh: glb.Mesh, origin, x: int, z: int) -> Fraction | None:
+    """The height of `mesh` at `(x, z)`, in the region frame, exactly: of
+    the highest triangle whose horizontal projection holds the point (its
+    edges included), at that point. None if none holds it; a vertical
+    triangle holds no point."""
+    ox, oy, oz = origin
+    x, z = x - ox, z - oz
+    top = None
+    for a, b, c in mesh.triangles_mm():
+        if not (min(a[0], b[0], c[0]) <= x <= max(a[0], b[0], c[0])
+                and min(a[2], b[2], c[2]) <= z <= max(a[2], b[2], c[2])):
+            continue
+        d = (b[0] - a[0]) * (c[2] - a[2]) - (c[0] - a[0]) * (b[2] - a[2])
+        if d == 0:
+            continue
+        wb = (x - a[0]) * (c[2] - a[2]) - (c[0] - a[0]) * (z - a[2])
+        wc = (b[0] - a[0]) * (z - a[2]) - (x - a[0]) * (b[2] - a[2])
+        wa = d - wb - wc
+        if (d > 0 and min(wa, wb, wc) < 0) or (d < 0 and max(wa, wb, wc) > 0):
+            continue
+        y = Fraction(a[1] * d + wb * (b[1] - a[1]) + wc * (c[1] - a[1]), d) + oy
+        top = y if top is None else max(top, y)
+    return top
+
+
 def ground_under(mesh: glb.Mesh, origin, x: int, z: int) -> int | None:
     """The highest vertex, in the region frame, of the triangles of `mesh`
-    whose horizontal box contains `(x, z)`; None if there is none."""
+    whose horizontal box contains `(x, z)`; None if there is none. Only the
+    report's `spawn_ground_gap_mm` uses it, as it did when the fixture's
+    report id was pinned: the hold rule uses `ground_height`, the height of
+    the ground at the point itself."""
     ox, oy, oz = origin
     top = None
     for a, b, c in mesh.triangles_mm():
@@ -419,6 +499,91 @@ def ground_under(mesh: glb.Mesh, origin, x: int, z: int) -> int | None:
             y = max(a[1], b[1], c[1]) + oy
             top = y if top is None else max(top, y)
     return top
+
+
+def mesh_meets(mesh: glb.Mesh, origin, space: Box, *, solid: bool = False) -> bool:
+    """Whether `mesh` (placed at `origin`) meets the inside of `space`: one
+    of its triangles does (touching the faces does not count), or, with
+    `solid`, the mesh encloses `space` (`encloses`). A building's collider
+    is a solid, and a player inside one is trapped there however far its
+    walls are; the ground is a surface."""
+    ox, oy, oz = origin
+    lo = (space.lo[0] - ox, space.lo[1] - oy, space.lo[2] - oz)
+    hi = (space.hi[0] - ox, space.hi[1] - oy, space.hi[2] - oz)
+    triangles = list(mesh.triangles_mm())
+    for tri in triangles:
+        if all(min(p[k] for p in tri) < hi[k] and max(p[k] for p in tri) > lo[k] for k in range(3)) and \
+                triangle_meets_box(tri, lo, hi):
+            return True
+    return solid and encloses(triangles, lo, hi)
+
+
+def encloses(triangles, lo, hi) -> bool:
+    """Whether the closed surface of `triangles` encloses the box from `lo`
+    to `hi`, which none of them meets: the vertical ray up from the box's
+    centre crosses them an odd number of times. A surface open at the
+    bottom (a shell with no floor) counts as closed below. Exact, in
+    integers: coordinates are doubled so the centre is whole, and the ray
+    starts infinitesimally off the centre, at (x + e, z + e * e), so it
+    never passes through an edge or a corner; a vertical triangle is never
+    crossed."""
+    cx, cy, cz = (lo[0] + hi[0], lo[1] + hi[1], lo[2] + hi[2])
+
+    def side(ax, az, bx, bz) -> int:
+        # The sign of orient(a, b, centre + (e, e * e)), e infinitesimal.
+        base = (bx - ax) * (cz - az) - (bz - az) * (cx - ax)
+        if base:
+            return 1 if base > 0 else -1
+        if bz != az:
+            return 1 if bz < az else -1
+        return 1 if bx > ax else -1
+
+    crossings = 0
+    for tri in triangles:
+        (x0, y0, z0), (x1, y1, z1), (x2, y2, z2) = ((2 * p[0], 2 * p[1], 2 * p[2]) for p in tri)
+        d = (x1 - x0) * (z2 - z0) - (x2 - x0) * (z1 - z0)
+        if d == 0:
+            continue
+        if d < 0:  # the same turn for every triangle
+            (x1, y1, z1), (x2, y2, z2) = (x2, y2, z2), (x1, y1, z1)
+            d = -d
+        if side(x0, z0, x1, z1) < 0 or side(x1, z1, x2, z2) < 0 or side(x2, z2, x0, z0) < 0:
+            continue
+        # The plane's height at the centre, compared with the centre's.
+        wb = (cx - x0) * (z2 - z0) - (x2 - x0) * (cz - z0)
+        wc = (x1 - x0) * (cz - z0) - (cx - x0) * (z1 - z0)
+        above = y0 * d + wb * (y1 - y0) + wc * (y2 - y0) - cy * d
+        if above == 0:  # cannot happen: that triangle would meet the box
+            return True
+        crossings += above > 0
+    return crossings % 2 == 1
+
+
+def _cross(u, v):
+    return (u[1] * v[2] - u[2] * v[1], u[2] * v[0] - u[0] * v[2], u[0] * v[1] - u[1] * v[0])
+
+
+def triangle_meets_box(tri, lo, hi) -> bool:
+    """Whether the triangle `tri` (three integer points, edges included)
+    meets the inside of the box from `lo` to `hi`, exactly: the
+    separating-axis test (Akenine-Moller), in integers. Coordinates are
+    doubled so that the box's centre is whole; an axis separates the two
+    when their projections at most touch, so a triangle in a face's plane
+    meets nothing."""
+    h = [hi[k] - lo[k] for k in range(3)]
+    v = [tuple(2 * p[k] - lo[k] - hi[k] for k in range(3)) for p in tri]
+
+    def separates(axis) -> bool:
+        if axis == (0, 0, 0):
+            return False
+        ps = [sum(axis[k] * p[k] for k in range(3)) for p in v]
+        r = sum(h[k] * abs(axis[k]) for k in range(3))
+        return min(ps) >= r or max(ps) <= -r
+
+    edges = [tuple(v[(i + 1) % 3][k] - v[i][k] for k in range(3)) for i in range(3)]
+    units = ((1, 0, 0), (0, 1, 0), (0, 0, 1))
+    axes = [*units, _cross(edges[0], edges[1]), *(_cross(u, e) for u in units for e in edges)]
+    return not any(separates(axis) for axis in axes)
 
 
 # ---------------------------------------------------------- the fixed point --
@@ -440,29 +605,38 @@ def _coupled(cls: Classification, cur: StoreView, add) -> bool:
     the member that caused it.
 
     H9 also holds what is draped on the height model over a terrain that a
-    contribution made and that stays (Q17): it has no pending change, or
-    its change is held. Such a change counts as held for its component."""
+    contribution made (Q17), for as long as that contribution is in the
+    current world. That holds even when the terrain's own change is
+    accepted: it goes into a decision set, which merges after every other
+    set and only if its own review judges it better, so the draped changes
+    wait for the plan made after it. Such a change counts as held for its
+    component, except for the terrain whose decision it waits for, which it
+    would otherwise hold in turn, for ever."""
     left = {id(i): set(i.remaining) for i in cls.items}
     added = False
     by_key = {i.key: i for i in cls.items}
-    over_kept: set[int] = set()
+    over_kept: dict[int, set] = {}  # each change held by Q17: the contributed terrains it is draped over
     for key, draped in cls.draped.items():
         own = by_key.get(key)
-        if own is not None and not left[id(own)]:
-            continue  # the terrain's own change is emitted, so it does not stay
         by = joined(cls.authors.get(key) or ["an unknown author"])
+        if own is not None and not left[id(own)]:
+            why = (f"it is draped on the height model over the {show(key)}, a contribution by {by} that a decision "
+                   "set of this plan replaces only if its review judges it better; plan again once that set is "
+                   "merged (Q17)")
+        else:
+            why = (f"it is draped on the height model over the {show(key)}, a contribution by {by} that stays, so "
+                   "it would float or sink on it (Q17)")
         for item in draped:
-            over_kept.add(id(item))
-            added |= add(item, "height-coupled",
-                         f"it is draped on the height model over the {show(key)}, a contribution by {by} that "
-                         "stays, so it would float or sink on it (Q17)")
+            over_kept.setdefault(id(item), set()).add(key)
+            added |= add(item, "height-coupled", why)
     for component in cls.heights:
         if not component.terrain:
             continue
         stuck = [i for i in component.items
                  if left[id(i)] - COMPONENT_LEVEL or (id(i) in over_kept and left[id(i)] & COMPONENT_LEVEL)]
         for item in component.items:
-            others = [o for o in stuck if o is not item]
+            others = [o for o in stuck if o is not item
+                      and (left[id(o)] - COMPONENT_LEVEL or not over_kept.get(id(o), set()) <= {item.key})]
             if others:
                 more = f" and {counted(len(others) - 1, 'more held change')}" if len(others) > 1 else ""
                 added |= add(item, "height-coupled",
@@ -499,27 +673,33 @@ def _emptied_between_sets(cur: StoreView, sets: list[list[Item]], add) -> bool:
     """H13 `would-empty-tile` on the sets in merge order. Each set is merged
     on the world the sets before it produce, and the gate fails a set that
     leaves a tile with no asset (G1), even when a later set adds to that
-    tile. For each tile, the removals in it of the first set that leaves it
-    empty are held. True if a code was added."""
+    tile. The first set that leaves a tile empty has its removals in that
+    tile held, and nothing else: holding them packs the later sets anew, so
+    a later set that empties a tile now may not once they are packed again.
+    The caller settles the holds, packs again and asks again. Found by
+    review: every tile emptied by any set was held in one pass, and some of
+    those holds were not needed after packing again. True if a code was
+    added."""
     assets = Counter({tile: 0 for tile in cur.tiles})
     for asset in cur.assets.values():
         assets[asset.tile] += 1
-    first: dict[str, list[Item]] = {}
     for items in sets:
         touched = set()
         for item in items:
             for c in item.changes:
                 assets[c.tile] += {"add": 1, "remove": -1}.get(c.op, 0)
                 touched.add(c.tile)
-        for tile in sorted(touched, key=text_order):
-            if assets[tile] <= 0 and tile not in first:
-                first[tile] = [i for i in items if any(c.op == "remove" and c.tile == tile for c in i.changes)]
-    added = False
-    for tile in sorted(first, key=text_order):
-        for item in first[tile]:
-            added |= add(item, "would-empty-tile",
-                         f"its change set would leave tile {tile} empty, and the gate fails an empty tile (G1); "
-                         "the assets that come into the tile arrive only with a later set")
-    if first and not added:  # cannot happen: a held removal is in no set
-        raise RuntimeError("a change set empties a tile, but no removal in it can be held")
-    return added
+        emptied = [tile for tile in sorted(touched, key=text_order) if assets[tile] <= 0]
+        if not emptied:
+            continue
+        added = False
+        for tile in emptied:
+            for item in items:
+                if any(c.op == "remove" and c.tile == tile for c in item.changes):
+                    added |= add(item, "would-empty-tile",
+                                 f"its change set would leave tile {tile} empty, and the gate fails an empty tile "
+                                 "(G1); the assets that come into the tile arrive only with a later set")
+        if not added:  # cannot happen: a held removal is in no set
+            raise RuntimeError("a change set empties a tile, but no removal in it can be held")
+        return True
+    return False

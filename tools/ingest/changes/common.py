@@ -1,15 +1,21 @@
-"""Shared by the planner's modules: errors, orders, boxes and small helpers.
+"""Shared by the planner's modules: errors, reading input files, orders,
+boxes and small helpers.
 
-Everything here is integer arithmetic and sorted iteration, so the plan is
-the same on every platform (ADR-0020, Context).
+The orders, boxes and grids are integer arithmetic and sorted iteration,
+so the plan is the same on every platform (ADR-0020, Context).
 """
 
 from __future__ import annotations
 
+import os
 import re
+import stat
 from collections.abc import Callable, Hashable, Iterable, Sequence
 from dataclasses import dataclass
+from pathlib import Path
 from typing import TypeVar
+
+from tools.worldfmt.store import MAX_FILE_BYTES, is_link, read_file
 
 Key = tuple[str, str]
 """An asset's key, `(layer, feature_id)`: assets are matched by it."""
@@ -24,6 +30,114 @@ class PlanError(Exception):
 class InternalError(Exception):
     """A plan-time check failed (`checks`): a bug in the planner. Nothing
     is written, exit code 1."""
+
+
+# ------------------------------------------------------------------ files --
+
+MAX_INPUT_BYTES = MAX_FILE_BYTES
+"""Largest input file `plan` and `verify` read (64 MiB): the limit of a
+world store's reads, which is the largest asset a manifest may describe
+and far more than any JSON document needs. Replays have their own limit
+(`verify.MAX_REPLAY_BYTES`)."""
+
+
+class UnreadableFile(Exception):
+    """An input file that `read_input` refuses or cannot read. The message
+    names the file; `why` says why without naming it ("no such file", "not
+    a regular file", "larger than 67108864 bytes" or the system's reason),
+    for messages that name the file in their own words. `missing` is true
+    when nothing is there."""
+
+    def __init__(self, path: Path, why: str, *, missing: bool = False):
+        super().__init__(f"cannot read {path}: {why}")
+        self.path = path
+        self.why = why
+        self.missing = missing
+
+
+def read_input(path: Path, limit: int | None = None) -> bytes:
+    """The bytes of input file `path`, read with
+    `tools.worldfmt.store.read_file`: `path` must name a regular file itself,
+    not a link, a directory, a FIFO or a device, of at most `limit` bytes
+    (by default `MAX_INPUT_BYTES`, read when called).
+
+    Stores, plans, overrides and reports may come from someone else. A link
+    or a device where a file should be would make a read block, never end or
+    quote a file from elsewhere, and a huge file would fill the memory, so
+    they are refused before anything is read, as `op_world` reads a store
+    (RFC 0001, section 7). Raises UnreadableFile."""
+    path = Path(path)
+    try:
+        return read_file(path, MAX_INPUT_BYTES if limit is None else limit)
+    except (FileNotFoundError, NotADirectoryError) as e:
+        raise UnreadableFile(path, "no such file", missing=True) from e
+    except OSError as e:
+        raise UnreadableFile(path, e.strerror or str(e)) from e
+    except ValueError as e:
+        # read_file's refusals start with the path: "<path> is not a regular
+        # file", "<path> is larger than <limit> bytes".
+        why = str(e)
+        for prefix in (f"{path} is ", f"{path} "):
+            if why.startswith(prefix):
+                why = why[len(prefix):]
+                break
+        raise UnreadableFile(path, why) from e
+
+
+def is_regular_file(path: Path) -> bool:
+    """Whether `path` names a regular file itself, as `read_input` requires:
+    a link to one does not count, like a directory, a FIFO or a device
+    (`op_world`'s `store::is_regular_file`)."""
+    try:
+        return stat.S_ISREG(os.lstat(path).st_mode)
+    except (OSError, ValueError):
+        return False
+
+
+def entries_under(root: Path, *, follow_root: bool = False) -> list[Path]:
+    """Every entry under the directory `root` that is not a directory
+    itself (files, links, junctions, FIFOs), sorted, without following
+    links: a link to a directory, or on Windows a junction, which `lstat`
+    reports as a directory and which needs no privilege to make, is an
+    entry, never searched. [] when `root` is not a directory itself, or
+    with `follow_root` (for the maintainer's own canonical store, whose
+    `objects` op_world reads through a link) when it is not a directory
+    or a link to one. `Path.rglob` searched junctions, and from a link at
+    `root` the tree it names: a plan could make `verify` list a whole disk.
+    A directory that cannot be listed is passed over; reading its files
+    would fail too."""
+    if not (root.is_dir() if follow_root else _is_directory_itself(root)):
+        return []
+    found, folders = [], [root]
+    while folders:
+        try:
+            with os.scandir(folders.pop()) as entries:
+                for entry in entries:
+                    path = Path(entry.path)
+                    (folders if _is_directory_itself(path) else found).append(path)
+        except OSError:
+            continue
+    return sorted(found)
+
+
+def _is_directory_itself(path: Path) -> bool:
+    try:
+        info = os.lstat(path)
+    except (OSError, ValueError):
+        return False
+    return stat.S_ISDIR(info.st_mode) and not is_link(info)
+
+
+def name_order(name: str) -> bytes:
+    """A file name's order: its UTF-8 bytes. A name that is not UTF-8 holds
+    surrogates in Python, which sort by their code instead."""
+    return name.encode("utf-8", "surrogatepass")
+
+
+def printable(name: str) -> str:
+    """A file name as messages and canonical JSON reports can hold it: what
+    is not UTF-8 is written as a backslash escape, such as `\\udcff`."""
+    return name.encode("utf-8", "backslashreplace").decode("utf-8")
 
 
 def key_order(key: Key) -> tuple[bytes, bytes]:
