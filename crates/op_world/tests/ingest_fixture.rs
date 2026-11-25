@@ -4,6 +4,7 @@
 
 mod common;
 
+use op_world::PointsDocument;
 use op_world::Store;
 use op_world::glb::{self, Material};
 use op_world::manifest::{AssetManifest, Collider, Layer};
@@ -139,4 +140,49 @@ fn ingest_fixture_has_the_limmat_as_one_level_water_asset() {
     }
     let b = entry.bounds_mm;
     assert!(b.max[1] - b.min[1] < 100, "{b:?}");
+}
+
+/// The tile's trees and light points (RFC 0004, ADR-0015, ADR-0016): one
+/// points document per layer and source, visual only, under CC0 and the
+/// swisstopo terms of the ground they stand on, from the city's answers
+/// for LV95 square 2683-1247.
+#[test]
+fn ingest_fixture_has_the_tiles_trees_and_light_points() {
+    let store = store();
+    let (_, world) = store.read_world().expect("world.json");
+    let tile = &world.tiles[0];
+    let index = TileIndex::from_bytes(&store.read_object(&tile.tile_id, ObjectKind::Json).unwrap())
+        .unwrap();
+    for (layer, source, count) in [
+        (Layer::Vegetation, "stadt-zuerich:baumkataster", 33),
+        (Layer::StreetObjects, "stadt-zuerich:beleuchtung", 135),
+    ] {
+        let listed: Vec<_> = index.assets.iter().filter(|a| a.layer == layer).collect();
+        let [entry] = listed[..] else {
+            panic!(
+                "one {} asset per tile and source: {listed:#?}",
+                layer.as_str()
+            )
+        };
+        assert_eq!(entry.feature_id, format!("tile:{}/{source}", tile.tile));
+        assert_eq!(entry.collider, Collider::None);
+        assert_eq!(entry.license, "CC0-1.0 AND LicenseRef-swisstopo-OGD");
+        let doc = PointsDocument::from_bytes(
+            &store
+                .read_object(&entry.content_id, ObjectKind::Json)
+                .unwrap(),
+        )
+        .unwrap();
+        assert_eq!(doc.points.len(), count, "{source}");
+        assert_eq!(doc.source(), Some(source));
+        assert_eq!(doc.bounds(), Some(entry.bounds_mm));
+    }
+    assert_eq!(validate_store(&store).points, 33 + 135);
+    assert!(
+        world
+            .attribution
+            .contains(&"Quelle: Stadt Zürich".to_string()),
+        "{:?}",
+        world.attribution
+    );
 }

@@ -1,7 +1,8 @@
 """swisstopo STAC API: find the source files covering an area.
 
-Items are tiled (`<product>_<year>_<tile>`, e.g. `swissalti3d_2026_2683-1247`
-or `swissbuildings3d_3_0_2025_1091-41`). For every tile whose footprint
+Items are tiled (`<product>_<year>_<tile>`, e.g. `swissalti3d_2026_2683-1247`,
+`swissbuildings3d_3_0_2025_1091-41` or `swisssurface3d-raster_2024_2683-1247`,
+whose product has a hyphen). For every tile whose footprint
 (the item geometry, not its lon/lat envelope) overlaps the area, the latest
 year that has the wanted asset is used. Search responses are cached so
 that re-running from cache selects exactly the same files.
@@ -27,7 +28,7 @@ from tools.ingest.http import fetch_bytes, fetch_file
 from tools.worldfmt.store import read_file
 
 STAC_ROOT = "https://data.geo.admin.ch/api/stac/v1"
-_ITEM_ID = re.compile(r"(?P<product>[a-z0-9_]+?)_(?P<year>\d{4})_(?P<tile>\d{4}-\d{2,4})", re.ASCII)
+_ITEM_ID = re.compile(r"(?P<product>[a-z0-9_-]+?)_(?P<year>\d{4})_(?P<tile>\d{4}-\d{2,4})", re.ASCII)
 _MAX_SEARCH_BYTES = 16 << 20
 _MAX_CACHED_SEARCH_BYTES = 64 << 20
 MAX_PAGES = 100
@@ -61,6 +62,12 @@ SWISSALTI3D = Product(
     asset_suffix="_0.5_2056_5728.tif",
     max_bytes=256 << 20,
 )
+SWISSSURFACE3D_RASTER = Product(
+    collection="ch.swisstopo.swisssurface3d-raster",
+    asset_suffix="_0.5_2056_5728.tif",
+    max_bytes=256 << 20,
+)
+"""The 0.5 m surface model, for tree heights (ADR-0016)."""
 
 
 @dataclass(frozen=True)
@@ -195,12 +202,22 @@ def select(features: list[dict], product: Product, bbox: BBox, cache: Path) -> l
     return [best[t] for t in sorted(best)]
 
 
-def find_and_fetch(
-    product: Product, bbox: BBox, cache: Path, *, offline: bool, refresh: bool
-) -> list[SourceFile]:
-    files = select(_search(product, bbox, cache, offline, refresh), product, bbox, cache)
-    if not files:
-        raise RuntimeError(f"no {product.collection} data covers {bbox}")
+def find(product: Product, bbox: BBox, cache: Path, *, offline: bool, refresh: bool) -> list[SourceFile]:
+    """The latest file of each tile that covers `bbox`, not yet downloaded."""
+    return select(_search(product, bbox, cache, offline, refresh), product, bbox, cache)
+
+
+def fetch(product: Product, files: list[SourceFile], *, offline: bool) -> list[SourceFile]:
+    """Downloads `files` (or checks their cached copies) and returns them."""
     for sf in files:
         fetch_file(sf.url, sf.path, sha256=sf.sha256, max_bytes=product.max_bytes, offline=offline)
     return files
+
+
+def find_and_fetch(
+    product: Product, bbox: BBox, cache: Path, *, offline: bool, refresh: bool
+) -> list[SourceFile]:
+    files = find(product, bbox, cache, offline=offline, refresh=refresh)
+    if not files:
+        raise RuntimeError(f"no {product.collection} data covers {bbox}")
+    return fetch(product, files, offline=offline)

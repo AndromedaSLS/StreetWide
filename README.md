@@ -9,8 +9,8 @@ the checks and beats what is already there, so the world only ever gets
 better.
 
 > **Status: pre-alpha.** We are building the first walkable slice: about
-> 1 km² of Zurich's old town, built only from open data (swisstopo and
-> OpenStreetMap). There is no ML, networking or economy yet. Progress is
+> 1 km² of Zurich's old town, built only from open data (swisstopo,
+> OpenStreetMap and the City of Zurich). There is no ML, networking or economy yet. Progress is
 > tracked in [docs/progress.md](docs/progress.md); where we are going, and
 > in which order, is in the [roadmap](docs/roadmap.md).
 
@@ -39,7 +39,7 @@ better.
 | `schemas/` | JSON Schemas for the world format ([RFC 0001](rfcs/0001-world-format.md)) |
 | `fixtures/` | Small committed test data: golden fixtures for the world format and contributions, one real tile, a replay ([fixtures/README.md](fixtures/README.md)) |
 | `worlds/` | World definitions for the ingest (area, spawn point) |
-| `tools/ingest` | Python ingest: builds a world from swisstopo and OpenStreetMap data ([ADR-0006](docs/adr/0006-ingest-pipeline-and-data-sources.md)). `tools.ingest.changes` turns a newer build into baseline refresh change sets for the canonical world, and checks them through the gate ([guide](docs/contributing/baseline-refresh.md)) |
+| `tools/ingest` | Python ingest: builds a world from swisstopo and OpenStreetMap data, and the City of Zurich's trees and light points ([ADR-0006](docs/adr/0006-ingest-pipeline-and-data-sources.md), [ADR-0015](docs/adr/0015-zurich-trees-and-lights.md)). `tools.ingest.changes` turns a newer build into baseline refresh change sets for the canonical world, and checks them through the gate ([guide](docs/contributing/baseline-refresh.md)) |
 | `tools/worldfmt` | Python implementation of the world format, byte-compatible with `op_world` |
 | `tools/contrib` | Contribution tools: export a building to model on, turn a model into a contribution ([guide](docs/contributing/facades.md)) |
 | `tools/ci` | CI helpers: dependency-direction, DCO and glTF checks |
@@ -91,8 +91,9 @@ simulation reproduced a recorded 20-second walk bit for bit
 ### 3. Build the Zurich district from open data
 
 The ingest:
-- downloads about 275 MB into `data/cache/`: one swissBUILDINGS3D sheet,
-  one swissALTI3D tile and one OpenStreetMap query;
+- downloads about 290 MB into `data/cache/`: one swissBUILDINGS3D sheet,
+  one swissALTI3D tile, one swissSURFACE3D tile (for tree heights), two
+  OpenStreetMap queries and the City of Zurich's trees and light points;
 - builds the world in `data/world/zurich-altstadt/`, about 50 MB.
 
 Nothing in `data/` is committed. It takes 4 to 5 minutes the first time.
@@ -146,6 +147,7 @@ world. F1 shows and hides the controls in the client.
 | F2 | Detailed look, or the plain colours of the world data |
 | F3 | Details: frame rate, position, sun |
 | F4 | Graphics: high, or fast for slower GPUs |
+| C | Credits: each source of the world's data, its licence and a link |
 | **Contributing** | |
 | I | Inspect: names what the crosshair is on (a building, street, bridge, water or terrain), who made it and its licence. Amber buildings are improvable, blue ones have a contribution. A click prints the details to the terminal, and for a building the facade tool's command. Paused on the map; works in replays |
 
@@ -279,13 +281,21 @@ reports go through [SECURITY.md](SECURITY.md).
 | What | Licence |
 |---|---|
 | Code | [MIT](LICENSE-MIT) OR [Apache-2.0](LICENSE-APACHE), at your option |
-| Contributed world content (models, textures, manifests) | [CC BY-SA 4.0](LICENSES/CC-BY-SA-4.0.txt) |
-| Layers derived from OpenStreetMap | [ODbL 1.0](LICENSES/ODbL-1.0.txt) |
-| Layers derived from swisstopo data | swisstopo terms of use (free use, attribution required) |
+| The published world, as a whole | [ODbL 1.0](LICENSES/ODbL-1.0.txt) |
+| Inside it, contributed world content (models, textures, manifests) | [CC BY-SA 4.0](LICENSES/CC-BY-SA-4.0.txt) |
+| Inside it, assets derived from OpenStreetMap | [ODbL 1.0](LICENSES/ODbL-1.0.txt) |
+| Inside it, assets derived from swisstopo data | [swisstopo terms of use](LICENSES/LicenseRef-swisstopo-OGD.txt) (free use, attribution required) |
+| Inside it, trees and light points from the City of Zurich | CC0 1.0, with the swisstopo terms of the ground they stand on |
 
-Data sources and the required credits are listed in
-[ATTRIBUTION.md](ATTRIBUTION.md). The rationale is in
-[ADR-0001](docs/adr/0001-licensing.md).
+The world contains OpenStreetMap data, so it is offered as a whole under
+the Open Database License, and each asset in it keeps the licence and
+credits of its own sources, stated in its manifest
+([ADR-0019](docs/adr/0019-odbl-and-the-published-world.md)). Every world
+the ingest writes carries its notices beside `world.json`: `NOTICE.txt`,
+`CREDITS.txt` and the licence texts. Data sources and the required
+credits are listed in [ATTRIBUTION.md](ATTRIBUTION.md), and in the client
+on the credits page (C). The rationale is in
+[ADR-0001](docs/adr/0001-licensing.md) and ADR-0019.
 
 Unless you explicitly state otherwise, any contribution of code you
 intentionally submit for inclusion in this project, as defined in the

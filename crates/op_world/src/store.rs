@@ -13,6 +13,11 @@
 //! regular file of at most [`MAX_FILE_BYTES`]. A JSON document whose kind
 //! is known is read with [`read_document`] or [`Store::read_document`],
 //! which take at most the limit for its kind ([`crate::limits`]).
+//!
+//! A world the ingest writes also has its licence notices beside
+//! `world.json` ([`NOTICE_FILES`], ADR-0019). They are not part of the
+//! world: no id covers them, a store's reads never look at them, and its
+//! writes, merges included, never touch them.
 
 use std::fs;
 use std::io::{self, Read, Write as _};
@@ -27,6 +32,19 @@ use crate::{Error, Result};
 /// Largest file a store read accepts: the largest asset a manifest may
 /// describe ([`MAX_ASSET_BYTES`]), far more than any JSON document needs.
 pub const MAX_FILE_BYTES: u64 = MAX_ASSET_BYTES;
+
+/// The licence notices at a store's root, beside `world.json`
+/// (ADR-0019): the ODbL notice, the credits, and the texts of the ODbL and
+/// of CC BY-SA 4.0. The ingest writes them (`tools/ingest/notices.py`,
+/// whose `tools.worldfmt.store.NOTICE_FILES` names the same files). They
+/// are not part of the world, so no id covers them; a copy of a published
+/// world takes them with it.
+pub const NOTICE_FILES: [&str; 4] = [
+    "NOTICE.txt",
+    "CREDITS.txt",
+    "ODbL-1.0.txt",
+    "CC-BY-SA-4.0.txt",
+];
 
 /// The bytes of the regular file at `path`, which may be at most `limit`
 /// bytes long.

@@ -1359,7 +1359,8 @@ mod tests {
             let offset = Vec3::from_array(
                 [0, 1, 2].map(|k| (tile.origin_mm[k] - origin[k]) as f32 / 1000.0),
             );
-            for a in &tile.assets {
+            // Points documents (RFC 0004) are not meshes: nothing to pick.
+            for a in tile.assets.iter().filter(|a| !a.layer.has_points()) {
                 let mesh = Arc::new(world.load_mesh(&a.content_id).unwrap());
                 let entry = PickEntry::new(t, a.layer, offset, mesh).unwrap();
                 triangles += u64::from(entry.triangles);

@@ -32,3 +32,32 @@ def test_selects_latest_year_per_tile_by_footprint():
     assert got.sha256 == "ab" * 32
     assert got.path == Path("cache/swisstopo/swissalti3d_2026_2683-1247/swissalti3d_2026_2683-1247_0.5_2056_5728.tif")
     assert got.item_url.endswith("/collections/ch.swisstopo.swissalti3d/items/swissalti3d_2026_2683-1247")
+
+
+def test_item_ids_parse_as_before_and_with_a_hyphen():
+    # ADR-0016: swissSURFACE3D Raster's product has a hyphen; the ids that
+    # parsed before give the same parts.
+    for item_id, parts in [
+        ("swissalti3d_2026_2683-1247", ("swissalti3d", "2026", "2683-1247")),
+        ("swissalti3d_2019_2600-1199", ("swissalti3d", "2019", "2600-1199")),
+        ("swissbuildings3d_3_0_2025_1091-41", ("swissbuildings3d_3_0", "2025", "1091-41")),
+        ("swissbuildings3d_3_0_2025_1091-4142", ("swissbuildings3d_3_0", "2025", "1091-4142")),
+        ("swisssurface3d-raster_2024_2683-1247", ("swisssurface3d-raster", "2024", "2683-1247")),
+    ]:
+        m = stac._ITEM_ID.fullmatch(item_id)
+        assert m is not None and (m["product"], m["year"], m["tile"]) == parts, item_id
+    for not_an_item in ["swissalti3d_26_2683-1247", "swissalti3d_2026", "swissalti3d_2026_2683_1247", "_2026_2683-1247"]:
+        assert stac._ITEM_ID.fullmatch(not_an_item) is None, not_an_item
+
+
+def test_selects_the_latest_surface_model_per_tile():
+    features = [
+        item("swisssurface3d-raster_2018_2683-1247", INSIDE),
+        item("swisssurface3d-raster_2024_2683-1247", INSIDE),
+    ]
+    (got,) = stac.select(features, stac.SWISSSURFACE3D_RASTER, BBOX, Path("cache"))
+    assert (got.item_id, got.year, got.tile) == ("swisssurface3d-raster_2024_2683-1247", "2024", "2683-1247")
+    assert got.path == Path("cache/swisstopo/swisssurface3d-raster_2024_2683-1247/"
+                            "swisssurface3d-raster_2024_2683-1247_0.5_2056_5728.tif")
+    assert got.item_url.endswith("/collections/ch.swisstopo.swisssurface3d-raster/items/"
+                                 "swisssurface3d-raster_2024_2683-1247")

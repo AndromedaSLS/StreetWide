@@ -10,6 +10,10 @@ A store may come from elsewhere (a downloaded world, a contributor's
 bundle), so reads check what they read: an object's path comes only from a
 well-formed content id, its bytes must hash to that id, and a file must be a
 regular file of at most MAX_FILE_BYTES.
+
+A world the ingest writes also has its licence notices beside `world.json`
+(NOTICE_FILES, ADR-0019). They are not part of the world: no id covers
+them, reads never look at them, and writes never touch them.
 """
 
 from __future__ import annotations
@@ -24,6 +28,12 @@ from tools.worldfmt.ids import content_id, hex_of
 MAX_FILE_BYTES = 64 << 20
 """Largest file the store reads: the largest asset a manifest may describe
 (`op_world`'s MAX_ASSET_BYTES), far more than any JSON document needs."""
+
+NOTICE_FILES = ("NOTICE.txt", "CREDITS.txt", "ODbL-1.0.txt", "CC-BY-SA-4.0.txt")
+"""The licence notices at a store's root, beside `world.json` (ADR-0019):
+the ODbL notice, the credits, and the texts of the ODbL and of CC BY-SA
+4.0. The ingest writes them (`tools.ingest.notices`); they are not part of
+the world. `op_world::store::NOTICE_FILES` names the same files."""
 
 _NAME_SURROGATE = 0x20000000
 """The bit of a Windows reparse tag that marks a reparse point naming

@@ -21,7 +21,7 @@ The automatic checks enforce these rules:
 |---|---|
 | Stay within **0.5 m of the building's walls**, and no higher than its roof | A facade belongs to its building |
 | At most **50,000 triangles** and **4 MB** per building | Everyone has to download and draw it |
-| **Your own work**, or open sources you name | The world is CC BY-SA 4.0 |
+| **Your own work**, or open sources you name | Your facade is CC BY-SA 4.0, inside a world offered under the ODbL (see [step 4](#4-turn-it-into-a-contribution)) |
 | **No Google, Apple or Bing imagery** (Street View, aerial images) and no copyrighted plans | Their terms forbid it |
 | Show only what is **visible from public ground** | Privacy: StreetWide never models people's homes from the inside |
 
@@ -130,6 +130,18 @@ The tool writes a **bundle**: the folder `my-facade/`, holding
 `change.json` (your change set) and your mesh and its manifest in
 `objects/`. Your facade is licensed CC BY-SA 4.0 and credited to "The
 StreetWide contributors". The manifest names your handle as the source.
+
+**Where your facade is published.** The world contains OpenStreetMap
+data, so the published world is offered as a whole under the Open
+Database License 1.0 (ODbL), and your facade is published inside it
+([ADR-0019](../adr/0019-odbl-and-the-published-world.md)). It keeps its
+own licence, CC BY-SA 4.0, and its credit, both in its manifest. Whether
+CC BY-SA 4.0 content may sit inside an ODbL world this way is not
+settled: it is a question to the OpenStreetMap Foundation's Licensing
+Working Group, which the maintainer sends before publishing (ADR-0019,
+question 3). The first facade from outside the project is merged only
+after the answer; if it is no, a new decision record changes the terms
+for contributions first, and this guide says what they are.
 
 ## 5. Run the checks
 

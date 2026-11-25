@@ -20,7 +20,7 @@ from tools.ingest.pipeline import _lv95_polygon, _rect, build_water
 from tools.ingest.stac import SourceFile
 from tools.ingest.tests.helpers import overpass_geometry, write_dem_tile
 from tools.worldfmt import cjson, glb, schemas
-from tools.worldfmt.store import Store
+from tools.worldfmt.store import NOTICE_FILES, Store
 
 FRAME = Frame((2145, 1434))
 # swissALTI3D tiles, in LV95 kilometres; T1 is T0's western neighbour.
@@ -584,4 +584,5 @@ def test_two_runs_give_identical_bytes(dems, tmp_path):
         files = {p.relative_to(store.root).as_posix(): p.read_bytes() for p in store.root.rglob("*") if p.is_file()}
         runs.append((world_id, files, report))
     assert runs[0] == runs[1]
-    assert len(runs[0][1]) == 1 + 2 * 3  # the world, and per tile an index, a manifest and a mesh
+    # The world, its licence notices, and per tile an index, a manifest and a mesh.
+    assert len(runs[0][1]) == 1 + len(NOTICE_FILES) + 2 * 3

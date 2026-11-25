@@ -8,8 +8,10 @@ use std::path::{Path, PathBuf};
 use op_world::contrib::{
     Change, ChangeSet, CheckReport, Decision, MergeRecord, Op, Review, Verdict, verify_log,
 };
+use op_world::gate;
 use op_world::manifest::Layer;
 use op_world::merge::{baseline, merge};
+use op_world::store::NOTICE_FILES;
 use op_world::validate::validate_store;
 use op_world::{ContentId, ObjectKind, Store, TileIndex};
 
@@ -67,7 +69,7 @@ fn baseline_merge_and_takedown_form_a_verifiable_log() {
     assert_eq!(store.read_world().unwrap().0, merged.record.world_after);
     let v = validate_store(&store);
     assert!(v.errors.is_empty(), "{:?}", v.errors);
-    assert_eq!(v.assets, 46, "the facade joined the 45 fixture assets");
+    assert_eq!(v.assets, 48, "the facade joined the 47 fixture assets");
 
     // Take the facade down again: the world returns to the baseline exactly.
     let (_, w) = store.read_world().unwrap();
@@ -122,6 +124,53 @@ fn baseline_merge_and_takedown_form_a_verifiable_log() {
             .map(|b| (ContentId::of(b), MergeRecord::from_bytes(b).unwrap()))
             .collect();
     assert_eq!(verify_log(&log).unwrap(), base_world);
+}
+
+/// The licence notices beside `world.json` (ADR-0019) are not part of the
+/// world: with them, the store validates with the same world id, the gate
+/// gives the same report, and a merge makes the same world and leaves them
+/// as they were.
+#[test]
+fn the_notices_beside_a_world_change_no_id_and_a_merge_keeps_them() {
+    let world = world_copy("merge-notices");
+    let notice = |name: &str| format!("{name} of the test world\n").into_bytes();
+    for name in NOTICE_FILES {
+        std::fs::write(world.join(name), notice(name)).unwrap();
+    }
+    let fixture = Store::new(common::repo_root().join("fixtures/world"));
+    let (fixture_id, _) = fixture.read_world().unwrap();
+    let v = validate_store(&Store::new(&world));
+    assert!(v.errors.is_empty(), "{:?}", v.errors);
+    assert_eq!(v.world_id, Some(fixture_id));
+
+    let committed = std::fs::read(sample().join("report.json")).unwrap();
+    let candidate = common::temp_path("notices-candidate", "candidate");
+    let report = gate::run(&world, &sample(), &candidate).unwrap();
+    assert_eq!(report.to_bytes().unwrap(), committed, "the gate's report");
+
+    let base = baseline(&world, "The ingest fixture.").unwrap();
+    let merged = merge(
+        &world,
+        &sample(),
+        &base.to_bytes().unwrap(),
+        Decision::Merged,
+        vec![review(Verdict::Better)],
+        "Test facade.",
+        &scratch("notices-merge-scratch"),
+    )
+    .unwrap();
+    let expected = CheckReport::from_bytes(&committed).unwrap();
+    assert_eq!(Some(merged.record.world_after), expected.candidate_world_id);
+    for name in NOTICE_FILES {
+        assert_eq!(
+            std::fs::read(world.join(name)).unwrap(),
+            notice(name),
+            "{name}"
+        );
+    }
+    let v = validate_store(&Store::new(&world));
+    assert!(v.errors.is_empty(), "{:?}", v.errors);
+    assert_eq!(v.world_id, Some(merged.record.world_after));
 }
 
 #[test]

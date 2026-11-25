@@ -74,3 +74,45 @@ fn serves_every_collider_in_the_sim_frame() {
     // 400-415 m above sea level).
     assert!(terrain.bounds_mm.min[1] > 395_000 && terrain.bounds_mm.max[1] < 440_000);
 }
+
+/// The licence notices beside `world.json` (ADR-0019) are not part of the
+/// world: a store with them opens as the same world, with the same tiles
+/// and colliders.
+#[test]
+fn a_store_with_notices_opens_as_the_same_world() {
+    let dir = std::env::temp_dir().join(format!("op_stream-notices-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    let mut folders = vec![PathBuf::new()];
+    while let Some(rel) = folders.pop() {
+        std::fs::create_dir_all(dir.join(&rel)).unwrap();
+        for entry in std::fs::read_dir(fixture().join(&rel)).unwrap() {
+            let entry = entry.unwrap();
+            let rel = rel.join(entry.file_name());
+            if entry.file_type().unwrap().is_dir() {
+                folders.push(rel);
+            } else {
+                std::fs::copy(entry.path(), dir.join(&rel)).unwrap();
+            }
+        }
+    }
+    for name in op_world::store::NOTICE_FILES {
+        std::fs::write(dir.join(name), format!("{name}\n")).unwrap();
+    }
+    let (plain, noticed) = (
+        WorldIndex::open(&fixture()).unwrap(),
+        WorldIndex::open(&dir).unwrap(),
+    );
+    assert_eq!(noticed.world_id(), plain.world_id());
+    assert_eq!(noticed.tiles().len(), plain.tiles().len());
+    let keys = |source: StoreSource| {
+        source
+            .colliders()
+            .map(|a| a.key.clone())
+            .collect::<Vec<_>>()
+    };
+    assert_eq!(
+        keys(StoreSource::open(&dir, [0, 0, 0]).unwrap()),
+        keys(StoreSource::open(&fixture(), [0, 0, 0]).unwrap())
+    );
+    std::fs::remove_dir_all(&dir).ok();
+}

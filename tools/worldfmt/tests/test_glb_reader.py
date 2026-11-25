@@ -17,6 +17,7 @@ import pytest
 
 from tools.worldfmt import changes, cjson, glb
 from tools.worldfmt.ids import content_id
+from tools.worldfmt.points import POINT_LAYERS
 from tools.worldfmt.store import Store
 
 FIXTURES = Path(__file__).resolve().parents[3] / "fixtures"
@@ -55,9 +56,13 @@ def test_every_committed_mesh_reads_and_rewrites(path: Path) -> None:
 
 def test_mesh_bounds_and_sizes_match_the_fixture_manifests() -> None:
     # What `op_world validate` checks: the manifest's bounds are the mesh's.
+    # The point layers hold points documents (RFC 0004), not meshes:
+    # tools/ingest/tests/test_fixture_world.py checks those.
     _, world = WORLD.read_world()
     index = cjson.loads(WORLD.read_object(world["tiles"][0]["tile_id"], "json"))
-    for a in index["assets"]:
+    meshes = [a for a in index["assets"] if a["layer"] not in POINT_LAYERS]
+    assert len(meshes) == 45
+    for a in meshes:
         manifest = cjson.loads(WORLD.read_object(a["manifest_id"], "json"))
         data = WORLD.read_object(manifest["content_id"], "glb")
         mesh = glb.read(data)

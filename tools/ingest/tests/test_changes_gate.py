@@ -296,7 +296,7 @@ def test_a_points_refresh_passes_the_gate(tmp_path: Path, capsys, rust: Rust) ->
     done = rust.world("check-change", sc.current, out / planned["path"], "--report", report_path)
     assert done.returncode == 0, done.stdout + done.stderr
     report = cjson.loads(report_path.read_bytes())
-    assert report["gate_version"] == "0.1.4"
+    assert report["gate_version"] == "0.1.5"
     assert report["candidate_world_id"] == planned["world_after"]
     outcomes = gate_outcomes(report)
     assert outcomes == {"G1": "pass", "G2": "pass", "G3": "review", "G4": "not_applicable",
@@ -532,7 +532,7 @@ class Fake:
                                            for w in what]})
             else:
                 checks.append({"id": gid, "name": name, "outcome": outcomes[gid], "details": []})
-        report = {"format": "streetwide.check", "contract_version": "0.1.0", "gate_version": "0.1.4",
+        report = {"format": "streetwide.check", "contract_version": "0.1.0", "gate_version": "0.1.5",
                   "change_id": content_id(change_bytes), "world_id": wid,
                   "candidate_world_id": candidate.world_id, "passed": True, "checks": checks}
         if self.edit is not None:

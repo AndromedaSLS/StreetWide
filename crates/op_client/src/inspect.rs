@@ -1438,7 +1438,7 @@ mod tests {
         assert_eq!(
             origin(&m),
             Origin::Baseline {
-                version: "0.1.0".into()
+                version: "0.2.0".into()
             }
         );
         let draft = op_world::sample_change::sample_draft(&world).unwrap();
@@ -1462,7 +1462,7 @@ mod tests {
             origin(&other),
             Origin::Other {
                 generator: "blender-export".into(),
-                version: "0.1.0".into()
+                version: "0.2.0".into()
             }
         );
     }
@@ -1482,19 +1482,17 @@ mod tests {
         let mut counts: BTreeMap<String, usize> = BTreeMap::new();
         for a in &tile.assets {
             let target = Target::of(0, a.layer, &a.feature_id);
-            let d = describe(
-                tile,
-                &target,
-                Some(first_material(&index, a)),
-                &mut manifest,
-            );
+            // The point layers hold points documents (RFC 0004), not
+            // meshes: no surface, so no material.
+            let material = (!a.layer.has_points()).then(|| first_material(&index, a));
+            let d = describe(tile, &target, material, &mut manifest);
             // Everything in the fixture was made by the ingest: this pins
             // INGEST_GENERATOR to its real output.
             for p in &d.parts {
                 assert_eq!(
                     p.origin,
                     Ok(Origin::Baseline {
-                        version: "0.1.0".into()
+                        version: "0.2.0".into()
                     }),
                     "{}",
                     a.feature_id
@@ -1558,6 +1556,15 @@ mod tests {
                         Some("https://www.openstreetmap.org/relation/1598599")
                     );
                 }
+                // The tile's trees and light points (ADR-0015): fixed at
+                // the source, never from OpenStreetMap.
+                Kind::Other(Layer::Vegetation | Layer::StreetObjects) => {
+                    assert_eq!(
+                        (d.class, &d.improve, d.osm_url.as_deref()),
+                        (Class::Neutral, &Improve::Nothing, None)
+                    );
+                    assert_eq!(d.parts[0].credits, ["Quelle: Stadt Zürich", "© swisstopo"]);
+                }
                 other => panic!("{other:?} for {}", a.feature_id),
             }
         }
@@ -1568,6 +1575,8 @@ mod tests {
             ("Bridge", 9),
             ("Street", 1),
             ("Water", 1),
+            ("Other(StreetObjects)", 1),
+            ("Other(Vegetation)", 1),
         ]
         .map(|(k, n)| (k.to_string(), n))
         .into();
@@ -1695,7 +1704,7 @@ mod tests {
 id swisstopo:swissbuildings3d:000f609c-4003-495f-9426-b43e3d770167
 Facade: contribution by streetwide:fixtures (op_world sample change 0.1.0)
   Licence CC-BY-SA-4.0 AND LicenseRef-swisstopo-OGD · The StreetWide contributors · © swisstopo
-Shell: baseline, made by the ingest (streetwide-ingest 0.1.0) from swissBUILDINGS3D 3.0 Beta
+Shell: baseline, made by the ingest (streetwide-ingest 0.2.0) from swissBUILDINGS3D 3.0 Beta
   Licence LicenseRef-swisstopo-OGD · © swisstopo
 A better facade can replace it: docs/contributing/facades.md"
         );
@@ -2004,7 +2013,7 @@ A better facade can replace it: docs/contributing/facades.md"
             body,
             r"swissBUILDINGS3D building shell, tile 17/68646/45903
 id swisstopo:swissbuildings3d:000f609c-4003-495f-9426-b43e3d770167
-Baseline, made by the ingest (streetwide-ingest 0.1.0) from swissBUILDINGS3D 3.0 Beta
+Baseline, made by the ingest (streetwide-ingest 0.2.0) from swissBUILDINGS3D 3.0 Beta
 Licence LicenseRef-swisstopo-OGD · © swisstopo
 Model its facade: docs/contributing/facades.md. Step 1, in PowerShell, in the StreetWide repository folder:
 .venv\Scripts\python -m tools.contrib reference --world 'fixtures\world' --building 'swisstopo:swissbuildings3d:000f609c-4003-495f-9426-b43e3d770167'"
@@ -2030,7 +2039,7 @@ Model its facade: docs/contributing/facades.md. Step 1, in PowerShell, in the St
             body,
             "OpenStreetMap building, where swissBUILDINGS3D has none, tile 17/68646/45903
 id osm:way:493253453
-Baseline, made by the ingest (streetwide-ingest 0.1.0) from OpenStreetMap way 493253453, swissALTI3D
+Baseline, made by the ingest (streetwide-ingest 0.2.0) from OpenStreetMap way 493253453, swissALTI3D
 Licence ODbL-1.0 AND LicenseRef-swisstopo-OGD · © OpenStreetMap contributors · © swisstopo
 Its outline and height come from OpenStreetMap: if they are wrong, fix them at openstreetmap.org/way/493253453
 Model its facade from your own observations: the shell is ODbL, so use it only to place your facade (never --derived-from-shell): docs/contributing/facades.md. Step 1, in a terminal, in the StreetWide repository folder:
@@ -2099,7 +2108,7 @@ Model its facade from your own observations: the shell is ODbL, so use it only t
             );
             assert!(
                 lines[2]
-                    .starts_with("Baseline, made by the ingest (streetwide-ingest 0.1.0) from "),
+                    .starts_with("Baseline, made by the ingest (streetwide-ingest 0.2.0) from "),
                 "{body}"
             );
             assert!(lines[3].starts_with("Licence "), "{body}");
@@ -2160,7 +2169,7 @@ Model its facade from your own observations: the shell is ODbL, so use it only t
 inspect: building swisstopo:swissbuildings3d:000f609c-4003-495f-9426-b43e3d770167, tile 17/68646/45903
   what     swissBUILDINGS3D building shell, tile 17/68646/45903 · improvable: no facade yet
   at       8.544051, 47.369474, 412.3 m
-  made by  baseline, made by the ingest (streetwide-ingest 0.1.0) from swissBUILDINGS3D 3.0 Beta
+  made by  baseline, made by the ingest (streetwide-ingest 0.2.0) from swissBUILDINGS3D 3.0 Beta
   licence  LicenseRef-swisstopo-OGD
   credits  © swisstopo
   guide    docs/contributing/facades.md
@@ -2280,7 +2289,8 @@ inspect: building swisstopo:swissbuildings3d:000f609c-4003-495f-9426-b43e3d77016
         let world = session.streamer().index();
         for (t, tile) in world.tiles().iter().enumerate() {
             let offset = session.offset_m(tile.origin_mm);
-            for a in &tile.assets {
+            // Points documents (RFC 0004) are not meshes: nothing to pick.
+            for a in tile.assets.iter().filter(|a| !a.layer.has_points()) {
                 let mesh = Arc::new(world.load_mesh(&a.content_id).unwrap());
                 if let Some(entry) = PickEntry::new(t, a.layer, offset, mesh) {
                     index.insert(asset_key(tile.key, a.layer, &a.feature_id), entry);

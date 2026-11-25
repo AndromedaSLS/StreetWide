@@ -320,6 +320,12 @@ fn stream_meshes(
             .find(|a| a.layer == Layer::Water)
             .map(|a| a.content_id);
         for a in &tile.assets {
+            // Points documents (RFC 0004: trees and light points) are not
+            // meshes. Until the client draws them (ADR-0022), they are not
+            // wanted, so they never hold up "everything in range is shown".
+            if a.layer.has_points() {
+                continue;
+            }
             let b = a.bounds_mm;
             let lo = offset + Vec3::new(b.min[0] as f32, b.min[1] as f32, b.min[2] as f32) / 1000.0;
             let hi = offset + Vec3::new(b.max[0] as f32, b.max[1] as f32, b.max[2] as f32) / 1000.0;

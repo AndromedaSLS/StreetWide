@@ -60,8 +60,11 @@ invented map with hundreds of artists. It aims at what they do not offer:
 - **Built by its players.** The canonical world only moves upward: a
   change merges when it passes the automated checks (the gate) and beats
   what is there ([RFC 0002](../rfcs/0002-contributions-and-merge-rules.md)).
-- **Open.** Code under MIT or Apache-2.0, content under CC BY-SA 4.0, and
-  data under its sources' licences, all recorded per asset.
+- **Open.** Code under MIT or Apache-2.0, and the world as a whole under
+  the Open Database License (ODbL) 1.0
+  ([ADR-0019](adr/0019-odbl-and-the-published-world.md)). Inside it,
+  contributed content keeps CC BY-SA 4.0 and data its sources' licences,
+  all recorded per asset.
 - **Verifiable.** The simulation is deterministic, every asset carries its
   provenance, and every replay can be checked bit for bit.
 
@@ -173,7 +176,10 @@ FABDEM and FathomDEM, are non-commercial and cannot enter the world.
   must also be offered under the ODbL
   ([ODbL 1.0](https://opendatacommons.org/licenses/odbl/1-0/)).
   [ADR-0001](adr/0001-licensing.md) already publishes OSM-derived assets
-  under the ODbL and keeps them separate.
+  under the ODbL and keeps them separate, and
+  [ADR-0019](adr/0019-odbl-and-the-published-world.md) offers the whole
+  published world under the ODbL, each asset keeping its own sources'
+  licence.
 - **Mixing sources:** under the OpenStreetMap Foundation's guideline,
   data from other sources stays outside the ODbL only if, in a given area,
   each kind of feature (roads, buildings and so on) comes entirely from OSM
@@ -268,6 +274,14 @@ on `main`. ADR-0011 to ADR-0013, RFC 0001 and RFC 0002 were accepted on
   layer, and the ODbL notices in the client and with the download. We ask
   the OpenStreetMap Foundation's Licensing Working Group whether a world
   format is a database or a produced work.
+  *Status:* decided in
+  [ADR-0019](adr/0019-odbl-and-the-published-world.md), option A: the
+  whole published world under ODbL 1.0, the ten fallback buildings kept,
+  each asset keeping its own licence. The notices beside every world the
+  ingest writes and the client's credits page are built. The questions
+  to the Licensing Working Group and swisstopo's confirmation wait for
+  the maintainer, and the store's address in the notices waits for the
+  hosting.
 - **Hosting:** accept ADR-0010, which proposes a world repository, pull
   requests, CI running the gate and a merge bot; choose a provider and an
   owner for its costs.
@@ -549,7 +563,7 @@ arrives) and servers per area for larger groups.
 
 | Risk | Why it matters | What we do (status) |
 |---|---|---|
-| **Licences** | ODbL share-alike, mixed-source layers, licences that change between releases, non-commercial data | **In place:** a licence on every asset; forbidden sources in gate check G4. **M1:** the licence ADR and the allowlist; licences recorded at download |
+| **Licences** | ODbL share-alike, mixed-source layers, licences that change between releases, non-commercial data | **In place:** a licence on every asset; forbidden sources in gate check G4; the world offered as a whole under the ODbL, with its notices and the client's credits page (ADR-0019). **M1:** the Licensing Working Group's answers; the allowlist; licences recorded at download |
 | **Security** | Untrusted bundles and downloads reach our file readers in CI and in clients; a merge bot holds write access | **In place:** strict readers, fuzzed in CI; content ids checked on read. **M1:** dependency advisories, a gate without secrets, write access only after approval |
 | **One maintainer** | A single point of failure for reviews, decisions and knowledge | **M1:** a reviewer role and a second person with merge rights. **M6:** regional maintainers |
 | **Cost** | Delivering data to players dominates the bills | **M1:** a cost owner, with egress cost as a criterion in ADR-0010. **M3:** packed tiles, compression, levels of detail and a disk cache |

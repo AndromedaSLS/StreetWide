@@ -10,7 +10,6 @@ import copy
 import json
 import re
 import shutil
-import subprocess
 from pathlib import Path
 
 import pytest
@@ -24,17 +23,24 @@ REPO = Path(__file__).resolve().parents[3]
 FIXTURES = REPO / "fixtures"
 SAMPLE = FIXTURES / "changes" / "facade-sample"
 FIXTURE_WORLD = FIXTURES / "world"
-DISTRICT = REPO / "data" / "world" / "zurich-altstadt"
+# The district as the ingest built it before and after water (ingest
+# 0.1.0). The store after water was kept as zurich-altstadt-before-points
+# when the trees and light points were added: since then (ingest 0.2.0)
+# every manifest of zurich-altstadt names the newer ingest, so it differs
+# from the store before water by more than water.
+DISTRICT_BEFORE_POINTS = REPO / "data" / "world" / "zurich-altstadt-before-points"
 DISTRICT_BEFORE_WATER = REPO / "data" / "world" / "zurich-altstadt-before-water"
 
-# Ids that Rust made: fixtures/world, which has the Limmat, and the same
-# world before water, as committed at c16572a (world.json and its only
-# tile index).
-FIXTURE_WORLD_ID = "blake3:fd6446c21c6b55e27ccfb6093ca73a17c444432513c487b9f3ae262ead8480af"
-FIXTURE_TILE_ID = "blake3:c014f59cb4193dc9bf376d3919b2554855e32bb817a48375cba200721b589221"
-PRE_WATER_COMMIT = "c16572a"
-PRE_WATER_WORLD_ID = "blake3:6af9f18605b98e8b2a640452ac9341c41a1716160db9cacb09168172903ee9f6"
-PRE_WATER_TILE_ID = "blake3:abbb69b3e109815c74d76925c9ce7a735069c9f14d142ac3e861c54dd91088f0"
+# Ids that Rust made: fixtures/world, which has the Limmat and the tile's
+# trees and light points, and the same world without its water, which
+# `op_world check-change` predicts (test_op_world_builds_the_same_candidates,
+# with STREETWIDE_GATE=1). Until the points were added (ingest 0.2.0), the
+# world without its water was the one committed at c16572a; since then
+# every manifest names the newer ingest, so no commit holds it.
+FIXTURE_WORLD_ID = "blake3:61706bdbe9988513c0af7807a275aeaf4a2467a56923612c4a120a10ee3d4c11"
+FIXTURE_TILE_ID = "blake3:41f0435380678ced368301867a26ce105aceaf49fc79e812b865ddecf6a19ed6"
+PRE_WATER_WORLD_ID = "blake3:3ad3441b275354691cae995998fbf877df2268501d97a31002ae7b2a4eb6dea9"
+PRE_WATER_TILE_ID = "blake3:b9615c24f84f95d6b4683335a8cd46b0df3a845882bef11196f9ebb9d20312c2"
 TILE = "17/68646/45903"
 SORTED = "changes must be sorted by (tile, layer, feature_id) with no duplicates"
 OP_RULE = "add needs a manifest and no parent, replace both, remove a parent and no manifest"
@@ -702,16 +708,7 @@ def water_change(base_world_id: str, op: str, water: dict) -> dict:
     }])
 
 
-def git_show(spec: str) -> bytes | None:
-    """A file as committed, or None where git or the commit is missing."""
-    try:
-        done = subprocess.run(["git", "show", spec], cwd=REPO, capture_output=True, timeout=60)
-    except (OSError, subprocess.SubprocessError):
-        return None
-    return done.stdout if done.returncode == 0 else None
-
-
-def test_without_its_water_the_fixture_is_the_world_rust_made_before_water(tmp_path: Path) -> None:
+def test_without_its_water_the_fixture_is_the_world_rust_predicts(tmp_path: Path) -> None:
     world_id, world, water = fixture_water()
     assert world_id == FIXTURE_WORLD_ID
     remove = water_change(world_id, "remove", water)
@@ -726,14 +723,6 @@ def test_without_its_water_the_fixture_is_the_world_rust_made_before_water(tmp_p
     shutil.copytree(FIXTURE_WORLD / "objects", root / "objects")
     store = Store(root)
     assert candidate.write(store) == PRE_WATER_WORLD_ID
-    for spec, written in [
-        (f"{PRE_WATER_COMMIT}:fixtures/world/world.json", root / "world.json"),
-        (f"{PRE_WATER_COMMIT}:fixtures/world/objects/ab/{PRE_WATER_TILE_ID[7:]}.json",
-         store.object_path(PRE_WATER_TILE_ID, "json")),
-    ]:
-        committed = git_show(spec)
-        if committed is not None:  # a shallow clone lacks the commit; the ids pin the bytes anyway
-            assert written.read_bytes() == committed
 
     # Adding the water back gives fixtures/world exactly.
     before_id, before = store.read_world()
@@ -768,15 +757,15 @@ def test_op_world_builds_the_same_candidates(check_change, tmp_path: Path) -> No
 
 
 @pytest.mark.skipif(
-    not (DISTRICT / "world.json").is_file() or not (DISTRICT_BEFORE_WATER / "world.json").is_file(),
+    not (DISTRICT_BEFORE_POINTS / "world.json").is_file() or not (DISTRICT_BEFORE_WATER / "world.json").is_file(),
     reason="needs the local district stores in data/world (gitignored)",
 )
 def test_the_district_without_its_water_is_the_store_built_before_water() -> None:
     # Two ingests, before and after water (RFC 0003): everything else is
     # byte-identical, so removing the 8 water assets gives the older store.
-    current_id, current = Store(DISTRICT).read_world()
+    current_id, current = Store(DISTRICT_BEFORE_POINTS).read_world()
     before_id, _ = Store(DISTRICT_BEFORE_WATER).read_world()
-    objects = Objects(DISTRICT)
+    objects = Objects(DISTRICT_BEFORE_POINTS)
     removals = []
     for wt in current["tiles"]:
         for a in objects.tile_index(wt["tile_id"])["assets"]:

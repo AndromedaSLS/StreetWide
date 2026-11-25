@@ -78,7 +78,7 @@ fn the_far_building_removal_needs_the_full_gate() {
     assert_eq!(world_id(&world), record.world_after);
     let v = validate_store(&Store::new(&world));
     assert!(v.errors.is_empty(), "{:?}", v.errors);
-    assert_eq!(v.assets, 44, "one of the 45 fixture assets is gone");
+    assert_eq!(v.assets, 46, "one of the 47 fixture assets is gone");
 
     // The record names the full report: the one `op_replay check-change`
     // gives on the world before, with G9 and G10 run.

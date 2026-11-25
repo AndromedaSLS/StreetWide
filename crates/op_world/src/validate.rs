@@ -163,6 +163,10 @@ pub fn validate_store(store: &Store) -> Report {
             report.assets += 1;
             if first {
                 attribution.extend(manifest.provenance.attribution.iter().cloned());
+                // Licences and credits (ADR-0017), once per manifest.
+                for problem in manifest.provenance.licence_problems() {
+                    report.errors.push(format!("{actx}: {problem}"));
+                }
             }
 
             let mismatch = [

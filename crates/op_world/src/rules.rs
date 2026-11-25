@@ -120,6 +120,24 @@ pub fn is_license(s: &str) -> bool {
             .all(|c| c.is_ascii_alphanumeric() || ".+:() -".contains(c))
 }
 
+/// One licence id, as an asset's licence names its sources' licences
+/// (ADR-0017): `^[A-Za-z0-9.+:-]+$`, a licence expression with no spaces,
+/// parentheses or operators.
+pub fn is_license_id(s: &str) -> bool {
+    !s.is_empty()
+        && s.len() <= 256
+        && s.chars()
+            .all(|c| c.is_ascii_alphanumeric() || ".+:-".contains(c))
+}
+
+/// The licence ids of an asset's licence, if it joins ids with ` AND `
+/// only (ADR-0017), as `CC0-1.0 AND LicenseRef-swisstopo-OGD`; `None`
+/// otherwise.
+pub fn license_ids(s: &str) -> Option<Vec<&str>> {
+    let ids: Vec<&str> = s.split(" AND ").collect();
+    ids.iter().all(|id| is_license_id(id)).then_some(ids)
+}
+
 /// `^https://[!-~]+$`, at most 2048 characters.
 pub fn is_https_url(s: &str) -> bool {
     s.len() <= 2048
@@ -251,6 +269,38 @@ mod tests {
         assert!(is_license("LicenseRef-swisstopo-OGD"));
         assert!(is_license("MIT OR Apache-2.0"));
         assert!(!is_license("CC BY-SA ©"));
+        for id in [
+            "CC0-1.0",
+            "LicenseRef-swisstopo-OGD",
+            "GPL-2.0+",
+            "DocumentRef-a:LicenseRef-b",
+        ] {
+            assert!(is_license_id(id), "{id}");
+        }
+        for not_id in [
+            "",
+            "MIT OR Apache-2.0",
+            "CC0-1.0 AND ODbL-1.0",
+            "(MIT)",
+            "CC0 1.0",
+            "©",
+        ] {
+            assert!(!is_license_id(not_id), "{not_id}");
+        }
+        assert_eq!(
+            license_ids("CC0-1.0 AND LicenseRef-swisstopo-OGD"),
+            Some(vec!["CC0-1.0", "LicenseRef-swisstopo-OGD"])
+        );
+        assert_eq!(license_ids("ODbL-1.0"), Some(vec!["ODbL-1.0"]));
+        for not_and in [
+            "MIT OR Apache-2.0",
+            "(MIT AND CC0-1.0)",
+            "MIT  AND CC0-1.0",
+            "MIT AND",
+            "MIT and CC0-1.0",
+        ] {
+            assert_eq!(license_ids(not_and), None, "{not_and}");
+        }
         assert!(is_https_url("https://www.openstreetmap.org/copyright"));
         assert!(!is_https_url("http://example.org"));
         assert!(!is_https_url("https://"));

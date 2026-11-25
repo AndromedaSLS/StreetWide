@@ -43,8 +43,10 @@ use crate::{Error, Result};
 /// Bumped whenever the gate's output for some change set changes (0.1.1:
 /// the water layer, RFC 0003; 0.1.2: bounded readers and G8, the fuzzing
 /// round; 0.1.3: the size limits of JSON documents, RFC 0001 section 7;
-/// 0.1.4: the point layers, RFC 0004 section 8).
-pub const GATE_VERSION: &str = "0.1.4";
+/// 0.1.4: the point layers, RFC 0004 section 8; 0.1.5: G1's validation
+/// checks that licences cover their sources' licences and credits,
+/// ADR-0015 and ADR-0017).
+pub const GATE_VERSION: &str = "0.1.5";
 
 /// Licence of contributed content (ADR-0001).
 pub const CONTRIBUTION_LICENSE: &str = "CC-BY-SA-4.0";

@@ -6,7 +6,8 @@ use crate::id::ContentId;
 use crate::keys::TileKey;
 use crate::limits::Document;
 use crate::rules::{
-    is_feature_id, is_https_url, is_license, is_sorted_unique, is_text, per_tile_source,
+    is_feature_id, is_https_url, is_license, is_license_id, is_sorted_unique, is_text, license_ids,
+    per_tile_source,
 };
 use crate::store::ObjectKind;
 use crate::{CONTRACT_VERSION, Error, Result, cjson};
@@ -321,6 +322,47 @@ pub(crate) fn point_feature_id_problem(
 }
 
 impl Provenance {
+    /// ADR-0017's rules for licences and credits, which ADR-0015 and
+    /// ADR-0016 ask validation to apply before their data enters a world:
+    /// the asset's licence joins licence ids with `AND` only, each source
+    /// names the one licence it is used under, every source's licence is
+    /// among the asset's, and every source's credit is in the asset's
+    /// attribution. Whole-world validation applies them to every manifest
+    /// (and so G1 to every candidate world, baseline refreshes included);
+    /// reading a manifest does not.
+    pub fn licence_problems(&self) -> Vec<String> {
+        let mut p = Vec::new();
+        let ids = license_ids(&self.license);
+        if ids.is_none() {
+            p.push(format!(
+                "provenance.license {:?} must join licence ids with AND only (ADR-0017)",
+                self.license
+            ));
+        }
+        for (i, s) in self.sources.iter().enumerate() {
+            if !is_license_id(&s.license) {
+                p.push(format!(
+                    "provenance.sources[{i}].license {:?} must be one licence id (ADR-0017)",
+                    s.license
+                ));
+            } else if let Some(ids) = &ids
+                && !ids.contains(&s.license.as_str())
+            {
+                p.push(format!(
+                    "provenance.sources[{i}].license {:?} is not in the asset's licence {:?} (ADR-0017)",
+                    s.license, self.license
+                ));
+            }
+            if !self.attribution.contains(&s.attribution) {
+                p.push(format!(
+                    "provenance.sources[{i}].attribution {:?} is not in the asset's attribution (ADR-0017)",
+                    s.attribution
+                ));
+            }
+        }
+        p
+    }
+
     fn problems(&self) -> Vec<String> {
         let mut p = Vec::new();
         if !is_license(&self.license) {

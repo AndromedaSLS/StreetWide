@@ -46,6 +46,7 @@ from tools.worldfmt import cjson, glb
 from tools.worldfmt.limits import CHECK_REPORT
 from tools.worldfmt.changes import INGEST_AUTHOR, Objects, apply, parse
 from tools.worldfmt.ids import content_id, hex_of
+from tools.worldfmt.points import POINT_LAYERS
 from tools.worldfmt.store import Store, is_link
 from tools.worldfmt.tests.fuzzing import (
     MEMORY,
@@ -453,6 +454,12 @@ class StoreBase:
     """world.json and every object the world references."""
 
 
+def content_ext(entry: object) -> str:
+    """The extension of an asset's content: a points document in the
+    point layers (RFC 0004), a mesh elsewhere."""
+    return "json" if isinstance(entry, dict) and entry.get("layer") in POINT_LAYERS else "glb"
+
+
 def store_base() -> StoreBase:
     files = files_under(FIXTURE_WORLD)
     world = cjson.loads(files["world.json"])
@@ -462,8 +469,9 @@ def store_base() -> StoreBase:
         referenced.append(object_rel(wt["tile_id"], "json"))
         for a in indexes[wt["tile"]]["assets"]:
             manifests[a["manifest_id"]] = cjson.loads(files[object_rel(a["manifest_id"], "json")])
-            meshes[a["content_id"]] = files[object_rel(a["content_id"], "glb")]
-            referenced += [object_rel(a["manifest_id"], "json"), object_rel(a["content_id"], "glb")]
+            ext = content_ext(a)
+            meshes[a["content_id"]] = files[object_rel(a["content_id"], ext)]
+            referenced += [object_rel(a["manifest_id"], "json"), object_rel(a["content_id"], ext)]
     return StoreBase(files, world, indexes, manifests, meshes, referenced)
 
 
@@ -524,7 +532,7 @@ def mutate_store(rng: Rng, ws: Workspace, base: StoreBase, donors: list) -> list
                 mesh = mutate_bytes(rng, mesh, list(base.meshes.values())[:6])
             else:  # another asset's mesh: valid, but not where the manifest says
                 mesh = rng.choice(list(base.meshes.values()))
-            ext = "glb" if rng.chance(90) else rng.choice(("json", "a", "bin"))
+            ext = content_ext(entry) if rng.chance(90) else rng.choice(("json", "glb", "a", "bin"))
             ws.write(object_rel(content_id(mesh), ext), mesh)
             edited = dict(manifest, content_id=content_id(mesh))
             if rng.chance(80):
@@ -598,7 +606,7 @@ def test_the_fuzzed_store_is_read(tmp_path):
     base = store_base()
     ws = Workspace(tmp_path / "store", base.files, None)
     view = read_store(ws.root, "new")
-    assert len(view.assets) == len(base.manifests) == 45
+    assert len(view.assets) == len(base.manifests) == 47
     use_store(Rng(1), view, list(view.assets))
 
 
@@ -659,7 +667,7 @@ def passing_report(current: Path, bundle: Path) -> dict:
     checks = [{"id": f"G{n}", "name": name, "outcome": outcomes.get(f"G{n}", "pass"),
                "details": [f"{w}: baseline refresh by {INGEST_AUTHOR}; a maintainer reviews it" for w in what]
                if n == 3 else []} for n, name in enumerate(names, 1)]
-    return {"format": "streetwide.check", "contract_version": "0.1.0", "gate_version": "0.1.4",
+    return {"format": "streetwide.check", "contract_version": "0.1.0", "gate_version": "0.1.5",
             "change_id": content_id(change_bytes), "world_id": world_id, "candidate_world_id": candidate.world_id,
             "passed": True, "checks": checks}
 

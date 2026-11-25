@@ -3073,7 +3073,7 @@ fn regression_document_files_over_their_limit_are_refused_unread() {
         manifest_error
     );
     let report = gate::run(&world, &bundle, &dir.join("candidate-1")).expect("a report");
-    assert_eq!(report.gate_version, "0.1.4");
+    assert_eq!(report.gate_version, "0.1.5");
     assert_eq!(report.checks[0].outcome, op_world::contrib::Outcome::Fail);
     assert_eq!(
         report.checks[0].details[0],

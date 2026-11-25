@@ -1,15 +1,19 @@
-"""Assembles meshes into a world store: asset manifests, tile indexes and
-the world manifest (RFC 0001, sections 3 and 4). Every document is checked
-against the JSON Schemas before it is written."""
+"""Assembles meshes and points documents into a world store: asset
+manifests, tile indexes and the world manifest (RFC 0001, sections 3 and 4;
+RFC 0004), with the licence notices beside the world manifest (ADR-0019,
+`tools.ingest.notices`). Every document is checked against the JSON
+Schemas, and every manifest's licence against its sources' licences and
+credits (ADR-0017), before it is written."""
 
 from __future__ import annotations
 
 from dataclasses import dataclass
 
-from tools.ingest import GENERATOR, VERSION
+from tools.ingest import GENERATOR, VERSION, notices
 from tools.ingest.geo import Frame, region_key, tile_key
 from tools.ingest.mesh import MeshBuilder
-from tools.worldfmt import CONTRACT_VERSION, glb, schemas
+from tools.worldfmt import CONTRACT_VERSION, glb, points, schemas
+from tools.worldfmt.licences import licence_problems
 from tools.worldfmt.store import Store
 
 SWISSTOPO_LICENSE = "LicenseRef-swisstopo-OGD"
@@ -18,17 +22,24 @@ OSM_LICENSE = "ODbL-1.0"
 OSM_CREDIT = "© OpenStreetMap contributors"
 # OSM geometry placed on swisstopo terrain heights (ADR-0006).
 OSM_ON_TERRAIN_LICENSE = f"{OSM_LICENSE} AND {SWISSTOPO_LICENSE}"
+# The city's CC0 points, anchored (and trees measured) on swisstopo data
+# (ADR-0015, ADR-0016).
+CITY_POINTS_LICENSE = f"CC0-1.0 AND {SWISSTOPO_LICENSE}"
 
 
 @dataclass
 class Asset:
+    """One asset: a mesh, or in the point layers a points document
+    (`points`, with `mesh` None)."""
+
     tile: tuple[int, int]
     layer: str
     feature_id: str
-    mesh: MeshBuilder
+    mesh: MeshBuilder | None
     license: str
     sources: list[dict]
     collider: str
+    points: dict | None = None
 
     @property
     def attribution(self) -> list[str]:
@@ -70,8 +81,11 @@ def write_world(
     spawn_mm: list[int],
     yaw: int,
 ) -> tuple[str, dict[str, int]]:
-    """Writes every asset, tile index and the world manifest. Returns the
-    world id and per-layer asset counts."""
+    """Writes every asset, tile index and the world manifest, then the
+    licence notices beside the world manifest. Returns the world id and
+    per-layer asset counts. Raises NoticeError, before writing anything,
+    if an asset has a source that the notices do not credit."""
+    notices.check_credited(s for a in assets for s in a.sources)
     seen: set[tuple[str, str]] = set()
     by_tile: dict[tuple[int, int], list[dict]] = {}
     counts: dict[str, int] = {}
@@ -80,10 +94,15 @@ def write_world(
         if (a.layer, a.feature_id) in seen:
             raise ValueError(f"{a.layer} {a.feature_id} appears twice")
         seen.add((a.layer, a.feature_id))
-        node = a.mesh.node(a.feature_id)
-        data = glb.write([node])
-        content_id = store.write_object(data, "glb")
-        bounds = _bounds(node)
+        if a.points is not None:
+            data = points.to_bytes(a.points)
+            content_id = store.write_object(data, "json")
+            bounds = points.bounds(a.points)
+        else:
+            node = a.mesh.node(a.feature_id)
+            data = glb.write([node])
+            content_id = store.write_object(data, "glb")
+            bounds = _bounds(node)
         manifest = _checked({
             "format": "streetwide.asset",
             "contract_version": CONTRACT_VERSION,
@@ -103,6 +122,11 @@ def write_world(
                 "generator": {"name": GENERATOR, "version": VERSION},
             },
         })
+        problems = licence_problems(manifest["provenance"])
+        if a.points is not None:
+            problems += points.asset_problems(a.layer, a.feature_id, manifest["tile"], bounds, a.points)
+        if problems:
+            raise SchemaError(f"{a.layer} {a.feature_id}: {problems[:3]}")
         manifest_id = store.write_json(manifest)
         by_tile.setdefault(a.tile, []).append({
             "layer": a.layer,
@@ -142,4 +166,6 @@ def write_world(
         "spawn": {"position_mm": spawn_mm, "yaw": yaw},
         "tiles": tiles,
     })
-    return store.write_world(world), counts
+    world_id = store.write_world(world)
+    notices.write(store.root)
+    return world_id, counts

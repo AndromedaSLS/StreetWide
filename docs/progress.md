@@ -3035,3 +3035,416 @@ travel landing that avoids trunks.
 | Long fuzz campaigns of the new targets (`STREETWIDE_FUZZ_ITERS=40000`) | pass: Rust `points_documents`, `refreshes_with_points_through_the_gate` and `world_store_validation` (207 s); Python `test_fuzz_points_reader` (92 s) |
 | `op_world validate fixtures/world` | world `fd6446c2…`, 45 assets, 0 points, 0 errors, unchanged |
 | `op_replay check fixtures/replays/sample.oprep` | 20/20 checkpoints, final `212bd353…`, unchanged |
+
+### The ODbL notices (2026-11-25, ADR-0019)
+
+ADR-0019's option A is built where it needs no hosting: the published
+world is offered as a whole under ODbL 1.0, the ten OpenStreetMap
+fallback buildings stay in the `shell` layer, and each asset keeps the
+licence and credits of its own sources.
+
+- **Notices with the world.** The ingest writes four files beside
+  `world.json` (`tools/ingest/notices.py`, called by
+  `assemble.write_world` after the world manifest):
+  - `NOTICE.txt`: the database notice (the ODbL, its address, its text
+    beside it; "It contains information from OpenStreetMap, which is
+    made available here under the Open Database License (ODbL)"; each
+    asset keeps its sources' licence and credits), the notice for
+    pictures and videos (ODbL 4.3: "Contains information from the
+    StreetWide world, which is made available here under the Open
+    Database License (ODbL)", with its links), and a request to keep the
+    notices with the world;
+  - `CREDITS.txt`: swissBUILDINGS3D, swissALTI3D, OpenStreetMap and
+    StreetWide contributions, each with what it is used for, its credit,
+    its licence with the licence's address, and a link;
+  - `ODbL-1.0.txt` and `CC-BY-SA-4.0.txt`, copied from `LICENSES/`.
+
+  Their text depends only on the code, never on the world, so a merge
+  cannot make them wrong. The ingest refuses, before writing anything,
+  a world with a source that the credits leave out or give another
+  licence or credit (`NoticeError`).
+- **Not part of the world.** No id covers the notices.
+  `op_world::store::NOTICE_FILES` and `tools.worldfmt.store.NOTICE_FILES`
+  name them, and a test checks that they agree. No reader needed a
+  change: `op_world validate`, both `Store`s, `op_stream`, the gate's
+  candidate worlds, merges, the refresh planner and `verify`, and the
+  facade tool read only `world.json` and objects. The ingest's own guard
+  changed: it replaces an output directory holding a store and its
+  notices, and still refuses one holding anything else, such as the
+  `CANONICAL` marker. The refresh guide says to keep the notices in the
+  canonical store and to copy them from a new build when they change.
+- **The client.** A credits page (C), in the help panel's place: for a
+  world with OpenStreetMap data, the ODbL with its address; then each
+  source the world credits, with its credit, licence and link; a credit
+  the client does not know, with where its licence is (the manifests,
+  through I). F1 goes from it to the help. The help names it, and
+  spells the licence "Open Database License". The credit line is
+  unchanged.
+- **Docs.** ATTRIBUTION.md: a section "The world's licence" (the
+  decision, the notices, the 4.3 wording, the client), a row for
+  StreetWide contributions, and the claim that the OpenStreetMap assets
+  can be extracted as their own database replaced: they can be listed,
+  but the fallback buildings share the `shell` layer and the world is
+  under the ODbL as a whole. The README's licence table and keys, the
+  roadmap (section 1, the licence note in section 4, M1's status, the
+  risks table), CONTRIBUTING.md and the facade guide (contributions are
+  published inside an ODbL world; whether CC BY-SA 4.0 content fits
+  there is the Licensing Working Group's question 3, and the first
+  contribution from outside waits for its answer), the refresh guide and
+  fixtures/README.md.
+- **Not changed:** no ADR, RFC, schema, world id, fixture or replay;
+  `tools.ingest` stays at version 0.1.0, as no manifest changes.
+  `fixtures/world` does not carry the notices: ADR-0019 asks for them
+  beside the published world, and `LICENSES/` and ATTRIBUTION.md travel
+  with the fixture. Regenerating it writes them, with no id changing.
+- **Tests:** the ingest writes the notices, byte for byte, beside a
+  world whose id they do not change; the texts name the ODbL and every
+  source; the credits match ATTRIBUTION.md; every source of the
+  fixture world is credited; an uncredited or differently credited
+  source stops the ingest with nothing written; the ingest replaces its
+  own store but not one marked `CANONICAL`; the store reader and the
+  facade tool see the same world and make the same bundle with the
+  notices beside it; the planner makes the same plan, byte for byte
+  (pinned change and report ids), with notices beside both stores
+  (Python). With notices beside the fixture world, `op_world` validates
+  it with the same id, the gate gives the committed report, and a merge
+  makes the committed candidate world and leaves the notices as they
+  were; `op_stream` opens it as the same world (Rust). The client's
+  credits page, its sources against ATTRIBUTION.md, and F1 and C
+  together.
+- **Waits for hosting:** the notices at the public store's root, beside
+  `current.json` (copied from the ingest's build when the world is
+  published); the fetch command that copies them and prints the notice;
+  the store's address as the world's link in the notices, which link the
+  repository until then; the offer of ODbL 4.6 (every published version
+  in the public store).
+- **Waits for the maintainer:** the questions to the Licensing Working
+  Group, above all question 3 before the first outside contribution;
+  swisstopo's confirmation and the FSDI terms; whether the committed
+  fixture should carry the notices. RFC 0001's amendment (an asset's
+  licence is that of its contents) and ADR-0017's per-licence record
+  of fitting inside an ODbL database are for those records.
+
+| Check | Result |
+|---|---|
+| `cargo fmt --all --check`, `cargo clippy --workspace --all-targets --locked -- -D warnings` | pass |
+| `cargo test --workspace --locked` | 299 passed, 1 ignored |
+| `python -m pytest` | 795 passed, 96 skipped |
+| `op_replay check fixtures/replays/sample.oprep` | 20/20 checkpoints, final `212bd353…`, unchanged |
+| `op_world validate fixtures/world` | world `fd6446c2…`, 45 assets, 0 errors, unchanged |
+| Fixture tile re-ingested offline into a scratch directory (copied cache) | world `fd6446c2…`; every committed file byte-identical, plus the four notices |
+| District re-ingested the same way | world `4689c972…`, the 3,013 files of `data/world/zurich-altstadt` byte-identical, plus the four notices; `op_world validate`: 1,491 assets, 0 errors |
+
+### Point features: the Zurich ingest (2026-11-25, RFC 0004, phase 2)
+
+The ingest brings in ADR-0015's trees and light points from the City of
+Zurich and ADR-0016's tree heights from swissSURFACE3D. The district and
+the fixture tile have them; the client (phase 3) does not draw them yet.
+
+- **The city's data** (`tools/ingest/stadt_zuerich.py`): the tree register
+  (`baumkataster_baumstandorte`) and ewz's public lighting
+  (`ewz_brennstelle_p`) from the city's WFS, one GetFeature per dataset and
+  LV95 kilometre square, in LV95, with a `RESULTTYPE=hits` request and the
+  portal's metadata before and after it. The metadata gives the
+  publisher's date (`dateLastUpdated`) and the licence the portal states,
+  which must be `cc-zero`: ADR-0017's check at download, for the first new
+  source. Answers are cached in `data/cache/stadt-zuerich/<layer>/<E>-<N>.json`
+  with a sidecar (`<E>-<N>.sidecar.json`: URLs, fetch time, publisher's
+  date, licence statement, SHA-256, size, features, hits), both written to
+  `.part` and renamed; every run checks the hash again. HTTPS to the
+  city's two hosts only, at most 32 MB per answer.
+- **Validation** as ADR-0015 lists it. The run stops on another
+  coordinate system, a feature count that differs from the hits, a record
+  that differs between two squares, a tree status outside the six, a
+  licence statement other than `cc-zero`, or a publisher's date that
+  changed during the fetch. Records that are not points inside their
+  square (plus 1 m), or whose id or attributes have the wrong form, are
+  left out and counted.
+- **Points** (`tools/ingest/point_features.py`): ids
+  `stadt-zuerich:baumkataster:<baumnummer>` and
+  `stadt-zuerich:beleuchtung:<nisnr>`; a point belongs to the tile that
+  contains it (half-open edges); one points document per tile and source,
+  written with `tools.worldfmt.points.to_bytes`, feature id
+  `tile:17/{x}/{y}/{source}`, `bounds_mm` from `points.bounds`, collider
+  `none`, licence `CC0-1.0 AND LicenseRef-swisstopo-OGD`, credits "Quelle:
+  Stadt Zürich" and "© swisstopo". Each anchor's `x` and `z` are the
+  source position in the region frame, and `y` the tile's terrain mesh
+  there, interpolated exactly on its millimetre triangles and rounded half
+  up, as G8 measures it. Trees keep genus, species, taxon, planting year
+  and crown diameter (8 m and missing values are `null`); lights keep a
+  yaw from `orientierung` under rule `adr-0015:yaw-from-orientierung:1`
+  (degrees counter-clockwise from LV95 grid east, turned into the region
+  frame; exactly 0 is `null`), marked as estimated. Everything else is
+  `null`.
+- **Heights** (`tools/ingest/heights.py`), ADR-0016's 1.5 m rule under
+  policy 1, from the anchor: the top is the pixel of largest surface minus
+  terrain within 1.5 m of the trunk, leaving out pixels within 0.5 m of a
+  swissBUILDINGS3D footprint; the height is its surface minus the ground
+  at the anchor. `null` when every pixel is masked or empty, when the tree
+  was planted in or after the surface model's year, or when the height is
+  under 3 m or over 50 m. The surface model comes through STAC
+  (`ch.swisstopo.swisssurface3d-raster`, the latest year per tile,
+  SHA-256 checked); `stac.py`'s item-id pattern now accepts the hyphen in
+  `swisssurface3d-raster`, and the ids that parsed before give the same
+  parts (tested).
+- **Provenance:** per asset, one source entry per answer used (version
+  `2026-11-22 sha256:<hex>`, licence `CC0-1.0`, the dataset page, the
+  records' local ids), the area's swissALTI3D items, and for trees the
+  swissSURFACE3D Raster items the height discs read.
+- **Licence coverage** (ADR-0015's precondition, ADR-0017's validation
+  rules): `op_world` validation now checks every manifest once: its
+  licence joins licence ids with `AND` only, each source names one licence
+  id, every source's licence is among the asset's, and every source's
+  credit is in its attribution (`Provenance::licence_problems`). It is
+  part of whole-world validation, not of reading a manifest, so G1 applies
+  it to every candidate world, baseline refreshes included. G1's output
+  changes for such worlds, so the gate is 0.1.5. `tools/worldfmt/licences.py`
+  mirrors it message for message, and the ingest refuses to write a
+  manifest that breaks it. Every committed manifest and the district pass.
+  The short RFC that ADR-0017 asks for, to write these rules into RFC 0001
+  section 2, is not written yet.
+- **`VERSION` 0.2.0** (ADR-0020 section 7: the output changes). Every
+  manifest names the generator's version, so every manifest of a rebuilt
+  world changes, though no mesh does.
+- **Report** (`data/reports/<world>.json`, `points`): each answer with its
+  date, hash, features and hits; per layer the records, points, records
+  left out by reason, assets and points per tile; for trees the measured
+  and null heights by reason, percentiles, crowns at the 8 m default,
+  survey methods and trees within 3 m of a building; for lights the zero
+  orientations, positions and stacks, points inside footprints; as checks
+  only, never changing a point, lights on or within 5 m of an OSM bridge
+  deck and inside OSM water, and trees within 3 m of an OSM fallback
+  building. The comparison with the canton's crowns (optional in ADR-0016)
+  is not in it.
+- **ATTRIBUTION.md:** rows for the two datasets and swissSURFACE3D Raster,
+  a Stadt Zürich section (dataset pages, WFS layers, weekly updates, the
+  licence check, the version rule, the archive, where errors go), the
+  fixture's row, and the on-screen credit. **`LICENSES/LicenseRef-swisstopo-OGD.txt`**
+  stores swisstopo's terms as read on 2026-11-25, with their URL (ADR-0017
+  asks for one text and one URL); ATTRIBUTION.md links it.
+
+**Sources fetched** (2026-11-25): the two WFS
+answers for square 2683-1247, both dated 2026-11-22, the portal stating
+`cc-zero` for both; trees 1,027 features (= hits), 587,593 bytes, SHA-256
+`d11bec11…7e68fd`; lights 2,023 (= hits), 528,038 bytes, `d4aa51b4…f7fe516`.
+Both hashes are the research notes' own, so the city's data has not
+changed since ADR-0015's figures. The surface model is
+`swisssurface3d-raster_2024_2683-1247` (13.5 MB), checked against STAC's
+SHA-256. The runs for this entry used a generic User-Agent
+(`open-data-client/1.0`), set by a scratch runner outside the repository
+before it called the ingest's `main`; the code keeps ADR-0006's
+`streetwide-ingest/<version>`.
+
+**The district** (`data/world/zurich-altstadt`, world `3b5975b8…`, 1,546
+assets, `op_world validate`: 0 errors, 2,951 points), against the
+research notes (`drawing-research/data/notes.md`) and the ADRs:
+
+| | This ingest | Notes and ADRs | Why they differ |
+|---|---|---|---|
+| Trees in the world's bbox | 1,005 (of 1,027 in the square) | 1,005; 1,027 | |
+| Trees placed | 1,001 in 26 assets | 1,005; 26 tiles (ADR-0015) | 4 lie within one terrain cell (1.6 m) of the area's edge, where the terrain keeps only whole cells: no ground under them, so they are left out (they would fail G8) |
+| Heights measured | 887 | 893 | the 4 trees left out were measured; 2 more fall under 3 m measured from the anchor |
+| Null heights | 114: 50 planted in 2024 or later, 64 under 3 m | about 112: 50 and 62 | as above |
+| Height percentiles (5, 25, 50, 75, 95) | 5.4, 7.7, 10.9, 15.2, 20.2 m | 5.3, 7.8, 10.8, 15.2, 20.2 m | measured from the anchor on the terrain mesh, where the notes used swissALTI3D at the trunk: median difference per tree 0.03 m; all 27 trees that differ by more than 0.2 m (up to 1.04 m) differ exactly by that ground |
+| Crowns at the 8 m default | 181 | 183 | 2 of the trees left out |
+| Survey methods | 685 surveyed, 255 digitised, 61 unknown | 689, 255, 61 | the 4 trees left out were surveyed |
+| Trees within 3 m of a building | 56 | 56 (ADR-0016), 55 (notes) | |
+| Light points in the bbox | 1,959 (of 2,023 in the square) | 1,959; 2,023 | |
+| Light points placed | 1,950 in 29 assets | 1,959; 29 tiles (ADR-0015) | 9 at the area's edge, as for trees |
+| Orientations of 0 (yaw unknown) | 157 | 160 | 3 of the 9 left out |
+| Positions, stacks | 1,711 positions; 73 stacks of 312 records, up to 36 | 1,717; 74 of 316, up to 36 | the 9 left out |
+| Inside swissBUILDINGS3D footprints | 153, 104 more than 1 m inside | 140 to 153; 104 (ADR-0015) | footprints of buildings on the ground, exactly |
+| Inside OSM water (check) | 218 | 218 (notes) | |
+| On, or within 5 m of, an OSM bridge deck (check) | 10, 230 | 191 within 5 m over the Limmat (ADR-0015) | any bridge, on land too; decks as ways buffered by half their width |
+
+The 55 point assets take 0.76 MB of points documents and 0.10 MB of
+manifests (RFC 0004 estimated 0.9 MB); the busiest tile has 194 points.
+Planned as a baseline refresh from the district before points, they make
+two sets (26 tree assets, 29 light assets, as RFC 0004's split by source
+keeps each under 50 changes), and both pass the real gate in turn: G3
+review, G7 and G8 pass, so every one of the 2,951 anchors lies on the
+district's terrain (`test_changes_local.py`, run here with the local
+stores and `STREETWIDE_GATE=1`).
+
+**Nothing else changed.** The district before points was kept as
+`data/world/zurich-altstadt-before-points` (world `4689c972…`, 3,013
+files). Compared with it:
+- built with this code but the generator's version held at 0.1.0 (a
+  check only, in a scratch directory): every one of its 3,013 files is in
+  the new store byte for byte, except `world.json` and the 29 tile indexes
+  that list points; the new store adds 55 manifests, 55 points documents
+  and those 29 tile indexes;
+- the real build (0.2.0): all 1,491 meshes byte-identical; all 1,491
+  manifests identical but for `generator.version`; all 30 tile indexes
+  identical once their manifest ids are mapped and the point entries
+  dropped; `world.json` differs in its tiles and in its attribution, which
+  gains "Quelle: Stadt Zürich".
+
+**The fixture tile** (`fixtures/world`, regenerated offline from the same
+caches): 33 trees (ADR-0015: 33), all with a measured height, and 135
+light points (ADR-0015: 136): light `LEU100912` stands 0.5 terrain cells
+from the zurich-altstadt bbox, which cuts the tile, so it has no ground.
+Of the lights, 13 are inside footprints, 3 on an OSM bridge deck and 22
+more inside OSM water, as ADR-0015 counts. The tile's two point assets
+are byte-identical to the same tile's in the district (ADR-0016: "the
+fixture tile and the same tile in zurich-altstadt agree"). Its 45 other
+assets keep their meshes, and their manifests change only in the
+generator's version. A refresh from the fixture without its points to the
+fixture plans one set per source and passes the real gate set by set
+(G3 review, G7 and G8 pass): every committed anchor lies on the
+committed terrain.
+
+**Pins that changed, and why** (every one follows from the fixture's new
+assets and the generator's version):
+
+| Pin | Was | Now | Why |
+|---|---|---|---|
+| `fixtures/world` world id | `fd6446c2…` | `61706bdb…` | two point assets; every manifest names ingest 0.2.0; the attribution gains the city's credit |
+| its tile index | `c014f59c…` | `41f04353…` | the same |
+| the fixture without its water (`tools/worldfmt/tests/test_changes.py`, `test_changes_fixture.py`) | `6af9f186…`, tile `abbb69b3…` | `3ad3441b…`, tile `b9615c24…` | the same. The check against the world committed at c16572a is dropped: no commit holds a world with the new manifests and no water; `op_world check-change` makes the new ids (`STREETWIDE_GATE=1`) |
+| the water manifest | `48443eac…` | `89d40f62…` | generator version; its mesh `3fe3966e…` is unchanged |
+| the fixture's water refresh plan: change, report | `98aa8fbd…`, `78bfd934…` | `d6f72d98…`, `ced1107b…` | its base world and the water manifest |
+| `sample.oprep` header | world `fd6446c2…` | world `61706bdb…` | `op_replay rerecord`: 20 of 20 checkpoints unchanged, final `212bd353…`; the file differs only in the world id |
+| facade sample: change, report | `8012c53f…`, `86ba3650…` | `ef02dc50…`, `5d485bde…` | the base world id; the report's world, change and candidate world (`af9ef2c6…`, was `b9aee52f…`) and gate 0.1.5. The facade's manifest and mesh are unchanged |
+| gate version in tests | 0.1.4 | 0.1.5 | licence coverage in G1 |
+| fixture asset counts in tests | 45 (44, 46) | 47 (46, 48) | two more assets |
+| the tile's points in the point gate tests | 0 (3 with the sample trees) | 168 (171) | the fixture's points; G7's draft is 168 points smaller so the tile still holds exactly 5,001 |
+
+The local district tests (`test_changes_local.py`, the district test in
+`tools/worldfmt/tests/test_changes.py`) now compare the store before water
+with `zurich-altstadt-before-points`, the district as it was, and a new
+test plans the points refresh from it to `zurich-altstadt`: two sets, 26
+tree and 29 light assets, and 1,491 provenance-only differences (the
+generator's version), which a refresh keeps (ADR-0020, rule C).
+
+Choices made here, not by an ADR (conservative; open to review):
+1. **No ground, no point:** a point with no terrain triangle under it is
+   left out and counted ("no terrain under the point"), never placed off
+   the terrain. All 13 in the district are within one cell of the area's
+   edge.
+2. **Squares asked for:** those the area covers with positive area, among
+   the squares that hold the city (E 2676 to 2689, N 1241 to 1253 km).
+   Elsewhere nothing is asked for, and no points come in: the source list
+   per country and kind of ADR-0015's "Where the policy lives" is
+   `stadt_zuerich.SOURCES`.
+3. **Species:** genus and `baumartlat` as published, with a space; `spec.`
+   or no epithet gives `null`; suffixes such as "(m)" are kept. An empty
+   text counts as missing.
+4. **Duplicates:** a record listed twice in one answer with other values
+   stops the run, as across squares; identical copies count once.
+5. **Statuses** are checked on every record of an answer, inside the area
+   or not, since the answer is what a baseline would archive.
+6. **The mask** uses footprints of buildings on the ground (not
+   underground ones, which the surface does not show and the shells leave
+   out), and an exact distance (at most 0.5 m).
+7. **Null reasons** are tested in the order: no pixel, planting year, then
+   the 3 to 50 m band; the planting year is compared with the year of the
+   item that holds the top pixel. Ties go to the first pixel north to
+   south, then west to east.
+8. **The yaw rule** turns a 1 m step along the orientation in LV95 into
+   the region frame at the light's position and ground height.
+9. **Source entries** in this order: the city's (one per answer), the
+   swissALTI3D items (the area's, as terrain lists them, plus any item a
+   height disc reads beyond them), the swissSURFACE3D Raster items.
+   Dataset names: "Baumkataster Stadt Zürich", "Öffentliche Beleuchtung
+   der Stadt Zürich", "swissSURFACE3D Raster".
+10. **The surface model** is searched over the area grown by 3 m, and only
+    the tiles that height discs reach are downloaded.
+11. **The licence rules** sit in whole-world validation (and so in G1),
+    not in reading a manifest, so G4 and G5 keep their own failures for
+    contributions.
+
+- **Tests:** `test_stadt_zuerich.py` (fetching with a fake city:
+  cache, sidecar, hash check, offline, refresh, every stop; records left
+  out by reason; statuses; duplicates; attributes; ids),
+  `test_point_features.py` (the ground to the millimetre against exact
+  arithmetic, the cut cell, the yaw rule, documents), `test_heights.py`
+  (synthetic surface and terrain tiles: the rule, the mask at 0.5 m, every
+  null reason, rounding, ties, a disc across two tiles),
+  `test_points_pipeline.py` (end to end on synthetic sources through
+  `write_world`: assets, provenance, licences, heights, a refused
+  licence), `test_stac.py` (the item-id pattern), the fixture's points in
+  `test_fixture_world.py` and `ingest_fixture.rs`, the fixture's points
+  refresh through the gate, and the licence rules in
+  `crates/op_world/tests/licences.rs` and
+  `tools/worldfmt/tests/test_licences.py` with the same cases and
+  messages.
+
+**With the ODbL notices** (main merged into this branch, the entry
+above):
+- `tools/ingest/notices.py` credits the three new sources:
+  "swissSURFACE3D Raster" (swisstopo's terms, "© swisstopo"), and
+  "Baumkataster Stadt Zürich" and "Öffentliche Beleuchtung der Stadt
+  Zürich" (`CC0-1.0`, "Quelle: Stadt Zürich", the CC0 deed as the link);
+  swissALTI3D's line names the ground under trees and light points. So
+  `CREDITS.txt` lists them, and the ingest's check that every source is
+  credited passes. ATTRIBUTION.md's table names the city's datasets as
+  manifests do, which the notices' test against it needs.
+- **The credits page (C)** lists them too, seven sources in
+  ATTRIBUTION.md's order. It matches sources by the world's credits, so
+  any world crediting "© swisstopo" lists swissSURFACE3D Raster, and one
+  crediting "Quelle: Stadt Zürich" both city datasets. With the built-in
+  font (no system font found) umlauts are spelled out ("Zuerich"). Its
+  tests, against the fixture's page and ATTRIBUTION.md, pass; they were
+  run by building `credits.rs` with `op_world` alone, without the client.
+- **Nothing the merge touches changes an id.** The fixture rebuilt with
+  the merged ingest is byte-identical (world `61706bdb…`; its notices are
+  not committed, as `fixtures/README.md` says), so the sample replay, the
+  facade sample (regenerated: byte-identical) and every pin stay as
+  above. The district was ingested again with its notices: world
+  `3b5975b8…`, the same 3,123 files byte for byte, plus the four notices.
+
+**The client** meets worlds with points for the first time: the scene
+now leaves the point layers out of what it wants to show, until phase 3
+draws them. Before, their documents stayed wanted as failed mesh loads,
+so the benchmark's "everything in range is shown" would never come at a
+district stop. Its tests follow the fixture: the ingest's version in its
+manifests is 0.2.0; the two tests that load every asset as a mesh for
+picking leave the point layers out; the inspect classification takes
+the two point assets without a surface material and checks them
+(credits "Quelle: Stadt Zürich" and "© swisstopo", nothing to improve
+here); the credit line of
+the fixture starts with "Quelle: Stadt Zürich"; with the built-in font,
+umlauts are spelled out. `op_client` was type-checked here (clippy), not
+built or tested (CI runs its tests), except the credits page's tests above.
+
+Left for the maintainer:
+- attach the fixture's two WFS answers (and their sidecars) to a GitHub
+  release, as ADR-0015 decided; `fixtures/README.md` lists their SHA-256;
+- the short RFC of ADR-0017 that writes the licence rules into RFC 0001
+  section 2 (built here ahead of it, as ADR-0015 asked before any byte
+  was ingested), and the allowlist itself (`LICENSES/allowlist.json`, G4
+  reading it), not built;
+- before this code merges, as ADR-0015 and ADR-0016 ask: compare two
+  weekly answers for one square (the city's next update is due after
+  2026-11-29), and run the comparison with the canton's crowns again
+  with this rule;
+- the questions to ewz and Grün Stadt Zürich (ADR-0015);
+- swisstopo's clarification of 14 September 2021 on central attribution,
+  which ADR-0017 and ADR-0019 want quoted beside the stored terms, is not
+  in `LICENSES/LicenseRef-swisstopo-OGD.txt`;
+- the district's first refresh: the two sets above, and 1,491
+  provenance-only differences that a refresh keeps.
+
+Phase 3 (the client) needs: `WorldIndex::load_points` in the streaming
+loop for `vegetation` and `street_objects`; visibility from the anchors'
+bounds plus the objects' sizes; drawing (ADR-0022), with lights grouped
+per position (73 stacks, up to 36 records), defaults for the 114 trees
+without a height and the 181 crowns at the default, mounts inferred for
+drawing only, and the 1,950 light points' night budget (ADR-0018); bridge
+lights at the river's level (10 on decks, 230 within 5 m); and a travel
+landing that avoids trunks. The credit line and the credits page already
+show "Quelle: Stadt Zürich" from the world's attribution.
+
+| Check (after merging main) | Result |
+|---|---|
+| `cargo fmt --all --check`, `cargo clippy --workspace --all-targets --locked -- -D warnings` | pass |
+| `cargo test --locked -p op_world -p op_replay -p op_kernel -p op_sim -p op_stream` | 224 passed |
+| `python -m pytest` | 912 passed, 101 skipped |
+| `STREETWIDE_GATE=1`, CI's gate step (`test_changes_gate.py`, `test_changes_fixture.py`, and `tools/worldfmt`'s `test_changes.py`, `test_log.py`, `test_glb_reader.py`) | 307 passed, 1 skipped |
+| The local district tests with the stores and `STREETWIDE_GATE=1` (`test_changes_local.py`, the district test of `test_changes.py`) | 7 passed |
+| `op_world validate fixtures/world` | world `61706bdb…`, 47 assets, 168 points, 0 errors |
+| `op_world validate data/world/zurich-altstadt` (with its notices) | world `3b5975b8…`, 1,546 assets, 2,951 points, 0 errors |
+| The credits page's tests (`crates/op_client/src/credits.rs`, built with `op_world` alone) | 3 passed |
+| `op_replay check fixtures/replays/sample.oprep` | 20/20 checkpoints, final `212bd353…`, unchanged |
+| `op_world check-change fixtures/world fixtures/changes/facade-sample`; CI's facade tool through `op_replay check-change` with the sample replay | pass, report `5d485bde…`; pass |

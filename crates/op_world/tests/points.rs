@@ -1,6 +1,6 @@
 //! Point layers (RFC 0004): the points document reader's rejections,
 //! whole-world validation of point assets, the gate's rules for
-//! `vegetation` and `street_objects` (G1, G3, G7, G8 at gate 0.1.4), and a
+//! `vegetation` and `street_objects` (G1, G3, G7, G8 since gate 0.1.4), and a
 //! merge that copies a points document into the store.
 //!
 //! The gate tests use [`sample_points_draft`]: a baseline refresh adding
@@ -475,6 +475,10 @@ fn fixture_world() -> std::path::PathBuf {
     common::repo_root().join("fixtures/world")
 }
 
+/// The trees and light points the ingest fixture holds in its one tile
+/// (RFC 0004, ADR-0015): 33 trees and 135 light points.
+const FIXTURE_TILE_POINTS: usize = 33 + 135;
+
 /// Writes `draft` as a bundle and runs the gate on it against `world`.
 fn gate_on(world: &Path, draft: &mut PointsDraft, name: &str) -> CheckReport {
     let bundle = common::temp_dir(&format!("points-bundle-{name}"));
@@ -514,8 +518,8 @@ fn a_refresh_adding_points_is_reviewed_and_passes() {
     for layer in [Layer::Vegetation, Layer::StreetObjects] {
         let mut d = draft(layer);
         let r = gate_on(&fixture_world(), &mut d, layer.as_str());
-        assert_eq!(r.gate_version, "0.1.4");
-        assert_eq!(GATE_VERSION, "0.1.4");
+        assert_eq!(r.gate_version, "0.1.5");
+        assert_eq!(GATE_VERSION, "0.1.5");
         assert!(r.passed, "{r:#?}");
         let expect = |id, o| assert_eq!(outcome(&r, id), o, "{layer:?} {id}: {r:#?}");
         for id in ["G1", "G2", "G7", "G8"] {
@@ -547,7 +551,10 @@ fn a_refresh_adding_points_is_reviewed_and_passes() {
             has_detail(
                 &r,
                 "G3",
-                "tile 17/68646/45903: 3 points in vegetation and street_objects after the change set (was 0)"
+                &format!(
+                    "tile 17/68646/45903: {} points in vegetation and street_objects after the change set (was {FIXTURE_TILE_POINTS})",
+                    FIXTURE_TILE_POINTS + SAMPLE_POINTS
+                )
             ),
             "{r:#?}"
         );
@@ -742,8 +749,10 @@ fn g7_counts_points_per_tile() {
         if contribute {
             contributed(&mut d);
         }
+        // One point over the budget with the fixture's own points: the
+        // budget counts the tile, over both layers and every source.
         let first = d.doc.points[0].clone();
-        d.doc.points = (0..=TILE_MAX_POINTS)
+        d.doc.points = (0..=TILE_MAX_POINTS - FIXTURE_TILE_POINTS)
             .map(|k| op_world::points::Point {
                 id: format!("streetwide:sample-trees:P-{k:05}"),
                 ..first.clone()
@@ -824,7 +833,7 @@ fn a_merge_copies_the_points_document() {
     let (world, _, d) = world_with_trees("points-merge");
     let report = validate_store(&Store::new(&world));
     assert!(report.is_ok(), "{:#?}", report.errors);
-    assert_eq!(report.points, SAMPLE_POINTS);
+    assert_eq!(report.points, FIXTURE_TILE_POINTS + SAMPLE_POINTS);
     let id = d.doc.id().unwrap();
     let store = Store::new(&world);
     assert!(store.has_object(&id, ObjectKind::Json));
@@ -879,7 +888,10 @@ fn g3_lists_the_points_a_refresh_changes() {
     assert!(has_detail(
         &r,
         "G3",
-        "tile 17/68646/45903: 3 points in vegetation and street_objects after the change set (was 3)"
+        &format!(
+            "tile 17/68646/45903: {n} points in vegetation and street_objects after the change set (was {n})",
+            n = FIXTURE_TILE_POINTS + SAMPLE_POINTS
+        )
     ));
     assert_eq!(
         outcome(&r, "G8"),
