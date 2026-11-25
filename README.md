@@ -162,8 +162,13 @@ start somewhere: `--place Grossmünsterplatz` (or a number), `--at <lon>,<lat>`,
 
 The windows, doors, roof tiles and paving are drawn by the client, not
 taken from the world data
-([ADR-0012](docs/adr/0012-client-realism-from-procedural-detail.md)); F2
-shows the data alone. Real facades come from contributions
+([ADR-0012](docs/adr/0012-client-realism-from-procedural-detail.md)). So
+is the night
+([ADR-0022](docs/adr/0022-drawing-trees-lamps-and-windows.md)): lit
+windows, a share by the hour, chosen from the building, wall, window and
+clock (which ones is invented, never taken from data about real homes);
+moonlight from the moon's real position and phase; and the city's glow on
+the sky and the street. F2 shows the data alone, without any of these. Real facades come from contributions
 ([docs/contributing/facades.md](docs/contributing/facades.md)). Press I and
 point at a building to see whether it has one, and to get the command that
 starts yours.

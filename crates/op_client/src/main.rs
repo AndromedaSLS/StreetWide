@@ -18,6 +18,12 @@
 //! Press F1 in the client for the controls: walking, flying, the map, named
 //! places, the time of day, graphics settings and inspect mode (I: who made
 //! what is under the crosshair, and how to improve it).
+//!
+//! The detailed look draws what the data does not hold: textures and
+//! windows (ADR-0012), and at night lit windows, moonlight and the city's
+//! glow (ADR-0022). Which windows are lit is invented, seeded from the
+//! building, wall, window and clock, never from data about real homes. F2
+//! shows the data alone.
 
 mod controls;
 mod geo;
@@ -33,6 +39,7 @@ mod sky;
 mod texgen;
 mod travel;
 mod water;
+mod windows;
 
 use std::path::PathBuf;
 use std::process::ExitCode;
@@ -183,6 +190,7 @@ fn main() -> ExitCode {
             session::SessionPlugin,
             controls::ControlsPlugin,
             sky::SkyPlugin,
+            windows::WindowsPlugin,
             scene::ScenePlugin,
             travel::TravelPlugin,
             inspect::InspectPlugin,

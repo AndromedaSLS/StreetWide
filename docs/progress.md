@@ -1636,6 +1636,175 @@ new code, and the maintainer guide and ADR-0020's code table describe
 it. The fixture plan's pinned ids are unchanged; `tools/ingest` and
 `tools/worldfmt` tests: 691 passed, 98 skipped.
 
+### Lit windows and the night (2026-11-25, ADR-0022 W1 and N2)
+
+The client now draws the night as
+[ADR-0022](adr/0022-drawing-trees-lamps-and-windows.md) decided for lit
+windows (W1) and the night (N2), on by default. Trees and street lamps
+wait for RFC 0004's point features. Only `op_client` changed; the
+simulation, the world format and the replays did not.
+
+**Lit windows (W1):**
+- **Which window is lit** follows only from the building id, the wall,
+  the window's bay and storey, and the night: a hash of them, compared
+  with the share of windows lit at that hour. Nothing comes from
+  data about real homes, and nothing is drawn behind the glass. Each
+  window has its own hash, so no pattern repeats: the prototype's masks
+  repeated every 16 bays and 8 storeys, and every wall of a style showed
+  the same pattern. As the share rises through an evening windows only
+  switch on; a night runs from noon to noon, and another night lights
+  other windows.
+- **How:** windowed walls use a small shader extension of the
+  StandardMaterial (`windows.wesl`), which adds the glow after lighting,
+  in cd/m² times the exposure. It is bindless like the StandardMaterial:
+  a first, non-bindless version cost 3 to 7 ms of frame time (our
+  reading: each of its 48 materials, three styles by two floors by eight
+  tints, broke the batches). A wall's seed (from the building id and the
+  wall's plane) rides in the wall's second texture coordinates; the first
+  already count bays and storeys. A thin sliver triangle whose normal is
+  imprecise keeps its wall's seed, so no window is split between two
+  choices (an early screenshot showed a half-lit shop window).
+  The glass's shape is a mask per style made from the same rectangles as
+  the facade textures, a little brighter at the top. Windows too small
+  on screen to tell apart glow with the average instead of shimmering.
+- **Shares, set by hand** (no Swiss data on windows lit by hour was
+  found): homes and offices on upper floors and on ground floors with
+  doors and windows, one curve for weekdays and one for weekends, at most
+  45% at 20:00 to 21:00 (CIE 2025 found at most 50%); shop windows, one
+  curve each for weekdays, Saturdays and Sundays (shut, some displays
+  lit). Windows switch on as the sun goes from 3° above to 3° below the
+  horizon, so by day they add nothing. At 18:00 on Monday 21 December:
+  40% of homes and 88% of shop windows; at 22:30 on Sunday 21 June: 33%
+  and 20%.
+- **Brightness:** a lit home's window averages 6 cd/m² (CIE 2025); a shop
+  window 10 cd/m², a fifth of CIE's 50, as a look choice: at EV100 3,
+  50 cd/m² is white, as the prototype's 25 already was. Colours: homes
+  65% at 2800 K, 27% at 3500 K and 8% at 5000 K; shops 70% at 3000 K and
+  30% at 3600 K; each lit window from half to one and a half times the
+  average.
+- **The plain look (F2)** has no lit windows; inspect mode's highlight
+  keeps them.
+
+**The night (N2):**
+- **Exposure floor EV100 3,** reached once the sun is 8° down. Down to 1°
+  below the horizon the exposure is the curve the client always had; it
+  then falls to the floor instead of stopping at 6.5. With the sun 7.5°
+  down, as in the two 2025 photos from the Lindenhof (EV100 4.0 and 3.0),
+  it is 3.25.
+- **Moonlight:** a bluish directional light from the moon's position for
+  the date and time, without shadows and without a disc. The position
+  comes from the Astronomical Almanac's low-precision formulae, with
+  parallax; against JPL Horizons it is within 0.25° on four dates, and
+  the F3 panel shows it. Its strength follows the phase (Krisciunas and
+  Schaefer, 1991) and the air it crosses (Kasten and Young's airmass),
+  times 16: the real moon (0.31 lx when full, overhead) barely shows at
+  EV100 3, so the gain is a look choice, as Far Cry 5 raised its moon. At
+  18:00 on 21 December (92% lit, 37° up in the east) that is about
+  1.6 lx; at 22:30 on 21 June (49% lit, 25° up in the south-west) about
+  0.3 lx. A new moon or a moon below the horizon gives nothing; the
+  city's glow keeps those nights from going black, so the moon has no
+  floor of its own. Without light (by day, below the horizon, or in the
+  plain look) the moon's light is hidden, so it costs nothing.
+- **The city's glow:** a dome around the camera added to the sky,
+  1.3 cd/m² at the horizon fading to 0.5 cd/m² overhead, orange-brown
+  (2200 K, partly greyed), for an overcast sky lit by the city as in the
+  2025 photos; and a warm ambient fill of 1.8 cd/m² (3000 K, half
+  greyed), about 5.7 lx on the ground, the low end of an old-town lane's
+  average in Lucerne's guideline, but even instead of in pools. Both are
+  invented light, set by eye. The fill stands in for lamps and should go
+  down when lamps are drawn.
+- **All of it fades in** as the sun goes from 1° to 8° below the horizon,
+  so daytime is unchanged. The plain look keeps only the sun and the
+  exposure, as before, so at night it is as dark as it always was.
+
+**Starting values** (ADR-0022, open question 2; the maintainer sets the
+final ones):
+
+| Value | Starting value | Why |
+|---|---|---|
+| Exposure floor | EV100 3, from the sun 8° down | ADR-0022's starting value; the photos' 3.0 and 4.0 |
+| Lit home window | 6 cd/m² | CIE 2025's average |
+| Lit shop window | 10 cd/m² | look choice: CIE's 50 is white at EV100 3 |
+| Homes lit at peak | 45% | under CIE 2025's 50% |
+| Moonlight | 16 times the real moon, bluish, no shadows | look choice; real moonlight barely shows at EV100 3 |
+| Sky glow | 1.3 cd/m² at the horizon, 0.5 overhead, 2200 K | look choice, against the photos' orange-brown sky |
+| Ambient fill | 1.8 cd/m², 3000 K | look choice: ground and facades readable without lamps |
+
+**What the screenshots show** (1280 × 720, high, release build, at
+Lindenhof, Hirschenplatz and Rathausbrücke; kept outside the repository):
+- **18:00 on 21 December:** reads as the old town on a winter evening. A
+  scattered share of upper windows glows warm, a few whiter; no grid and
+  no repeat along or between walls. Shop fronts glow peach to cream with
+  a brighter top, none clipped to white. Facades and setts are dim but
+  readable, facades facing the moon a little lighter; the sky is
+  orange-brown, brighter towards the horizon, where the far city shows
+  as dots of lit windows.
+- **22:30 on 21 June (a Sunday):** fewer windows lit, shops mostly dark;
+  the same glow and fill, little moonlight.
+- **12:00 on 21 December and 18:00 on 21 June:** unchanged. Against
+  screenshots of the client before this change, the mean difference per
+  pixel was 0.16 to 0.41 (of 255), below the 0.43 to 0.69 between two
+  runs of the same build (TAA and timing).
+- **Next to the photos** the scene is darker: there, street lamps and
+  floodlights light the facades and quays. The sky's colour and the
+  windows' warmth are close.
+- **Known look issues:** on some near windows the glass reflects the sky
+  with a diagonal seam, which is also there by day and was only hidden by
+  the black night (our reading: the shells' triangles have slightly
+  different normals); the moon has no disc; the plain look at night is
+  dark.
+
+**Cost** (RTX 3070, Vulkan, 1920 × 1080 without vsync, high). The client
+has no benchmark mode on main, so a temporary patch (not committed) logged
+Bevy's GPU time per pass and the frame time; each figure is the median of
+the last six one-second averages of a 12-second run, and main's client
+and this one ran alternately, three times each, at Lindenhof (18:00 in
+June), Hirschenplatz (18:00 in December) and Rathausbrücke (22:30 in
+June):
+- **By day** nothing measurable: frame 5.4 to 6.0 ms with both, GPU time
+  4.0 to 4.2 ms against 4.0 ms.
+- **At night** GPU time rises by 0.1 to 0.3 ms a frame: about 0.11 ms for
+  the moon in the atmosphere's scattering, 0.05 to 0.09 ms for the main
+  pass with lit windows and moonlight, 0.01 to 0.04 ms for the glow dome.
+  Frame time stays within run-to-run noise (0 to 0.4 ms more). The lit
+  windows alone match the prototype's 0.04 to 0.06 ms.
+- **Found on the way:** the first version's non-bindless extension cost 3
+  to 7 ms of frame time and 0.2 to 0.6 ms of GPU time (in Bevy's uniform
+  allocation and bin unpacking passes); and a moon light with no light
+  still cost 0.11 ms in the atmosphere until it was hidden.
+
+**Checks:**
+- `cargo fmt --all --check` and `cargo clippy --workspace --all-targets
+  --locked -- -D warnings`: pass.
+- `cargo test --workspace --locked`: 263 passed, 1 ignored. New in
+  `op_client`: the window choice is stable (with known hash values);
+  over 16,000 windows the share lit matches the curve within 2 points at
+  four times of 21 December, and windows only switch on as the share
+  rises; lit windows average their kind's luminance; no repeat (two walls
+  of one style, two buildings, bays 16 apart and storeys 8 apart, and two
+  nights each agree about half the time at a share of one half, as
+  independent windows do); the shader holds the same constants; a sliver
+  keeps its wall's seed; the glow lies exactly on the textures' glass; the
+  shares by hour and day type; the moon within a quarter of a degree of
+  JPL Horizons on four dates, its phase within 3 points; the exposure
+  unchanged down to 1° below the horizon and EV100 3 at both night stops;
+  moonlight by phase and height; the glow brightest at the horizon.
+- `op_replay check fixtures/replays/sample.oprep`: ok, 20 checkpoints,
+  final state `212bd353…`, unchanged; the client plays the replay and
+  matches every checkpoint.
+
+**Still open:**
+- **ADR-0022's open question 2:** the final night values, by screenshots
+  at EV100 3 and 4 against the 2025 photos; this entry's values are
+  starting values.
+- **Trees and lamps** wait for RFC 0004 (Draft). When lamps come, the
+  ambient fill should drop so that their pools show.
+- **Open question 8:** one curve for all buildings; classes after
+  ADR-0019.
+- **The plain look at night** is dark, as before. A neutral fill in F2
+  would make it readable, but it would be light the data does not hold.
+- **A moon disc** with its phase, if wanted.
+
 ### Navigation-data RFC drafted (2026-11-25)
 
 [RFC 0005](../rfcs/0005-navigation-data.md) drafts the world layer for
@@ -1717,3 +1886,4 @@ prototype.
    counts shape a curve, and a reviewed source for the holiday list.
 8. The navigation ingest's ADR, to be drafted: tags, the new query,
    the matching, and the rules for estimated values.
+

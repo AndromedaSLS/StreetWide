@@ -52,6 +52,7 @@ use crate::pick::{PickIndex, PickStats};
 use crate::scene::{PlayerCamera, SceneSystems, Shown, asset_key};
 use crate::session::Session;
 use crate::travel::{Travel, View, letter};
+use crate::windows::WindowMaterial;
 
 /// `provenance.generator.name` of every asset the ingest makes (RFC 0002
 /// section 7; `GENERATOR` in `tools/ingest`).
@@ -1008,6 +1009,44 @@ pub fn highlighted(base: &StandardMaterial, class: Class, building: bool) -> Sta
     }
 }
 
+/// A material inspect mode can light up.
+trait Highlightable: Asset + Clone {
+    fn highlighted(&self, class: Class, building: bool) -> Self;
+}
+
+impl Highlightable for StandardMaterial {
+    fn highlighted(&self, class: Class, building: bool) -> Self {
+        highlighted(self, class, building)
+    }
+}
+
+/// A windowed wall keeps its lit windows while highlighted.
+impl Highlightable for WindowMaterial {
+    fn highlighted(&self, class: Class, building: bool) -> Self {
+        WindowMaterial {
+            base: highlighted(&self.base, class, building),
+            extension: self.extension.clone(),
+        }
+    }
+}
+
+/// The highlighted variant of a material, made once and kept.
+fn lit_variant<M: Highlightable>(
+    variants: &mut BTreeMap<(AssetId<M>, Class, bool), Handle<M>>,
+    materials: &mut Assets<M>,
+    base: &Handle<M>,
+    class: Class,
+    building: bool,
+) -> Handle<M> {
+    variants
+        .entry((base.id(), class, building))
+        .or_insert_with(|| {
+            let lit = materials.get(base).map(|m| m.highlighted(class, building));
+            lit.map_or_else(|| base.clone(), |m| materials.add(m))
+        })
+        .clone()
+}
+
 /// What the crosshair is on.
 pub struct Selected {
     pub target: Target,
@@ -1142,6 +1181,8 @@ struct Highlight {
     lit: Option<(Class, Vec<AssetKey>)>,
     entities: Vec<Entity>,
     variants: BTreeMap<(AssetId<StandardMaterial>, Class, bool), Handle<StandardMaterial>>,
+    /// The same for windowed walls.
+    window_variants: BTreeMap<(AssetId<WindowMaterial>, Class, bool), Handle<WindowMaterial>>,
     /// The highlighted variant of the detailed look's water, while lit: its
     /// ripples drift with the water's.
     water: Option<Handle<StandardMaterial>>,
@@ -1289,13 +1330,17 @@ fn print_on_click(
 /// class's glow added. No extra geometry, so nothing to fight the surface
 /// for depth. Works only when what is lit changes, or the scene or the
 /// looks do; and, while water is lit, keeps its ripples drifting.
+/// Windowed walls keep their lit windows while highlighted.
+#[allow(clippy::too_many_arguments)]
 fn highlight(
     inspect: Res<Inspect>,
     shown: Res<Shown>,
     set: Res<MaterialSet>,
     mut state: ResMut<Highlight>,
     mut materials: ResMut<Assets<StandardMaterial>>,
+    mut window_materials: ResMut<Assets<WindowMaterial>>,
     mut parts: Query<(&Looks, &mut MeshMaterial3d<StandardMaterial>)>,
+    mut windowed: Query<(&Looks<WindowMaterial>, &mut MeshMaterial3d<WindowMaterial>)>,
 ) {
     let want = inspect.selected().filter(|_| inspect.on && !inspect.paused);
     let same = match (&state.lit, want) {
@@ -1310,6 +1355,8 @@ fn highlight(
         for e in std::mem::take(&mut state.entities) {
             if let Ok((looks, mut material)) = parts.get_mut(e) {
                 material.0 = set.current(looks);
+            } else if let Ok((looks, mut material)) = windowed.get_mut(e) {
+                material.0 = set.current(looks);
             }
         }
         state.water = None;
@@ -1317,25 +1364,31 @@ fn highlight(
             let (class, building) = (s.description.class, s.description.kind.is_building());
             for key in &s.keys {
                 for &e in shown.entities(key) {
-                    let Ok((looks, mut material)) = parts.get_mut(e) else {
+                    if let Ok((looks, mut material)) = parts.get_mut(e) {
+                        let base = set.current(looks);
+                        let variant = lit_variant(
+                            &mut state.variants,
+                            &mut materials,
+                            &base,
+                            class,
+                            building,
+                        );
+                        if set.water() == Some(&base) {
+                            state.water = Some(variant.clone());
+                        }
+                        material.0 = variant;
+                    } else if let Ok((looks, mut material)) = windowed.get_mut(e) {
+                        let base = set.current(looks);
+                        material.0 = lit_variant(
+                            &mut state.window_variants,
+                            &mut window_materials,
+                            &base,
+                            class,
+                            building,
+                        );
+                    } else {
                         continue;
-                    };
-                    let base = set.current(looks);
-                    let variant = state
-                        .variants
-                        .entry((base.id(), class, building))
-                        .or_insert_with(|| {
-                            let lit = materials
-                                .get(&base)
-                                .map(|m| highlighted(m, class, building))
-                                .unwrap_or_default();
-                            materials.add(lit)
-                        })
-                        .clone();
-                    if set.water() == Some(&base) {
-                        state.water = Some(variant.clone());
                     }
-                    material.0 = variant;
                     state.entities.push(e);
                 }
             }

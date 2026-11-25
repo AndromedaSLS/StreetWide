@@ -33,6 +33,7 @@ use crate::pick::{NEAR_M, PickEntry, PickIndex};
 use crate::session::{EYE_HEIGHT, Session};
 use crate::travel::{Travel, View};
 use crate::water::{self, WaterSurface};
+use crate::windows::WindowMaterial;
 
 /// Meshes within this distance of the camera are loaded and shown (m).
 pub const RENDER_RADIUS_M: f32 = 600.0;
@@ -133,7 +134,8 @@ impl Plugin for ScenePlugin {
                 (
                     scene_keys,
                     apply_quality,
-                    materials::apply_look,
+                    materials::apply_look::<StandardMaterial>,
+                    materials::apply_look::<WindowMaterial>,
                     materials::drift_ripples,
                     follow_player,
                     stream_meshes,
@@ -184,9 +186,9 @@ fn scene_keys(
         set.detailed_on = !set.detailed_on;
         session.message = Some((
             if set.detailed_on {
-                "Detailed look (client-drawn textures and windows)".into()
+                "Detailed look (client-drawn textures, windows lit at night, moonlight and the city's glow)".into()
             } else {
-                "Plain look (the world data's palette colours)".into()
+                "Plain look (the world data's palette colours, no lit windows, moon or glow)".into()
             },
             4.0,
         ));
@@ -398,13 +400,18 @@ fn stream_meshes(
         let mut entities = Vec::new();
         for prim in drawn.nodes.iter().flat_map(|n| &n.primitives) {
             for (surface, part) in materials::parts(prim, w.origin_m, &w.look, &mut ground) {
-                let looks = set.looks(surface, prim.material, &w.look);
-                let mut entity = commands.spawn((
-                    Mesh3d(meshes.add(materials::mesh(part))),
-                    MeshMaterial3d(set.current(&looks)),
-                    looks,
-                    Transform::from_translation(w.offset),
-                ));
+                let mesh = Mesh3d(meshes.add(materials::mesh(part)));
+                let at = Transform::from_translation(w.offset);
+                // Windowed walls light some windows at night (`windows`).
+                let mut entity = match set.window_looks(surface, &w.look) {
+                    Some(looks) => {
+                        commands.spawn((mesh, MeshMaterial3d(set.current(&looks)), looks, at))
+                    }
+                    None => {
+                        let looks = set.looks(surface, prim.material, &w.look);
+                        commands.spawn((mesh, MeshMaterial3d(set.current(&looks)), looks, at))
+                    }
+                };
                 // Water lies on the ground: its shadow would fall on
                 // nothing you see, so it stays out of the shadow maps.
                 if surface == Surface::Water {
