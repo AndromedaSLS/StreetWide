@@ -15,7 +15,7 @@ from pathlib import Path
 import pytest
 from jsonschema import Draft202012Validator
 
-from tools.worldfmt import cjson, ids, schemas
+from tools.worldfmt import cjson, ids, points, schemas
 from tools.worldfmt.store import Store, read_file
 from tools.worldfmt.tests import fuzzing
 from tools.worldfmt.tests.fuzzing import (
@@ -155,6 +155,85 @@ def test_fuzz_schema_validation():
         assert isinstance(errors, list) and all(isinstance(e, str) for e in errors)
 
     run_cases("schemas.errors", 600, case)
+
+
+POINT_DOCUMENTS = [v for v in DOCUMENTS if v["format"] == "streetwide.points"]
+POINT_VALUES = [
+    None, True, 0, 1, -1, 64, 65, 999, 1000, 2999, 3000, 50_000, 50_001, 65_535, 65_536, 100_000, 100_001,
+    150_001, 2**53 - 1, 1.5, "", "Tilia", "tilia", "Tilia cordata", "Tilia  cordata", "Tilia cordata\n",
+    "Platanus × hispanica", "x" * 257, "deciduous", "broadleaved", "led", "pole", "street", "tree", "light",
+    "bench", "yaw", "height_mm", "adr-0015:yaw-from-orientierung:1", "adr-0015:yaw:0",
+    "streetwide:sample-trees:T-0", "streetwide:sample-lights:L-9", "osm:node:1", "osm::1", "a:b c",
+    "a:" + "x" * 254, [], ["yaw"], ["height_mm"], ["yaw", "yaw"], [0, 0, 0], [1, 2], {},
+    {"light": {"yaw": "adr-0015:yaw-from-orientierung:1"}}, {"light": {}},
+]
+ATTRIBUTE_NAMES = sorted(set(points.ATTRIBUTES["light"]) | set(points.ATTRIBUTES["tree"]))
+
+
+def _mutate_points(rng: Rng) -> dict:
+    """A golden points document with a few edits where its rules are: an
+    attribute, an id, a kind, an anchor, `estimated`, `rules`, points
+    copied, removed or swapped, or any edit of `mutate_json`."""
+    doc = json.loads(json.dumps(rng.choice(POINT_DOCUMENTS)))
+    for _ in range(1 + rng.below(3)):
+        pts = doc.get("points") if isinstance(doc, dict) else None
+        p = rng.choice(pts) if isinstance(pts, list) and pts else None
+        value = json.loads(json.dumps(rng.choice(POINT_VALUES)))
+        what = rng.below(8)
+        if what == 0 and isinstance(p, dict) and isinstance(p.get("attributes"), dict):
+            p["attributes"][rng.choice(ATTRIBUTE_NAMES)] = value
+        elif what in (1, 2, 4) and isinstance(p, dict):
+            p[("id", "kind", "", "", "estimated")[what]] = value
+        elif what == 3 and isinstance(p, dict) and isinstance(p.get("anchor_mm"), list) and p["anchor_mm"]:
+            p["anchor_mm"][rng.below(len(p["anchor_mm"]))] = value
+        elif what == 5 and isinstance(doc, dict):
+            doc["rules"] = value
+        elif what == 6 and isinstance(pts, list) and pts:
+            a, b = rng.below(len(pts)), rng.below(len(pts))
+            choice = rng.below(3)
+            if choice == 0:
+                pts.insert(b, json.loads(json.dumps(pts[a])))
+            elif choice == 1:
+                del pts[a]
+            else:
+                pts[a], pts[b] = pts[b], pts[a]
+        else:
+            doc = mutate_json(rng, doc, VALUES, edits=1)
+    return doc
+
+
+def test_fuzz_points_reader():
+    """points.problems takes any parsed value; points.parse takes any bytes
+    and returns a document only for canonical bytes without problems, which
+    `to_bytes` writes back unchanged, and which is a valid asset of the
+    layer of its kinds."""
+    assert len(POINT_DOCUMENTS) >= 2
+
+    def case(rng: Rng) -> None:
+        doc = _mutate_points(rng)
+        found = points.problems(doc)
+        assert isinstance(found, list) and all(isinstance(f, str) for f in found)
+        try:
+            data = cjson.dumps(doc)
+        except cjson.CanonicalError:
+            data = json.dumps(doc).encode("utf-8")
+        if rng.chance(20):
+            data = mutate_bytes(rng, data, CORPUS)
+        try:
+            with reading(len(data)):
+                parsed = points.parse(data)
+        except points.PointsError:
+            return
+        assert points.to_bytes(parsed) == data
+        source, b = points.source(parsed), points.bounds(parsed)
+        assert source is not None and b is not None
+        layers = {points.KIND_LAYERS[p["kind"]] for p in parsed["points"]}
+        tile = "17/68646/45903"
+        for layer in points.POINT_LAYERS + ("shell",):
+            fits = layer in points.POINT_LAYERS and layers == {layer}
+            assert (points.asset_problems(layer, f"tile:{tile}/{source}", tile, b, parsed) == []) == fits
+
+    run_cases("points.parse", 1000, case, memory=MEMORY)
 
 
 def test_fuzz_store_reads(tmp_path):

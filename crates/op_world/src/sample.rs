@@ -1,6 +1,8 @@
 //! A tiny hand-made world used as the world-format golden fixture
 //! (`fixtures/format/`). It exercises every document type and is small
-//! enough to read by eye. All of its content is fictional.
+//! enough to read by eye: a house, a ground plate, and two trees and two
+//! light points as points documents (RFC 0004). All of its content is
+//! fictional.
 
 use std::collections::BTreeMap;
 
@@ -10,6 +12,7 @@ use crate::glb::{self, GlbMesh, Material, Node, Primitive, mm_to_f32};
 use crate::id::ContentId;
 use crate::keys::TileKey;
 use crate::manifest::{AssetManifest, Collider, Generator, Layer, Physics, Provenance, Source};
+use crate::points::PointsDocument;
 use crate::store::{ObjectKind, Store};
 use crate::tile::{TileAsset, TileIndex};
 use crate::world::{AnchorE9, Region, Spawn, WorldManifest, WorldTile};
@@ -74,6 +77,31 @@ pub fn parse_mesh_specs(bytes: &[u8]) -> Result<BTreeMap<String, MeshSpec>> {
     Ok(serde_json::from_slice(bytes)?)
 }
 
+/// Parses `fixtures/format/points.json`: a points document per point layer,
+/// written as plain JSON (any key order, any whitespace), and a `comment`.
+/// Each document must be valid; its canonical bytes are what the fixture
+/// stores.
+pub fn parse_points_specs(bytes: &[u8]) -> Result<BTreeMap<Layer, PointsDocument>> {
+    let specs: BTreeMap<String, serde_json::Value> = serde_json::from_slice(bytes)?;
+    let mut out = BTreeMap::new();
+    for (key, value) in specs {
+        if key == "comment" {
+            continue;
+        }
+        let layer: Layer = serde_json::from_value(serde_json::Value::String(key.clone()))
+            .map_err(|_| Error::Invalid(format!("points.json: {key:?} is not a layer")))?;
+        if !layer.has_points() {
+            return Err(Error::Invalid(format!(
+                "points.json: the {key} layer holds no points"
+            )));
+        }
+        let doc: PointsDocument = serde_json::from_value(value)?;
+        doc.ensure_valid()?;
+        out.insert(layer, doc);
+    }
+    Ok(out)
+}
+
 pub const SAMPLE_TILE: &str = "17/68646/45908";
 const LICENSE: &str = "CC-BY-SA-4.0";
 const CREDIT: &str = "The StreetWide contributors";
@@ -99,8 +127,14 @@ fn provenance() -> Provenance {
 
 /// Writes the sample world into `store` and returns its world id.
 ///
-/// `meshes` must contain `house` (a shell) and `ground` (terrain).
-pub fn build_sample_world(store: &Store, meshes: &BTreeMap<String, MeshSpec>) -> Result<ContentId> {
+/// `meshes` must contain `house` (a shell) and `ground` (terrain); `points`
+/// holds a points document for each point layer that has an asset
+/// (`fixtures/format/points.json`).
+pub fn build_sample_world(
+    store: &Store,
+    meshes: &BTreeMap<String, MeshSpec>,
+    points: &BTreeMap<Layer, PointsDocument>,
+) -> Result<ContentId> {
     let tile = TileKey::parse(SAMPLE_TILE)?;
     // Tile centre in the region frame at height 0 (RFC 0001 section 1,
     // geodetic -> ECEF -> ENU), rounded to the millimetre, with y = 0.
@@ -146,6 +180,48 @@ pub fn build_sample_world(store: &Store, meshes: &BTreeMap<String, MeshSpec>) ->
             content_id,
             license: LICENSE.into(),
             collider: Collider::Trimesh,
+            bounds_mm,
+        });
+    }
+    // Points (RFC 0004): one asset per point layer, visual only.
+    for (&layer, doc) in points {
+        let bytes = doc.to_bytes()?;
+        let content_id = store.write_object(&bytes, ObjectKind::Json)?;
+        let source = doc
+            .source()
+            .ok_or_else(|| Error::Invalid(format!("{} points have no source", layer.as_str())))?;
+        let feature_id = format!("tile:{tile}/{source}");
+        let bounds_mm = doc
+            .bounds()
+            .ok_or_else(|| Error::Invalid(format!("{} has no points", layer.as_str())))?;
+        let manifest = AssetManifest {
+            format: AssetManifest::FORMAT.into(),
+            contract_version: CONTRACT_VERSION.into(),
+            content_id,
+            size_bytes: bytes.len() as u64,
+            layer,
+            feature_id: feature_id.clone(),
+            tile,
+            bounds_mm,
+            physics: Physics {
+                collider: Collider::None,
+            },
+            fictional: true,
+            parent_version_id: None,
+            provenance: provenance(),
+        };
+        let problems = doc.asset_problems(layer, &feature_id, tile, &bounds_mm);
+        if !problems.is_empty() {
+            return Err(Error::Invalid(problems.join("; ")));
+        }
+        let manifest_id = store.write_object(&manifest.to_bytes()?, ObjectKind::Json)?;
+        assets.push(TileAsset {
+            layer,
+            feature_id,
+            manifest_id,
+            content_id,
+            license: LICENSE.into(),
+            collider: Collider::None,
             bounds_mm,
         });
     }

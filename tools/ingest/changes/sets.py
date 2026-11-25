@@ -34,10 +34,10 @@ from tools.ingest.changes.classify import Item, Unit
 from tools.ingest.changes.common import InternalError, PlanError, clip, counted, joined, show, text_order
 from tools.ingest.changes.holds import HoldResult, is_decision_unit
 from tools.ingest.changes.stores import SharedObjects, StoreView
-from tools.worldfmt import cjson
+from tools.worldfmt import cjson, points
 from tools.worldfmt.changes import (
-    CONTRIBUTION_CONTRACT_VERSION, FORMAT, INGEST_AUTHOR, MAX_CHANGES, MAX_TEXT_CHARS, ChangeError, Objects,
-    apply, sort_key, to_bytes,
+    CONTRIBUTION_CONTRACT_VERSION, FORMAT, INGEST_AUTHOR, MAX_CHANGES, MAX_TEXT_CHARS, POINT_LAYERS, ChangeError,
+    Objects, apply, sort_key, to_bytes,
 )
 from tools.worldfmt.ids import content_id, hex_of
 from tools.worldfmt.store import Store
@@ -108,14 +108,33 @@ def object_path(cid: str, ext: str) -> str:
 
 def check_content(item: Item, new: StoreView) -> None:
     """What the gate checks of a new version's content when it reads the
-    manifest: the content hashes to its id and has `size_bytes` bytes, and
-    a mesh reads under the strict glb profile and spans the manifest's
-    `bounds_mm`. Otherwise the gate could not read the manifest, and the
-    plan would predict ids that no gate run gives. A mesh that the current
-    version of the key already has is the canonical store's, so only the
-    bounds are compared. Raises PlanError naming the asset."""
-    ext, _ = new.content(item.new)
-    if ext != "glb":
+    manifest: the content hashes to its id and has `size_bytes` bytes; its
+    kind is the layer's (RFC 0004 section 6: a points document, `.json`, in
+    `vegetation` and `street_objects`, a mesh, `.glb`, elsewhere); a mesh
+    reads under the strict glb profile and spans the manifest's
+    `bounds_mm`; a points document is valid and agrees with its manifest
+    (kinds of the layer, the feature id's source, the anchors' bounds).
+    Otherwise the gate could not read the manifest, and the plan would
+    predict ids that no gate run gives. A mesh that the current version of
+    the key already has is the canonical store's, so only the bounds are
+    compared. Raises PlanError naming the asset."""
+    ext, data = new.content(item.new)
+    where = f"the new store: tile {item.new.tile}, {show(item.key)}"
+    layer = item.new.layer
+    wanted = "json" if layer in POINT_LAYERS else "glb"
+    if ext != wanted:
+        kind = "a points document" if wanted == "json" else "a mesh"
+        raise PlanError(f"{where}: its content is a .{ext} object, but a {layer} asset's content is {kind} "
+                        f"(.{wanted})")
+    if wanted == "json":
+        try:
+            doc = points.parse(data)
+        except points.PointsError as e:
+            raise PlanError(f"{where}: points document: {e}") from e
+        m = item.new.manifest
+        found = points.asset_problems(layer, m["feature_id"], m["tile"], m["bounds_mm"], doc)
+        if found:
+            raise PlanError(f"{where}: {'; '.join(found)}")
         return
     if item.cur is not None and item.cur.content_id == item.new.content_id:
         bounds = item.cur.manifest["bounds_mm"]

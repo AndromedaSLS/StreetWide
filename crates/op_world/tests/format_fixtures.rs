@@ -5,24 +5,66 @@
 
 mod common;
 
-use op_world::Store;
-use op_world::sample::{build_sample_world, parse_mesh_specs};
+use std::collections::BTreeMap;
+
+use op_world::sample::{MeshSpec, build_sample_world, parse_mesh_specs, parse_points_specs};
 use op_world::validate::validate_store;
+use op_world::{ContentId, Layer, ObjectKind, PointsDocument, Store};
+
+fn specs() -> (BTreeMap<String, MeshSpec>, BTreeMap<Layer, PointsDocument>) {
+    let dir = common::format_dir();
+    (
+        parse_mesh_specs(&std::fs::read(dir.join("meshes.json")).unwrap()).expect("meshes.json"),
+        parse_points_specs(&std::fs::read(dir.join("points.json")).unwrap()).expect("points.json"),
+    )
+}
 
 #[test]
 fn fixture_world_is_valid() {
     let report = validate_store(&common::fixture_store());
     assert!(report.errors.is_empty(), "errors: {:#?}", report.errors);
-    assert_eq!((report.tiles, report.assets, report.triangles), (1, 2, 12));
+    assert_eq!(
+        (report.tiles, report.assets, report.triangles, report.points),
+        (1, 4, 12, 4)
+    );
     assert_eq!(report.world_id, Some(common::expected_world_id()));
+}
+
+/// The golden points documents (RFC 0004): `points.json` written
+/// canonically gives the pinned ids, and the committed objects are those
+/// bytes. `tools/worldfmt/tests/test_points.py` checks the same in Python.
+#[test]
+fn golden_points_documents_have_their_pinned_ids() {
+    let (_, points) = specs();
+    let pinned = common::expected_points_ids();
+    assert_eq!(
+        points.keys().collect::<Vec<_>>(),
+        [&Layer::StreetObjects, &Layer::Vegetation]
+    );
+    assert_eq!(
+        pinned.keys().collect::<Vec<_>>(),
+        points.keys().collect::<Vec<_>>()
+    );
+    let store = common::fixture_store();
+    for (layer, doc) in &points {
+        let bytes = doc.to_bytes().unwrap();
+        let id = ContentId::of(&bytes);
+        assert_eq!(id, pinned[layer], "{layer:?}");
+        assert_eq!(doc.id().unwrap(), id);
+        let committed = store.read_object(&id, ObjectKind::Json).unwrap();
+        assert!(
+            committed == bytes,
+            "{layer:?}: the committed document differs"
+        );
+        assert_eq!(&PointsDocument::from_bytes(&committed).unwrap(), doc);
+    }
 }
 
 #[test]
 fn fixture_world_regenerates_byte_for_byte() {
-    let specs = parse_mesh_specs(&std::fs::read(common::format_dir().join("meshes.json")).unwrap())
-        .expect("meshes.json parses");
+    let (specs, points) = specs();
     let out = common::temp_dir("regenerate");
-    let id = build_sample_world(&Store::new(&out), &specs).expect("sample world builds");
+    let id = build_sample_world(&Store::new(&out), &specs, &points).expect("sample world builds");
     assert_eq!(id, common::expected_world_id());
 
     let committed = common::format_dir().join("world");
@@ -38,12 +80,11 @@ fn fixture_world_regenerates_byte_for_byte() {
 
 #[test]
 fn building_twice_gives_identical_ids() {
-    let specs = parse_mesh_specs(&std::fs::read(common::format_dir().join("meshes.json")).unwrap())
-        .unwrap();
+    let (specs, points) = specs();
     let a = common::temp_dir("twice-a");
     let b = common::temp_dir("twice-b");
-    let id_a = build_sample_world(&Store::new(&a), &specs).unwrap();
-    let id_b = build_sample_world(&Store::new(&b), &specs).unwrap();
+    let id_a = build_sample_world(&Store::new(&a), &specs, &points).unwrap();
+    let id_b = build_sample_world(&Store::new(&b), &specs, &points).unwrap();
     assert_eq!(id_a, id_b);
     std::fs::remove_dir_all(&a).ok();
     std::fs::remove_dir_all(&b).ok();

@@ -6,16 +6,23 @@
 //! Its geometry is derived from the swisstopo shell, so it carries the
 //! combined licence `CC-BY-SA-4.0 AND LicenseRef-swisstopo-OGD` and both
 //! credits: exactly what RFC 0002 G4 and G5 ask of such a contribution.
+//!
+//! [`sample_points_draft`] makes a baseline refresh with a points asset
+//! (RFC 0004), for the gate's tests of the point layers.
 
+use std::collections::BTreeMap;
 use std::path::Path;
 
-use crate::contrib::{CONTRIBUTION_CONTRACT_VERSION, Change, ChangeSet, Op};
+use crate::contrib::{CONTRIBUTION_CONTRACT_VERSION, Change, ChangeSet, INGEST_AUTHOR, Op};
 use crate::gate::{COLLECTIVE_CREDIT, CONTRIBUTION_LICENSE, CONTRIBUTIONS_DATASET};
 use crate::glb::{self, GlbMesh, Material, Node, Primitive, f32_to_mm, mm_to_f32};
 use crate::id::ContentId;
 use crate::keys::TileKey;
 use crate::limits::Document;
 use crate::manifest::{AssetManifest, Collider, Generator, Layer, Physics, Provenance, Source};
+use crate::points::{
+    Attributes, LightAttributes, Point, PointKind, PointsDocument, TreeAttributes,
+};
 use crate::store::{ObjectKind, Store};
 use crate::tile::TileIndex;
 use crate::{CONTRACT_VERSION, Error, Result};
@@ -164,6 +171,185 @@ pub fn write_bundle(draft: &mut Draft, bundle_dir: &Path) -> Result<ContentId> {
         .mesh
         .bounds_mm()
         .ok_or_else(|| Error::Invalid("empty mesh".into()))?;
+    let manifest_id = bundle.write_object(&draft.manifest.to_bytes()?, ObjectKind::Json)?;
+    for c in &mut draft.change.changes {
+        if c.op != Op::Remove {
+            c.manifest_id = Some(manifest_id);
+        }
+    }
+    let change = draft.change.to_bytes()?;
+    std::fs::write(bundle_dir.join("change.json"), &change)?;
+    Ok(ContentId::of(&change))
+}
+
+/// A baseline refresh that adds one points asset (RFC 0004) to the first
+/// tile of a world, before it is written: for tests of the gate's rules
+/// for the point layers. Not committed as a fixture.
+pub struct PointsDraft {
+    pub change: ChangeSet,
+    pub manifest: AssetManifest,
+    pub doc: PointsDocument,
+}
+
+/// How many points [`sample_points_draft`] makes.
+pub const SAMPLE_POINTS: usize = 3;
+
+/// A refresh by `streetwide:ingest` adding a points asset in `layer` (trees
+/// in `vegetation`, light points in `street_objects`) to the first tile of
+/// the world in `world_dir`, with [`SAMPLE_POINTS`] points anchored exactly
+/// on vertices of that tile's terrain: so every anchor lies on the ground
+/// (G8). The points are fictional: source `streetwide:sample-trees` or
+/// `streetwide:sample-lights`. The first light has an estimated yaw.
+pub fn sample_points_draft(world_dir: &Path, layer: Layer) -> Result<PointsDraft> {
+    let world = Store::new(world_dir);
+    let (world_id, manifest) = world.read_world()?;
+    let wt = manifest
+        .tiles
+        .first()
+        .ok_or_else(|| Error::Invalid("the world has no tile".into()))?;
+    let index = TileIndex::from_bytes(&world.read_document(&wt.tile_id, Document::TileIndex)?)?;
+    let terrain = index
+        .assets
+        .iter()
+        .find(|a| a.layer == Layer::Terrain)
+        .ok_or_else(|| Error::Invalid(format!("tile {} has no terrain", wt.tile)))?;
+    let mesh = glb::read(&world.read_object(&terrain.content_id, ObjectKind::Glb)?)?;
+    let mut vertices: Vec<[i64; 3]> = mesh
+        .nodes
+        .iter()
+        .flat_map(|n| &n.primitives)
+        .flat_map(|p| &p.positions)
+        .map(|v| v.map(|c| f32_to_mm(c).unwrap_or_default()))
+        .collect();
+    vertices.sort_unstable();
+    vertices.dedup();
+    let anchors: Vec<[i64; 3]> = (1..=SAMPLE_POINTS)
+        .map(|k| vertices[k * vertices.len() / (SAMPLE_POINTS + 1)])
+        .collect();
+    let (kind, source) = match layer {
+        Layer::Vegetation => (PointKind::Tree, "streetwide:sample-trees"),
+        Layer::StreetObjects => (PointKind::Light, "streetwide:sample-lights"),
+        other => {
+            return Err(Error::Invalid(format!(
+                "the {} layer holds no points",
+                other.as_str()
+            )));
+        }
+    };
+    let points: Vec<Point> = anchors
+        .iter()
+        .enumerate()
+        .map(|(k, &anchor_mm)| {
+            let (attributes, estimated) = match kind {
+                PointKind::Tree => (
+                    Attributes::Tree(TreeAttributes {
+                        genus: Some("Tilia".into()),
+                        species: Some("Tilia cordata".into()),
+                        crown_diameter_mm: Some(6_000 + 1_000 * k as i64),
+                        ..TreeAttributes::default()
+                    }),
+                    vec![],
+                ),
+                PointKind::Light => (
+                    Attributes::Light(LightAttributes {
+                        yaw: (k == 0).then_some(16_384),
+                        ..LightAttributes::default()
+                    }),
+                    if k == 0 { vec!["yaw".into()] } else { vec![] },
+                ),
+            };
+            Point {
+                id: format!("{source}:P-{k}"),
+                kind,
+                anchor_mm,
+                attributes,
+                estimated,
+            }
+        })
+        .collect();
+    let mut rules = BTreeMap::new();
+    if kind == PointKind::Light {
+        rules.insert(
+            "light".to_string(),
+            BTreeMap::from([(
+                "yaw".to_string(),
+                "adr-0015:yaw-from-orientierung:1".to_string(),
+            )]),
+        );
+    }
+    let doc = PointsDocument {
+        format: PointsDocument::FORMAT.into(),
+        contract_version: CONTRACT_VERSION.into(),
+        points,
+        rules,
+    };
+    let feature_id = format!("tile:{}/{source}", wt.tile);
+    let manifest = AssetManifest {
+        format: AssetManifest::FORMAT.into(),
+        contract_version: CONTRACT_VERSION.into(),
+        content_id: ContentId::of(&[]),
+        size_bytes: 1,
+        layer,
+        feature_id: feature_id.clone(),
+        tile: wt.tile,
+        bounds_mm: doc
+            .bounds()
+            .ok_or_else(|| Error::Invalid("no points".into()))?,
+        physics: Physics {
+            collider: Collider::None,
+        },
+        fictional: true,
+        parent_version_id: None,
+        provenance: Provenance {
+            license: CONTRIBUTION_LICENSE.into(),
+            attribution: vec![COLLECTIVE_CREDIT.into()],
+            sources: vec![Source {
+                dataset: "StreetWide sample points".into(),
+                version: CONTRACT_VERSION.into(),
+                license: CONTRIBUTION_LICENSE.into(),
+                attribution: COLLECTIVE_CREDIT.into(),
+                url: "https://github.com/AndromedaSLS/StreetWide".into(),
+                source_ids: doc.points.iter().map(|p| p.id.clone()).collect(),
+            }],
+            generator: Generator {
+                name: "op_world sample points".into(),
+                version: CONTRACT_VERSION.into(),
+            },
+        },
+    };
+    let change = ChangeSet {
+        format: ChangeSet::FORMAT.into(),
+        contract_version: CONTRIBUTION_CONTRACT_VERSION.into(),
+        base_world_id: world_id,
+        title: "Sample points (test)".into(),
+        author: INGEST_AUTHOR.into(),
+        rationale: "Fictional points on the terrain's vertices, to test the gate's rules for the point layers. Not real data.".into(),
+        changes: vec![Change {
+            op: Op::Add,
+            tile: wt.tile,
+            layer,
+            feature_id,
+            parent_version_id: None,
+            manifest_id: None,
+        }],
+    };
+    Ok(PointsDraft {
+        change,
+        manifest,
+        doc,
+    })
+}
+
+/// Writes a points draft as a bundle into `bundle_dir`: the points document
+/// (written canonically, whatever rule it breaks, so tests can break them),
+/// then the manifest with the document's content id and size (its bounds
+/// and feature id are left as the draft has them), then the change set,
+/// whose changes that carry a manifest point to it. Returns the change id.
+pub fn write_points_bundle(draft: &mut PointsDraft, bundle_dir: &Path) -> Result<ContentId> {
+    let bundle = Store::new(bundle_dir);
+    let bytes = crate::cjson::to_canonical(&draft.doc)?;
+    draft.manifest.content_id = bundle.write_object(&bytes, ObjectKind::Json)?;
+    draft.manifest.size_bytes = bytes.len() as u64;
     let manifest_id = bundle.write_object(&draft.manifest.to_bytes()?, ObjectKind::Json)?;
     for c in &mut draft.change.changes {
         if c.op != Op::Remove {

@@ -24,7 +24,8 @@ def json_documents() -> list[Path]:
 
 
 def test_fixture_has_expected_files() -> None:
-    assert len(json_documents()) == 4
+    # 4 manifests, a tile index, 2 points documents (RFC 0004) and the world.
+    assert len(json_documents()) == 8
     assert len(sorted(WORLD_DIR.rglob("*.glb"))) == 2
 
 

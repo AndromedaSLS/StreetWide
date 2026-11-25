@@ -70,10 +70,11 @@ fn validate(dir: &Path) -> ExitCode {
         .world_id
         .map_or_else(|| "-".to_string(), |id| id.to_string());
     println!(
-        "world {world}: {} tile(s), {} asset(s), {} triangle(s), {} error(s)",
+        "world {world}: {} tile(s), {} asset(s), {} triangle(s), {} point(s), {} error(s)",
         report.tiles,
         report.assets,
         report.triangles,
+        report.points,
         report.errors.len()
     );
     if report.is_ok() {

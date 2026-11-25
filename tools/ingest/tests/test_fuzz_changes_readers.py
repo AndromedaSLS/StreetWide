@@ -659,7 +659,7 @@ def passing_report(current: Path, bundle: Path) -> dict:
     checks = [{"id": f"G{n}", "name": name, "outcome": outcomes.get(f"G{n}", "pass"),
                "details": [f"{w}: baseline refresh by {INGEST_AUTHOR}; a maintainer reviews it" for w in what]
                if n == 3 else []} for n, name in enumerate(names, 1)]
-    return {"format": "streetwide.check", "contract_version": "0.1.0", "gate_version": "0.1.3",
+    return {"format": "streetwide.check", "contract_version": "0.1.0", "gate_version": "0.1.4",
             "change_id": content_id(change_bytes), "world_id": world_id, "candidate_world_id": candidate.world_id,
             "passed": True, "checks": checks}
 

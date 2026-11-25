@@ -54,6 +54,9 @@ pub fn rank(layer: Layer) -> u8 {
         // On a building's walls, and (provisionally) what stands in front
         // of them.
         Layer::Facade | Layer::Furniture | Layer::Interactivity => TOP_RANK,
+        // Trees and light points (RFC 0004) stand on everything. They are
+        // points documents, not meshes, so nothing draws or picks them yet.
+        Layer::StreetObjects | Layer::Vegetation => TOP_RANK,
         Layer::Shell | Layer::Interior => 3,
         // Street ribbons and bridge decks lie on the terrain.
         Layer::Transport => 2,

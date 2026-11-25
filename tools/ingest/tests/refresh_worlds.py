@@ -1,11 +1,13 @@
 """Small synthetic world stores and world logs for the refresh planner's
 tests (ADR-0020).
 
-- Meshes: boxes and terrain grids, written by `tools.worldfmt.glb`.
+- Meshes: boxes and terrain grids, written by `tools.worldfmt.glb`; and
+  points documents (RFC 0004), written by `tools.worldfmt.points`.
 - Assets: manifests in the ingest's style (`swiss_shell`, `osm_shell`,
   `terrain`, `ribbon`, `deck`, `water`, with OpenStreetMap and swissALTI3D
-  sources like tools/ingest/pipeline.py writes them) or in a contribution's
-  style (`facade`, `contributed`).
+  sources like tools/ingest/pipeline.py writes them; `trees`, a points
+  asset of fictional register trees) or in a contribution's style
+  (`facade`, `contributed`).
 - Worlds: `World` writes manifests, meshes, tile indexes and `world.json`,
   over up to four tiles of one region with their own origins (both
   committed world fixtures have one tile only).
@@ -26,7 +28,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 
 from tools.ingest.changes.plan import Plan, make_plan
-from tools.worldfmt import cjson, glb, log as worldlog, schemas
+from tools.worldfmt import cjson, glb, log as worldlog, points, schemas
 from tools.worldfmt.changes import INGEST_AUTHOR, Objects, apply, parse, sort_key, tile_xy, to_bytes
 from tools.worldfmt.ids import content_id
 from tools.worldfmt.store import Store
@@ -68,8 +70,11 @@ REVIEW = {"reviewer": "github:reviewer", "verdict": "better", "notes": "Checked 
 
 @dataclass(frozen=True)
 class Mesh:
+    """An asset's content: a glb mesh, or (`ext` "json") a points document."""
+
     data: bytes
     bounds: dict
+    ext: str = "glb"
 
 
 def _mesh(name: str, material: str, positions: list[tuple[int, int, int]], indices: list[int]) -> Mesh:
@@ -229,7 +234,7 @@ class Asset:
         return dataclasses.replace(self, **changes)
 
     def write_to(self, store: Store) -> str:
-        store.write_object(self.mesh.data, "glb")
+        store.write_object(self.mesh.data, self.mesh.ext)
         return store.write_object(self.manifest_bytes, "json")
 
 
@@ -275,6 +280,39 @@ def water(tile: str = A, lo=(120_000, GROUND_MM - 2_000, 120_000), hi=(190_000, 
     fid = f"tile:{tile}"
     return Asset("water", fid, tile, box_mesh(fid, lo, hi, "water"), "none", OSM_ON_TERRAIN,
                  (osm(version, ["r7"]), dem(item)))
+
+
+TREES_SOURCE = "stadt-zuerich:baumkataster"
+"""The source of `trees`' points: fictional numbers in the register's form."""
+
+
+def tree_points(anchors: Sequence[Sequence[int]], *, genus: str = "Tilia", first: int = 1) -> Mesh:
+    """A points document of trees at `anchors` (tile frame), numbered from
+    `first`, as content."""
+    doc = {
+        "format": "streetwide.points", "contract_version": "0.1.0", "rules": {},
+        "points": [
+            {"id": f"{TREES_SOURCE}:T-{first + k:04d}", "kind": "tree", "anchor_mm": list(a), "estimated": [],
+             "attributes": {**{name: None for name in points.ATTRIBUTES["tree"]}, "genus": genus}}
+            for k, a in enumerate(anchors)
+        ],
+    }
+    data = points.to_bytes(doc)
+    return Mesh(data, points.bounds(doc), "json")
+
+
+def trees(tile: str = A, anchors: Sequence[Sequence[int]] = ((50_000, GROUND_MM, 150_000), (60_000, GROUND_MM, 150_000)),
+          *, genus: str = "Tilia", first: int = 1, version: str = "2026-11-22", item=DEM_2026) -> Asset:
+    """A `vegetation` asset of register trees on flat ground, placed on the
+    swissALTI3D terrain, as ADR-0015 describes the Zurich ingest. Point ids
+    are unique per layer across a world: give each tile's trees their own
+    `first` number."""
+    content = tree_points(anchors, genus=genus, first=first)
+    register = source("Baumkataster", version, "CC0-1.0", "Quelle: Stadt Zürich",
+                      "https://data.stadt-zuerich.ch/dataset/geo_baumkataster",
+                      [p["id"] for p in cjson.loads(content.data)["points"]])
+    return Asset("vegetation", f"tile:{tile}/{TREES_SOURCE}", tile, content, "none",
+                 f"CC0-1.0 AND {SWISSTOPO}", (register, dem(item)))
 
 
 def facade(shell: Asset, author: str = "github:alice", grow: int = 30) -> Asset:

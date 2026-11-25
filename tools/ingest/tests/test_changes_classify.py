@@ -6,11 +6,13 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from tools.ingest.changes.common import Box, overlap_area, overlaps, touches
+import pytest
+
+from tools.ingest.changes.common import Box, PlanError, overlap_area, overlaps, touches
 from tools.ingest.changes.stores import content_key
 from tools.ingest.tests.refresh_worlds import (
     A, B, D, DEM_2027, GROUND_MM, OSM_V2, Scenario, World, deck, emitted, held, moved_box, osm_shell, ribbon,
-    swiss_shell, terrain, water,
+    swiss_shell, terrain, trees, water,
 )
 from tools.worldfmt import cjson
 from tools.worldfmt.ids import content_id
@@ -321,13 +323,24 @@ def test_content_keeps_its_extension(tmp_path: Path) -> None:
     # RFC 0004's point documents are `.json` content: the bundle copies the
     # content under the extension the new store gives it, never assuming glb.
     sc = Scenario.start(tmp_path, district())
-    added = swiss_shell(9, lo=(150_000, GROUND_MM, 20_000), hi=(160_000, GROUND_MM + 8_000, 30_000))
+    added = trees()
     root = sc.write_new(district().put(added))
-    glb_path = Store(root).object_path(added.content_id, "glb")
     json_path = Store(root).object_path(added.content_id, "json")
-    glb_path.rename(json_path)
     plan = sc.plan(root)
     (s,) = plan.sets
     content = f"{s.path}/objects/{added.content_id[7:9]}/{added.content_id[7:]}"
     assert plan.files[content + ".json"] == json_path.read_bytes()
     assert content + ".glb" not in plan.files
+
+
+def test_content_is_the_layers(tmp_path: Path) -> None:
+    # The layer decides the content (RFC 0004 section 6), as the gate reads
+    # it: a mesh stored as .json, or a points document stored as .glb, is
+    # an error at plan time, not a set the gate refuses.
+    sc = Scenario.start(tmp_path, district())
+    shell = swiss_shell(9, lo=(150_000, GROUND_MM, 20_000), hi=(160_000, GROUND_MM + 8_000, 30_000))
+    for added, ext, other in ((shell, "glb", "json"), (trees(), "json", "glb")):
+        root = sc.write_new(district().put(added))
+        Store(root).object_path(added.content_id, ext).rename(Store(root).object_path(added.content_id, other))
+        with pytest.raises(PlanError, match=f"its content is a .{other} object, but a {added.layer} asset's content is"):
+            sc.plan(root)

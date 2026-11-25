@@ -5,6 +5,8 @@
 //! - [`keys`]: Web Mercator tile (z17) and region (z12) keys;
 //! - [`manifest`], [`tile`], [`world`]: asset manifests, tile indexes and
 //!   world manifests, mirroring the JSON Schemas in `schemas/`;
+//! - [`points`]: points documents, the content of assets in `vegetation`
+//!   and `street_objects` (RFC 0004);
 //! - [`limits`]: the size limit of each kind of JSON document;
 //! - [`glb`]: the StreetWide glb profile (reference writer, strict reader);
 //! - [`store`]: the content-addressed world directory;
@@ -24,6 +26,7 @@ pub mod keys;
 pub mod limits;
 pub mod manifest;
 pub mod merge;
+pub mod points;
 pub mod rules;
 pub mod sample;
 pub mod sample_change;
@@ -35,7 +38,8 @@ pub mod world;
 pub use error::{Error, Result};
 pub use id::ContentId;
 pub use keys::{RegionKey, TileKey};
-pub use manifest::{AssetManifest, BoundsMm, Collider, Layer};
+pub use manifest::{AssetManifest, BoundsMm, Collider, ContentKind, Layer};
+pub use points::PointsDocument;
 pub use store::{ObjectKind, Store};
 pub use tile::{TileAsset, TileIndex};
 pub use world::WorldManifest;

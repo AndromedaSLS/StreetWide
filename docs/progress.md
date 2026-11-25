@@ -2899,6 +2899,128 @@ ADR-0018's table gives.
   ADR, RFC, schema, world, fixture or replay changes; the simulation is
   untouched.
 
+### Point features: format and gate (2026-11-25, RFC 0004, phase 1)
+
+RFC 0004's format and gate are built, without the ingest (phase 2) and
+the client (phase 3). World format 0.1.0 is amended in place, as the RFC
+decided: no existing manifest, mesh or replay checkpoint changes.
+
+- **Layers:** `street_objects` (light points) and `vegetation` (trees),
+  with explicit serde names, sorted where their names sort (between
+  `shell` and `terrain`, and between `transport` and `water`). Both are
+  visual only (`collider: none`) and hold one asset per tile and source,
+  with the feature id `tile:17/{x}/{y}/{source}` of the asset's own tile.
+  The layer decides the content: a points document there, a glb mesh
+  elsewhere. Enforced in `common.schema.json` (`perTileId`), the
+  asset-manifest and tile-index schemas, `op_world` and
+  `tools/worldfmt` (`manifest_problems`).
+- **Points documents** (`op_world::points`, `tools/worldfmt/points.py`,
+  `schemas/points.schema.json`): canonical JSON, `objects/<aa>/<hex>.json`,
+  1 to 65,536 points of one source sorted by id; every attribute of the
+  kind, `null` when unknown, within RFC 0004's ranges; `estimated`
+  sorted, not null, each with its rule in `rules`, which names nothing no
+  point uses. Against its manifest: kinds of the layer, the feature id's
+  source, `bounds_mm` the anchors' exact bounds, `size_bytes` the
+  document's. Size limit: 64 MiB, the limit of every file (`limits`'s new
+  `Points` kind).
+- **Whole worlds:** `op_world validate` reads each asset's content by its
+  layer, checks point ids unique per layer across the world, and prints
+  the points it counts. Merges copy a points document as `.json`.
+  `op_stream` opens worlds with points: `WorldIndex::load_points` reads
+  them, `load_mesh` refuses them with a clear message, which the streamer
+  keeps as a failed load, so the client draws nothing for them; colliders
+  are unchanged. The only client change is a match arm in `pick::rank`.
+- **Gate 0.1.4** (RFC 0004 section 8):
+  - G3: a contribution to either layer fails ("fix it in the source");
+    a refresh is `review`, and G3's details list, for each point asset,
+    the points added, removed, moved and changed, and each tile's points
+    before and after;
+  - G7: points count towards no triangle budget; at most 5,000 points per
+    tile over both layers, where the change set changes points: a
+    contribution fails, a refresh gets `review`;
+  - G8: every anchor within 50 mm of its tile's terrain, measured
+    vertically at the anchor, exactly, from the terrain's millimetre
+    vertices (128-bit integers). No terrain below, or terrain licensed
+    `ODbL-1.0`, fails; any other mismatch fails a contribution and gives a
+    refresh `review`. A terrain replacement or removal lists the anchors
+    it would strand, for review. Bounded: more than 50,000,000 steps
+    fails as too complex to check.
+  - G9 and G10 never see points (collider `none`).
+- **Fixtures:** `fixtures/format` gains two fictional assets on its ground
+  plate, written from `points.json`: two trees (`vegetation`) and two
+  light points (`street_objects`, one yaw estimated). `expected.json` pins
+  the points documents (`4851ade9…` lights, `47307b05…` trees) and the new
+  world id `fdac2cbe…`; the house's and ground's manifests and meshes keep
+  their bytes. The facade sample's report changes only in
+  `gate_version`: report `86ba3650…`. `fixtures/world` and the sample
+  replay do not change.
+- **Planner:** points assets are assets of their layers; a tile's points
+  of one source are a per-tile asset, so removing them is held
+  (`per-tile-removal`). At plan time the content must be the layer's kind
+  and a points document must agree with its manifest, as the gate reads
+  it.
+- **Tests:** the reader's rejections in both languages with the same
+  messages (RFC 0004's list: unsorted ids, a wrong prefix, a kind in the
+  wrong layer, a trimesh collider, floats, omitted nulls, an estimate
+  without a rule, and more); schema and `op_world` reject the same
+  mutations; whole-world validation; the gate on refreshes and
+  contributions (G1, G3, G7, G8 with ODbL terrain, stranded anchors, a
+  merge); a planned points refresh through the real gate, with the ids
+  the plan predicts; `op_stream` and the facade tool on the format world,
+  which now has points. Fuzzing: a points target and a gate target on a
+  refresh with points (Rust), `points.parse` (Python), and points
+  documents as seeds of the whole-world target.
+
+Choices RFC 0004 left open, made conservatively:
+1. **Rule ids:** `adr-<4 digits>:<name>:<version>` (lowercase words with
+   hyphens, a version from 1 without leading zeros), at most 128
+   characters, as RFC 0004's example.
+2. **Species ("Latin binomial"):** a genus (`[A-Z][a-z]+`), then one or
+   more words after single spaces, without control characters
+   ("Platanus × hispanica" passes). Not checked against `genus`.
+   **Taxon:** text of 1 to 256 characters.
+3. **Estimates:** only a light's `yaw`, as the Decision says; a rule set
+   of a kind that names nothing (`{"light": {}}`) is refused.
+4. **One source per document** is checked in the document itself, and
+   again against the feature id.
+5. **`fictional`** is not constrained for point assets: RFC 0004 gives
+   its meaning for data, not a rule. The format fixture's points are
+   fictional (`true`), like the rest of it.
+6. **`source_ids`** are not compared with the point ids.
+7. **The golden points:** RFC 0004's "one tree and one light" cannot be
+   one asset (each kind belongs to one layer), so the fixture has one
+   asset per layer; the format world's id changes.
+8. **G8:** the vertical distance at the anchor (never shorter than the
+   distance to the surface), rounded up to the millimetre; an anchor fits
+   if any non-ODbL terrain triangle holding it horizontally (edges
+   included) is within 50 mm; an anchor over any ODbL triangle fails even
+   if other terrain holds it; triangles without horizontal extent are
+   skipped; every terrain asset of the tile counts as ground; vertices
+   farther than 10^11 mm from the origin are not ground; a terrain
+   removal strands every anchor, for review; the step limit fails.
+9. **G7:** the points budget counts the candidate tile, only where the
+   change set changes points.
+10. **G3's review aid:** "moved" is an anchor change, "changed" any
+    other change at the same anchor; each list shows about 900
+    characters of ids, then how many more.
+11. **Water ids** stay as they are: RFC 0004's grammar lets water take a
+    source later, and nothing tightens its ids now.
+
+Phase 2 (ingest, fixture tile) needs: write documents with
+`tools.worldfmt.points.to_bytes`, feature ids `tile:17/{x}/{y}/{source}`,
+`bounds_mm` from `points.bounds`, collider `none`; place each anchor on
+the tile's terrain mesh itself (G8 measures against that mesh, not the
+DEM), with the anchors' heights interpolated on its triangles and rounded
+to the millimetre; split refreshes by source under the 50-change cap;
+ATTRIBUTION.md rows and the licence-coverage check ADR-0015 asks for
+before any byte is ingested; then the fixture tile's two assets, the
+sample replay's header and the facade sample. Phase 3 (client) needs:
+`WorldIndex::load_points` in the streaming loop for the point layers
+instead of `load_mesh`, visibility from the anchors' bounds plus the
+objects' sizes (bounds cover anchors only), drawing (ADR-0022), and a
+travel landing that avoids trunks.
+
+
 | Check | Result |
 |---|---|
 | `cargo fmt --all --check`, `cargo clippy --workspace --all-targets --locked -- -D warnings` | pass |
@@ -2906,6 +3028,13 @@ ADR-0018's table gives.
 | `op_replay check fixtures/replays/sample.oprep` | 20/20 checkpoints, final `212bd353…`, unchanged |
 | The route, two runs a preset | 36 of 36 stops measured, exit code 0 (with the repeated high run) |
 | Screenshots of the first run of each preset | 18; the three looked at show the credit line naming the ODbL |
+
+| `cargo test --locked -p op_world -p op_replay -p op_kernel -p op_sim -p op_stream` | 218 passed |
+| `python -m pytest` | 867 passed, 100 skipped |
+| `STREETWIDE_GATE=1`, CI's gate step (`test_changes_gate.py`, `test_changes_fixture.py`, and `tools/worldfmt`'s `test_changes.py`, `test_log.py`, `test_glb_reader.py`) | 305 passed, 1 skipped |
+| Long fuzz campaigns of the new targets (`STREETWIDE_FUZZ_ITERS=40000`) | pass: Rust `points_documents`, `refreshes_with_points_through_the_gate` and `world_store_validation` (207 s); Python `test_fuzz_points_reader` (92 s) |
+| `op_world validate fixtures/world` | world `fd6446c2…`, 45 assets, 0 points, 0 errors, unchanged |
+| `op_replay check fixtures/replays/sample.oprep` | 20/20 checkpoints, final `212bd353…`, unchanged |
 
 ### The ODbL notices (2026-11-25, ADR-0019)
 

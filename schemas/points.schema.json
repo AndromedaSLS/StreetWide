@@ -1,0 +1,141 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "urn:streetwide:schema:points:0.1",
+  "title": "StreetWide points document (world format 0.1)",
+  "description": "The content of an asset in the vegetation or street_objects layer: the points of one source in one tile. See rfcs/0004-point-features.md sections 3 and 4. Rules JSON Schema cannot state are enforced by op_world and tools/worldfmt: points sorted by id without duplicates, one source for every point, estimated attributes sorted, not null and each with a rule, and rules that name only what some point estimates; and, against the asset's manifest, kinds in the asset's layer, the feature id's source, and bounds_mm equal to the anchors' bounds.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["contract_version", "format", "points", "rules"],
+  "properties": {
+    "format": { "const": "streetwide.points" },
+    "contract_version": { "$ref": "urn:streetwide:schema:common:0.1#/$defs/contractVersion" },
+    "points": {
+      "description": "1 to 65,536 points, sorted by id in byte order, without duplicates.",
+      "type": "array",
+      "minItems": 1,
+      "maxItems": 65536,
+      "items": { "$ref": "#/$defs/point" }
+    },
+    "rules": {
+      "description": "For each kind, its estimated attributes and the id of the rule that set each. It names nothing that no point estimates, and is {} when nothing is estimated. In format 0.1 only a light's yaw may be estimated.",
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "light": {
+          "type": "object",
+          "minProperties": 1,
+          "additionalProperties": false,
+          "properties": {
+            "yaw": { "$ref": "#/$defs/ruleId" }
+          }
+        }
+      }
+    }
+  },
+  "$defs": {
+    "pointId": {
+      "description": "The source's own id, {source}:{local id}: the local id is printable ASCII without spaces or colons, never lowercased or trimmed.",
+      "type": "string",
+      "maxLength": 256,
+      "pattern": "^[a-z][a-z0-9_-]*(:[a-z0-9][a-z0-9_-]*)*:[!-9;-~]+$"
+    },
+    "ruleId": {
+      "description": "The id of a rule that sets estimated values, defined in a decision record: adr-<4 digits>:<name>:<version>, e.g. adr-0015:yaw-from-orientierung:1.",
+      "type": "string",
+      "maxLength": 128,
+      "pattern": "^adr-[0-9]{4}:[a-z0-9]+(-[a-z0-9]+)*:[1-9][0-9]*$"
+    },
+    "point": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["anchor_mm", "attributes", "estimated", "id", "kind"],
+      "properties": {
+        "id": { "$ref": "#/$defs/pointId" },
+        "kind": { "enum": ["light", "tree"] },
+        "anchor_mm": {
+          "description": "The ground at the object's position, relative to the tile origin. Never estimated.",
+          "$ref": "urn:streetwide:schema:common:0.1#/$defs/vec3mm"
+        },
+        "attributes": { "type": "object" },
+        "estimated": {
+          "description": "The attributes a rule set rather than the source: sorted and unique.",
+          "type": "array",
+          "uniqueItems": true,
+          "items": { "type": "string" }
+        }
+      },
+      "allOf": [
+        {
+          "if": { "required": ["kind"], "properties": { "kind": { "const": "tree" } } },
+          "then": {
+            "properties": {
+              "attributes": { "$ref": "#/$defs/treeAttributes" },
+              "estimated": { "maxItems": 0 }
+            }
+          }
+        },
+        {
+          "if": { "required": ["kind"], "properties": { "kind": { "const": "light" } } },
+          "then": {
+            "properties": {
+              "attributes": { "$ref": "#/$defs/lightAttributes" },
+              "estimated": { "items": { "enum": ["yaw"] } }
+            }
+          }
+        }
+      ]
+    },
+    "treeAttributes": {
+      "description": "A tree, anchored at the base of its trunk. Lengths in integer millimetres; null means unknown.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "crown_diameter_mm", "genus", "height_mm", "leaf_cycle", "leaf_type", "planted_year", "species", "taxon",
+        "trunk_circumference_mm"
+      ],
+      "properties": {
+        "crown_diameter_mm": { "type": ["integer", "null"], "minimum": 1, "maximum": 100000 },
+        "genus": { "type": ["string", "null"], "maxLength": 64, "pattern": "^[A-Z][a-z]+$" },
+        "height_mm": { "type": ["integer", "null"], "minimum": 1, "maximum": 150000 },
+        "leaf_cycle": { "enum": ["deciduous", "evergreen", "semi_deciduous", "semi_evergreen", null] },
+        "leaf_type": { "enum": ["broadleaved", "needleleaved", null] },
+        "planted_year": { "type": ["integer", "null"], "minimum": 1000, "maximum": 2999 },
+        "species": {
+          "description": "A Latin binomial: a genus, then one or more words, each after a single space.",
+          "type": ["string", "null"],
+          "maxLength": 128,
+          "pattern": "^[A-Z][a-z]+( [^ \\u0000-\\u001F\\u007F]+)+$"
+        },
+        "taxon": {
+          "description": "The source's full scientific name, with any cultivar.",
+          "type": ["string", "null"],
+          "minLength": 1,
+          "maxLength": 256,
+          "pattern": "^[^\\u0000-\\u001F\\u007F]*$"
+        },
+        "trunk_circumference_mm": { "type": ["integer", "null"], "minimum": 1, "maximum": 50000 }
+      }
+    },
+    "lightAttributes": {
+      "description": "A light point as lighting data records it. Lengths in integer millimetres; null means unknown.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["count", "light_height_mm", "method", "mount", "purpose", "yaw"],
+      "properties": {
+        "count": { "type": ["integer", "null"], "minimum": 1, "maximum": 64 },
+        "light_height_mm": { "type": ["integer", "null"], "minimum": 1, "maximum": 100000 },
+        "method": {
+          "enum": ["fluorescent", "gas", "incandescent", "led", "mercury", "metal_halide", "sodium", null]
+        },
+        "mount": { "enum": ["ceiling", "ground", "pole", "wall", "wire", null] },
+        "purpose": { "enum": ["street", "navigation", "decorative", null] },
+        "yaw": {
+          "description": "Where the head or arm points, in 1/65536 of a turn clockwise from north.",
+          "type": ["integer", "null"],
+          "minimum": 0,
+          "maximum": 65535
+        }
+      }
+    }
+  }
+}

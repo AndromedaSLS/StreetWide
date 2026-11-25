@@ -1,7 +1,9 @@
 //! Fuzzing of the world-format readers (roadmap M1, "Before announcing"):
-//! canonical JSON and every document type with its rules, the glb reader,
+//! canonical JSON and every document type with its rules, points documents
+//! (RFC 0004) against their asset's rules, the glb reader,
 //! the contribution documents and the world log, content ids, cell keys,
-//! store paths and reads, whole-store validation, world log directories
+//! store paths and reads, whole-store validation, the gate on contribution
+//! bundles and on refreshes with points, world log directories
 //! (`WorldLog::open` and `--log` merges), `--require-base` on bundles, and
 //! the merge commands' arguments.
 //!
@@ -31,13 +33,17 @@ use op_world::glb::{self, GlbMesh, Material, Node, Primitive, mm_to_f32};
 use op_world::keys::{RegionKey, TileKey};
 use op_world::limits::Document;
 use op_world::merge::{LOG_LOCK, MergeArgs, MergeOutput, WorldLog, baseline, require_base};
+use op_world::points::{Attributes, Point, PointKind, TreeAttributes};
 use op_world::rules;
 use op_world::sample::parse_mesh_specs;
+use op_world::sample_change::{sample_points_draft, write_points_bundle};
 use op_world::validate::{Report, validate_store};
-use op_world::{AssetManifest, ContentId, ObjectKind, Store, TileIndex, WorldManifest};
+use op_world::{
+    AssetManifest, ContentId, ObjectKind, PointsDocument, Store, TileIndex, WorldManifest,
+};
 use serde::Serialize;
 use serde::de::DeserializeOwned;
-use serde_json::Value;
+use serde_json::{Value, json};
 
 // ----------------------------------------------------------------- corpus --
 
@@ -301,6 +307,9 @@ fn check_documents(bytes: &[u8]) {
         let alone = verify_log(&[(id, d.clone())]);
         assert_eq!(alone.is_ok(), d.decision == Decision::Baseline);
     }
+    if let Ok(d) = PointsDocument::from_bytes(bytes) {
+        check_points_document(&d, id);
+    }
     consistent(
         bytes,
         Document::AssetManifest,
@@ -325,6 +334,9 @@ fn check_documents(bytes: &[u8]) {
     consistent(bytes, Document::MergeRecord, MergeRecord::problems, |b| {
         MergeRecord::from_bytes(b).is_ok()
     });
+    consistent(bytes, Document::Points, PointsDocument::problems, |b| {
+        PointsDocument::from_bytes(b).is_ok()
+    });
     // Mesh specs (`fixtures/format/meshes.json`, plain JSON): any mesh the
     // writer accepts reads back unchanged.
     if let Ok(specs) = parse_mesh_specs(bytes) {
@@ -336,6 +348,207 @@ fn check_documents(bytes: &[u8]) {
             }
         }
     }
+}
+
+/// What holds of every points document the reader accepts (RFC 0004): it
+/// writes back to the bytes it was read from, its points share one source
+/// and have bounds, and it is a valid asset of the layer of its kinds, in
+/// any tile, with that source and those bounds, but never of a mesh layer.
+fn check_points_document(d: &PointsDocument, id: ContentId) {
+    assert!(d.problems().is_empty());
+    assert_eq!(d.id().expect("valid points document"), id);
+    let summary = d.summary();
+    assert_eq!(summary.count, d.points.len());
+    let bounds = summary.bounds.expect("bounds");
+    assert!(bounds.is_valid());
+    let source = summary.source.clone().expect("one source");
+    let tile = TileKey::parse("17/68646/45903").expect("a tile");
+    let feature_id = format!("tile:{tile}/{source}");
+    let layers: BTreeSet<op_world::Layer> = summary.kinds.iter().map(|k| k.layer()).collect();
+    for layer in op_world::Layer::ALL {
+        let problems = summary.asset_problems(layer, &feature_id, tile, &bounds);
+        let fits = layer.has_points() && layers.iter().all(|l| *l == layer);
+        assert_eq!(problems.is_empty(), fits, "{layer:?}: {problems:?}");
+    }
+}
+
+/// Values of every JSON type for the points target, around the limits of
+/// each attribute and with the names, kinds and rule ids it knows.
+fn point_values() -> Vec<Value> {
+    let mut values: Vec<Value> = [
+        json!(null),
+        json!(true),
+        json!(0),
+        json!(1),
+        json!(-1),
+        json!(64),
+        json!(65),
+        json!(999),
+        json!(1000),
+        json!(2999),
+        json!(3000),
+        json!(50_000),
+        json!(50_001),
+        json!(65_535),
+        json!(65_536),
+        json!(100_000),
+        json!(100_001),
+        json!(150_000),
+        json!(150_001),
+        json!(9_007_199_254_740_991_i64),
+        json!(-9_007_199_254_740_991_i64),
+        json!(""),
+        json!("Tilia"),
+        json!("tilia"),
+        json!("Tilia cordata"),
+        json!("Tilia  cordata"),
+        json!("Platanus \u{d7} hispanica"),
+        json!("Tilia cordata 'Greenspire'"),
+        json!("deciduous"),
+        json!("semi_evergreen"),
+        json!("broadleaved"),
+        json!("led"),
+        json!("metal_halide"),
+        json!("pole"),
+        json!("wire"),
+        json!("street"),
+        json!("navigation"),
+        json!("tree"),
+        json!("light"),
+        json!("bench"),
+        json!("yaw"),
+        json!("height_mm"),
+        json!("mount"),
+        json!("adr-0015:yaw-from-orientierung:1"),
+        json!("adr-0015:yaw:0"),
+        json!("streetwide:sample-trees:T-1"),
+        json!("streetwide:sample-trees:T-0"),
+        json!("streetwide:sample-lights:L-9"),
+        json!("osm:node:1"),
+        json!("osm::1"),
+        json!("a:b c"),
+        json!([]),
+        json!(["yaw"]),
+        json!(["height_mm"]),
+        json!(["yaw", "yaw"]),
+        json!([0, 0, 0]),
+        json!([1, 2]),
+        json!({}),
+        json!({"light": {"yaw": "adr-0015:yaw-from-orientierung:1"}}),
+        json!({"light": {}}),
+        json!({"tree": {"height_mm": "adr-0016:height:1"}}),
+    ]
+    .into();
+    values.push(json!("x".repeat(257)));
+    values.push(json!(format!("a:{}", "x".repeat(254))));
+    values
+}
+
+/// Every attribute name of every kind of point.
+const ATTRIBUTE_NAMES: [&str; 15] = [
+    "count",
+    "crown_diameter_mm",
+    "genus",
+    "height_mm",
+    "leaf_cycle",
+    "leaf_type",
+    "light_height_mm",
+    "method",
+    "mount",
+    "planted_year",
+    "purpose",
+    "species",
+    "taxon",
+    "trunk_circumference_mm",
+    "yaw",
+];
+
+/// A points document from the corpus with a few targeted edits: a value
+/// from [`point_values`] put in an attribute, an id, a kind, an anchor,
+/// `estimated` or `rules`; points copied, removed or swapped; or any edit
+/// of [`fuzzing::edit_value`].
+fn mutate_points(rng: &mut Rng, docs: &[&Doc], values: &[Value]) -> Vec<u8> {
+    let doc = rng.pick(docs);
+    let Some(mut v) = doc.value.clone() else {
+        return doc.bytes.clone();
+    };
+    for _ in 0..rng.count(3) {
+        let n = v
+            .get("points")
+            .and_then(Value::as_array)
+            .map_or(0, Vec::len);
+        let k = if n > 0 { rng.below(n) } else { 0 };
+        let value = rng.pick(values).clone();
+        // Edits go through JSON pointers: an earlier edit may have left
+        // any value anywhere.
+        let mut set_in = |path: &str, key: &str| {
+            if let Some(object) = v.pointer_mut(path).and_then(Value::as_object_mut) {
+                object.insert(key.to_string(), value.clone());
+            }
+        };
+        match rng.below(8) {
+            0 => {
+                let key = ATTRIBUTE_NAMES[rng.below(ATTRIBUTE_NAMES.len())];
+                set_in(&format!("/points/{k}/attributes"), key);
+            }
+            1 => set_in(&format!("/points/{k}"), "id"),
+            2 => set_in(&format!("/points/{k}"), "kind"),
+            3 => {
+                if let Some(c) = v.pointer_mut(&format!("/points/{k}/anchor_mm/{}", rng.below(3))) {
+                    *c = value;
+                }
+            }
+            4 => set_in(&format!("/points/{k}"), "estimated"),
+            5 => set_in("", "rules"),
+            6 => {
+                if let Some(points) = v.get_mut("points").and_then(Value::as_array_mut)
+                    && !points.is_empty()
+                {
+                    let a = rng.below(points.len());
+                    let b = rng.below(points.len());
+                    match rng.below(3) {
+                        0 => {
+                            let copy = points[a].clone();
+                            points.insert(b, copy);
+                        }
+                        1 => {
+                            points.remove(a);
+                        }
+                        _ => points.swap(a, b),
+                    }
+                }
+            }
+            _ => fuzzing::edit_value(rng, &mut v, None),
+        }
+    }
+    cjson::to_vec(&v).unwrap_or_else(|_| serde_json::to_vec(&v).expect("a JSON value serialises"))
+}
+
+/// Points documents (RFC 0004), mutated where their rules are: the reader
+/// accepts exactly the documents without problems, and what it accepts
+/// holds [`check_points_document`].
+#[test]
+fn points_documents() {
+    let c = corpus();
+    let docs: Vec<&Doc> = c
+        .json
+        .iter()
+        .filter(|d| d.format() == Some(PointsDocument::FORMAT))
+        .collect();
+    assert!(docs.len() >= 2, "the golden points documents are missing");
+    let values = point_values();
+    fuzzing::run(
+        Target::new("points", 4000),
+        |rng| mutate_points(rng, &docs, &values),
+        |bytes| {
+            if let Ok(d) = PointsDocument::from_bytes(bytes) {
+                check_points_document(&d, ContentId::of(bytes));
+            }
+            consistent(bytes, Document::Points, PointsDocument::problems, |b| {
+                PointsDocument::from_bytes(b).is_ok()
+            });
+        },
+    );
 }
 
 #[test]
@@ -655,7 +868,8 @@ fn replace(haystack: &[u8], from: &[u8], to: &[u8]) -> Vec<u8> {
 /// After an object changed from `old` to `new` bytes, makes everything
 /// that named it name the new version (and so on up to the root document),
 /// so the store stays content-addressed and the checks reach the change. A
-/// manifest naming a changed mesh also gets the mesh's new `size_bytes`.
+/// manifest naming changed content (a mesh or a points document) also gets
+/// its new `size_bytes`.
 fn readdress(files: &mut Files, old: &[u8], new: &[u8], mesh: bool) {
     let size = (
         format!("\"size_bytes\":{}", old.len()),
@@ -748,7 +962,11 @@ fn mutate_files(rng: &mut Rng, base: &Files, c: &Corpus, root_kind: &str) -> Fil
             }
         };
         files.objects.push((kind, new.clone()));
-        readdress(&mut files, &old, &new, kind == ObjectKind::Glb);
+        // A mesh or a points document is an asset's content: its manifest
+        // gets its new size.
+        let content = kind == ObjectKind::Glb
+            || Doc::new(old.clone()).format() == Some(PointsDocument::FORMAT);
+        readdress(&mut files, &old, &new, content);
     }
     files
 }
@@ -1025,22 +1243,55 @@ fn sample_bundle() -> Files {
     }
 }
 
+/// A baseline refresh adding three light points (RFC 0004) to the fixture
+/// world's tile, on its terrain: `change.json` (as the root document), its
+/// manifest and its points document.
+fn points_bundle() -> Files {
+    let dir = common::temp_dir("fuzz-points-bundle");
+    let world = fuzzing::repo_root().join("fixtures/world");
+    let mut draft = sample_points_draft(&world, op_world::Layer::StreetObjects).expect("a draft");
+    write_points_bundle(&mut draft, &dir).expect("a bundle");
+    let objects = common::files_under(&dir.join("objects"))
+        .into_iter()
+        .map(|name| {
+            let bytes = std::fs::read(dir.join("objects").join(&name)).expect("an object");
+            (ObjectKind::Json, bytes)
+        })
+        .collect();
+    Files {
+        world: std::fs::read(dir.join("change.json")).expect("change.json"),
+        objects,
+    }
+}
+
 /// A contribution bundle is untrusted input to the gate (RFC 0002), which
 /// CI runs on pull requests: whatever the bundle holds, the gate must
 /// produce a valid report about it (or an I/O error), never panic.
 #[test]
 fn contribution_bundles_through_the_gate() {
+    gate_target("gate", 150, sample_bundle());
+}
+
+/// The same for a baseline refresh with points (RFC 0004): G1's reading of
+/// the points document, G3's review aid, G7's points per tile and G8's
+/// anchors on the terrain take whatever the bundle holds.
+#[test]
+fn refreshes_with_points_through_the_gate() {
+    gate_target("gate-points", 150, points_bundle());
+}
+
+/// The gate on mutations of the bundle `base`, against the fixture world.
+fn gate_target(name: &'static str, cases: u64, base: Files) {
     let c = corpus();
     let world = fuzzing::repo_root().join("fixtures/world");
-    let base = sample_bundle();
-    let dir = common::temp_dir("fuzz-gate");
+    let dir = common::temp_dir(&format!("fuzz-{name}"));
     let runs = AtomicU64::new(0);
     fuzzing::run(
         // Besides the JSON it parses, the gate may list up to
         // FACADE_MAX_GRID_STEPS four-byte triangle numbers in G8's grid:
         // 80 MB, twice that while the lists grow. It reads the fixture world
         // one object at a time; at CI size an input takes about 3.4 MB.
-        Target::new("gate", 150)
+        Target::new(name, cases)
             .memory(160, gate::FACADE_MAX_GRID_STEPS * 8 + (16 << 20))
             .parts(files_split, files_join),
         |rng| encode(&mutate_files(rng, &base, c, ChangeSet::FORMAT)),
@@ -2633,6 +2884,23 @@ fn document_of(kind: Document, lengths: &[usize]) -> Vec<u8> {
                 .collect();
             cjson::to_canonical(&record)
         }
+        Document::Points => {
+            // Trees of unknown attributes, one per item, with ids of the
+            // item's length after the source `a:`.
+            let point = |id: String| Point {
+                id,
+                kind: PointKind::Tree,
+                anchor_mm: [0, 0, 0],
+                attributes: Attributes::Tree(TreeAttributes::default()),
+                estimated: vec![],
+            };
+            cjson::to_canonical(&PointsDocument {
+                format: PointsDocument::FORMAT.into(),
+                contract_version: op_world::CONTRACT_VERSION.into(),
+                points: texts().map(|t| point(format!("a:{t}"))).collect(),
+                rules: BTreeMap::new(),
+            })
+        }
     }
     .expect("canonical")
 }
@@ -2642,7 +2910,7 @@ fn document_of(kind: Document, lengths: &[usize]) -> Vec<u8> {
 /// 4,096 characters.
 fn longest_item(kind: Document) -> usize {
     match kind {
-        Document::TileIndex | Document::ChangeSet => 254,
+        Document::TileIndex | Document::ChangeSet | Document::Points => 254,
         _ => rules::MAX_TEXT_CHARS,
     }
 }
@@ -2657,6 +2925,7 @@ fn write_as(kind: Document, bytes: &[u8]) -> op_world::Result<Vec<u8>> {
         Document::ChangeSet => cjson::from_canonical::<ChangeSet>(bytes)?.to_bytes(),
         Document::CheckReport => cjson::from_canonical::<CheckReport>(bytes)?.to_bytes(),
         Document::MergeRecord => cjson::from_canonical::<MergeRecord>(bytes)?.to_bytes(),
+        Document::Points => cjson::from_canonical::<PointsDocument>(bytes)?.to_bytes(),
     }
 }
 
@@ -2669,6 +2938,7 @@ fn read_as(kind: Document, bytes: &[u8]) -> op_world::Result<()> {
         Document::ChangeSet => ChangeSet::from_bytes(bytes).map(drop),
         Document::CheckReport => CheckReport::from_bytes(bytes).map(drop),
         Document::MergeRecord => MergeRecord::from_bytes(bytes).map(drop),
+        Document::Points => PointsDocument::from_bytes(bytes).map(drop),
     }
 }
 
@@ -2676,13 +2946,14 @@ fn read_as(kind: Document, bytes: &[u8]) -> op_world::Result<()> {
 /// byte more is refused before it is parsed, with a message that names the
 /// kind and the limit; `to_bytes` refuses to write it. A change set cannot
 /// reach its limit (50 changes of a few hundred bytes), so one at the limit
-/// is refused for its rules instead, not for its size. World manifests,
-/// whose limit is that of every file (64 MiB), are only checked over it,
-/// below: building and reading 64 MiB here would take seconds.
+/// is refused for its rules instead, not for its size. World manifests
+/// and points documents, whose limit is that of every file (64 MiB), are
+/// only checked over it, below: building and reading 64 MiB here would take
+/// seconds.
 #[test]
 fn documents_read_up_to_the_limit_for_their_kind() {
     for kind in Document::ALL {
-        if kind == Document::WorldManifest {
+        if kind.max_bytes() == op_world::store::MAX_FILE_BYTES {
             continue;
         }
         let limit = kind.max_bytes() as usize;
@@ -2802,7 +3073,7 @@ fn regression_document_files_over_their_limit_are_refused_unread() {
         manifest_error
     );
     let report = gate::run(&world, &bundle, &dir.join("candidate-1")).expect("a report");
-    assert_eq!(report.gate_version, "0.1.3");
+    assert_eq!(report.gate_version, "0.1.4");
     assert_eq!(report.checks[0].outcome, op_world::contrib::Outcome::Fail);
     assert_eq!(
         report.checks[0].details[0],

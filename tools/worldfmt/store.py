@@ -2,7 +2,8 @@
 `op_world::Store`:
 
     world.json                  the world manifest
-    objects/<aa>/<hex>.json     tile indexes and asset manifests
+    objects/<aa>/<hex>.json     tile indexes, asset manifests and points
+                                documents (RFC 0004)
     objects/<aa>/<hex>.glb      meshes
 
 A store may come from elsewhere (a downloaded world, a contributor's

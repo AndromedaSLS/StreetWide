@@ -151,6 +151,22 @@ def _texts_sorted_unique(items: Sequence[Any]) -> bool:
     return all(is_text(t) for t in items) and is_sorted_unique([t.encode("utf-8", "surrogatepass") for t in items])
 
 
+POINT_LAYERS = ("street_objects", "vegetation")
+"""The layers whose assets are points documents (RFC 0004), with feature ids
+`tile:17/{x}/{y}/{source}`."""
+
+
+def point_feature_id_problem(layer: str, feature_id: str, tile: str) -> str | None:
+    """`manifest::point_feature_id_problem`: why the valid feature id of an
+    asset in `layer` and `tile` breaks RFC 0004's rule for point assets
+    (their feature id is `tile:<their own tile>/<source>`), or None."""
+    from tools.worldfmt.points import per_tile_source  # points imports this module
+
+    if layer in POINT_LAYERS and per_tile_source(feature_id, tile) is None:
+        return f"{layer} feature_id {rust_debug(feature_id)} must be tile:{tile}/<source> (RFC 0004)"
+    return None
+
+
 def manifest_problems(m: Mapping[str, Any]) -> list[str]:
     """The rules of `AssetManifest::problems` that the asset-manifest
     schema cannot state, in op_world's order and words; [] when op_world
@@ -160,6 +176,10 @@ def manifest_problems(m: Mapping[str, Any]) -> list[str]:
     found = []
     if not is_feature_id(m["feature_id"]):
         found.append(f"feature_id {rust_debug(m['feature_id'])} is not valid")
+    else:
+        problem = point_feature_id_problem(m["layer"], m["feature_id"], m["tile"])
+        if problem is not None:
+            found.append(problem)
     bounds = m["bounds_mm"]
     if any(bounds["min"][k] > bounds["max"][k] for k in range(3)):
         found.append("bounds_mm min must not exceed max")

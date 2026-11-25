@@ -1,0 +1,79 @@
+{
+  "comment": "The points documents of the world-format golden fixture (RFC 0004): a fictional tree asset and a fictional light asset in tile 17/68646/45908, on the ground plate. Keys are in reading order; op_world and tools/worldfmt write each document canonically and must give the same bytes. Regenerate the fixture with: cargo run -p op_world --example make_format_fixtures -- fixtures/format",
+  "vegetation": {
+    "format": "streetwide.points",
+    "contract_version": "0.1.0",
+    "rules": {},
+    "points": [
+      {
+        "id": "streetwide:sample-trees:T-1",
+        "kind": "tree",
+        "anchor_mm": [-12000, 408000, 6000],
+        "attributes": {
+          "crown_diameter_mm": 9000,
+          "genus": "Platanus",
+          "height_mm": 18500,
+          "leaf_cycle": "deciduous",
+          "leaf_type": "broadleaved",
+          "planted_year": 1961,
+          "species": "Platanus × hispanica",
+          "taxon": "Platanus × hispanica 'Tremonia'",
+          "trunk_circumference_mm": 2350
+        },
+        "estimated": []
+      },
+      {
+        "id": "streetwide:sample-trees:T-2",
+        "kind": "tree",
+        "anchor_mm": [-12000, 408000, 12000],
+        "attributes": {
+          "crown_diameter_mm": null,
+          "genus": "Tilia",
+          "height_mm": null,
+          "leaf_cycle": null,
+          "leaf_type": null,
+          "planted_year": null,
+          "species": null,
+          "taxon": null,
+          "trunk_circumference_mm": null
+        },
+        "estimated": []
+      }
+    ]
+  },
+  "street_objects": {
+    "format": "streetwide.points",
+    "contract_version": "0.1.0",
+    "rules": { "light": { "yaw": "adr-0015:yaw-from-orientierung:1" } },
+    "points": [
+      {
+        "id": "streetwide:sample-lights:L-1",
+        "kind": "light",
+        "anchor_mm": [8000, 408000, -6000],
+        "attributes": {
+          "count": 1,
+          "light_height_mm": 5500,
+          "method": "led",
+          "mount": "pole",
+          "purpose": "street",
+          "yaw": 16384
+        },
+        "estimated": ["yaw"]
+      },
+      {
+        "id": "streetwide:sample-lights:L-2",
+        "kind": "light",
+        "anchor_mm": [8000, 408000, 6000],
+        "attributes": {
+          "count": null,
+          "light_height_mm": null,
+          "method": null,
+          "mount": null,
+          "purpose": null,
+          "yaw": null
+        },
+        "estimated": []
+      }
+    ]
+  }
+}

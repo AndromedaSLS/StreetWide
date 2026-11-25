@@ -1467,7 +1467,7 @@ def test_the_limits_are_op_worlds() -> None:
     rust = (REPO / "crates" / "op_world" / "src" / "limits.rs").read_text(encoding="utf-8")
     names = {"ASSET_MANIFEST": limits.ASSET_MANIFEST, "MERGE_RECORD": limits.MERGE_RECORD,
              "CHANGE_SET": limits.CHANGE_SET, "CHECK_REPORT": limits.CHECK_REPORT,
-             "TILE_INDEX": limits.TILE_INDEX, "WORLD_MANIFEST": limits.WORLD_MANIFEST}
+             "TILE_INDEX": limits.TILE_INDEX, "WORLD_MANIFEST": limits.WORLD_MANIFEST, "POINTS": limits.POINTS}
     values = {"MIB": limits.MIB, "MAX_FILE_BYTES": MAX_FILE_BYTES}
     consts = dict(re.findall(r"pub const MAX_(\w+)_BYTES: u64 = ([^;]+);", rust))
     assert consts.keys() == names.keys()
@@ -1479,7 +1479,7 @@ def test_the_limits_are_op_worlds() -> None:
         k: kind.name for k, kind in names.items()}
     assert [kind.format for kind in limits.KINDS] == [
         "streetwide.asset", "streetwide.tile", "streetwide.world", "streetwide.change", "streetwide.check",
-        "streetwide.merge"]
+        "streetwide.merge", "streetwide.points"]
     assert '"larger than {limit} bytes ({} MiB), the limit for {}"' in rust
     assert limits.CHANGE_SET.too_large() == "larger than 8388608 bytes (8 MiB), the limit for a change set"
 

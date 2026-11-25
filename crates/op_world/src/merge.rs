@@ -52,7 +52,7 @@ use crate::contrib::{
 use crate::gate;
 use crate::id::ContentId;
 use crate::limits::Document;
-use crate::manifest::AssetManifest;
+use crate::manifest::{AssetManifest, ContentKind};
 use crate::store::{MAX_FILE_BYTES, ObjectKind, Store, read_document, read_file};
 use crate::{Error, Result};
 
@@ -364,7 +364,8 @@ fn merge_locked(
     };
     before_write(&merged, &world_bytes)?;
 
-    // Copy the new objects in: the change set's manifests and meshes, then
+    // Copy the new objects in: the change set's manifests and their content
+    // (a mesh, or a points document in the point layers, RFC 0004), then
     // the candidate's tile indexes; `world.json` last.
     let bundle = Store::layered(bundle_dir, vec![world_dir.to_path_buf()]);
     for c in &change.changes {
@@ -373,10 +374,11 @@ fn merge_locked(
         };
         let bytes = bundle.read_document(&manifest_id, Document::AssetManifest)?;
         let manifest = AssetManifest::from_bytes(&bytes)?;
-        world.write_object(
-            &bundle.read_object(&manifest.content_id, ObjectKind::Glb)?,
-            ObjectKind::Glb,
-        )?;
+        let content = match manifest.layer.content() {
+            ContentKind::Mesh => bundle.read_object(&manifest.content_id, ObjectKind::Glb)?,
+            ContentKind::Points => bundle.read_document(&manifest.content_id, Document::Points)?,
+        };
+        world.write_object(&content, manifest.layer.content().object_kind())?;
         world.write_object(&bytes, ObjectKind::Json)?;
     }
     for t in &candidate_world.tiles {

@@ -15,6 +15,9 @@ Through the real gate:
 - the terrain-edge mirror: a terrain change the planner holds back
   (`terrain-edges`), forced into a bundle, fails G8 with as many edge
   vertices as the planner counted;
+- a refresh of points (RFC 0004): trees added and replaced in two tiles,
+  one set that the gate passes, left to review (G3), with every anchor on
+  the terrain (G8), and the candidate world the plan predicts;
 - a contribution's removal is not added back: the far-building removal of
   crates/op_replay/tests/full_gate.rs is merged with `op_replay merge
   --log`, and planning with `fixtures/world` as the new store gives a
@@ -51,7 +54,7 @@ from tools.ingest.changes.verify import (
 )
 from tools.ingest.tests.refresh_worlds import (
     A, B, DEM_2027, GROUND_MM, OSM_V2, SWISS_YEAR, Log, Scenario, World, flat, moved_box, ribbon, swiss_shell,
-    terrain,
+    terrain, trees,
 )
 from tools.ingest.tests.test_changes_fixture import (
     BASELINE_REASON, CHANGE_ID, FIXTURE_WORLD, FIXTURE_WORLD_ID, PRE_WATER_WORLD_ID, TILE, pre_water_store,
@@ -273,6 +276,36 @@ def test_a_two_tile_refresh_passes_the_full_gate(tmp_path: Path, capsys, rust: R
     assert moved["played"] and moved["off"] == []
     # The replay was moved to each new world, as after a merge.
     assert len(list((tmp_path / "scratch-1" / "replays").rglob("*.oprep"))) == 2
+
+
+# -------------------------------------------------------- points (RFC 0004) --
+
+
+def test_a_points_refresh_passes_the_gate(tmp_path: Path, capsys, rust: Rust) -> None:
+    current = World.of(terrain(A), terrain(B), trees(A))
+    sc = Scenario.start(tmp_path, current)
+    new_root = sc.write_new(World.of(terrain(A), terrain(B), trees(A, genus="Acer", version="2026-11-29"),
+                                     trees(B, first=101, version="2026-11-29")), "new")
+    out = tmp_path / "plan"
+    assert main(sc.args(new_root, out)) == 0
+    capsys.readouterr()
+    plan = cjson.loads((out / REPORT_JSON).read_bytes())
+    assert plan["conflicts"] == [] and plan["held_back"] == []
+    (planned,) = plan["sets"]
+    report_path = tmp_path / "report.json"
+    done = rust.world("check-change", sc.current, out / planned["path"], "--report", report_path)
+    assert done.returncode == 0, done.stdout + done.stderr
+    report = cjson.loads(report_path.read_bytes())
+    assert report["gate_version"] == "0.1.4"
+    assert report["candidate_world_id"] == planned["world_after"]
+    outcomes = gate_outcomes(report)
+    assert outcomes == {"G1": "pass", "G2": "pass", "G3": "review", "G4": "not_applicable",
+                        "G5": "not_applicable", "G6": "not_applicable", "G7": "pass", "G8": "pass",
+                        "G9": "not_applicable", "G10": "not_applicable"}, report
+    g3 = next(c for c in report["checks"] if c["id"] == "G3")["details"]
+    assert f"{A} vegetation tile:{A}/stadt-zuerich:baumkataster: 2 points (was 2): 0 added, 0 removed, 0 moved, " \
+           "2 changed; changed: stadt-zuerich:baumkataster:T-0001, stadt-zuerich:baumkataster:T-0002" in g3
+    assert f"tile {B}: 2 points in vegetation and street_objects after the change set (was 0)" in g3
 
 
 # ------------------------------------------------------- terrain-edge mirror --
@@ -499,7 +532,7 @@ class Fake:
                                            for w in what]})
             else:
                 checks.append({"id": gid, "name": name, "outcome": outcomes[gid], "details": []})
-        report = {"format": "streetwide.check", "contract_version": "0.1.0", "gate_version": "0.1.3",
+        report = {"format": "streetwide.check", "contract_version": "0.1.0", "gate_version": "0.1.4",
                   "change_id": content_id(change_bytes), "world_id": wid,
                   "candidate_world_id": candidate.world_id, "passed": True, "checks": checks}
         if self.edit is not None:

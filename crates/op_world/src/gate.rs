@@ -11,6 +11,15 @@
 //! set touches colliders they are reported as `not_run`;
 //! `op_replay check-change` runs the complete gate and fills them in
 //! (ADR-0009).
+//!
+//! The point layers, `vegetation` and `street_objects` (RFC 0004 section
+//! 8), take no contributions (G3), and a baseline refresh of them is left
+//! to review, with the points added, removed, moved and changed in each
+//! asset and the points of each tile listed in G3's details. Points count
+//! towards no triangle budget, but a tile holds at most
+//! [`TILE_MAX_POINTS`] (G7), and every anchor lies on its tile's non-OSM
+//! terrain within [`ANCHOR_TOLERANCE_MM`] (G8). Their collider is `none`, so
+//! G9 and G10 never apply to them.
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::Path;
@@ -23,7 +32,8 @@ use crate::glb::{self, GlbMesh};
 use crate::id::ContentId;
 use crate::keys::TileKey;
 use crate::limits::Document;
-use crate::manifest::{AssetManifest, BoundsMm, Collider, Layer};
+use crate::manifest::{AssetManifest, BoundsMm, Collider, ContentKind, Layer};
+use crate::points::{Point, PointsDocument};
 use crate::rules::{MAX_TEXT_CHARS, is_text};
 use crate::store::{MAX_FILE_BYTES, ObjectKind, Store, read_file};
 use crate::tile::{TileAsset, TileIndex};
@@ -32,8 +42,9 @@ use crate::{Error, Result};
 
 /// Bumped whenever the gate's output for some change set changes (0.1.1:
 /// the water layer, RFC 0003; 0.1.2: bounded readers and G8, the fuzzing
-/// round; 0.1.3: the size limits of JSON documents, RFC 0001 section 7).
-pub const GATE_VERSION: &str = "0.1.3";
+/// round; 0.1.3: the size limits of JSON documents, RFC 0001 section 7;
+/// 0.1.4: the point layers, RFC 0004 section 8).
+pub const GATE_VERSION: &str = "0.1.4";
 
 /// Licence of contributed content (ADR-0001).
 pub const CONTRIBUTION_LICENSE: &str = "CC-BY-SA-4.0";
@@ -79,6 +90,30 @@ pub const FACADE_MAX_GRID_STEPS: u64 = 20_000_000;
 /// the gate busy for minutes: 100 million distances take a few seconds.
 pub const FACADE_MAX_DISTANCE_STEPS: u64 = 100_000_000;
 pub const SHELL_FOOTPRINT_TOLERANCE_MM: i64 = 1_000;
+
+// Point layers (RFC 0004 section 8). Starting values, to be set against
+// ADR-0018.
+/// Most points in one tile, over `vegetation` and `street_objects`
+/// together (G7): about 18 times the district's busiest tiles. Over it, a
+/// contribution fails and a baseline refresh is left to review.
+pub const TILE_MAX_POINTS: usize = 5_000;
+/// Most an anchor may lie above or below its tile's terrain surface (G8),
+/// measured vertically at the anchor and exactly, from the terrain's
+/// millimetre vertices.
+pub const ANCHOR_TOLERANCE_MM: i64 = 50;
+/// Most steps G8 may take to place one points document's anchors on its
+/// tile's terrain. The anchors fall in 2 m cells; each terrain triangle
+/// visits the columns and cells of anchors within its horizontal reach (a
+/// step each) and tests each anchor in them (a step each). A tile of
+/// swissALTI3D terrain (about 30,000 triangles) with 5,000 anchors takes
+/// well under a million; terrain crafted to need more fails as too complex
+/// to check.
+pub const ANCHOR_MAX_STEPS: u64 = 50_000_000;
+/// Terrain vertices farther than this from the tile origin, on any axis
+/// (10^11 mm, 100,000 km), are not ground G8 measures anchors against. It
+/// keeps G8's exact arithmetic within 128-bit integers; no tile's terrain
+/// comes close.
+pub const GROUND_MAX_MM: i64 = 100_000_000_000;
 
 const NAMES: [&str; 10] = [
     "format",
@@ -210,11 +245,69 @@ impl Checks {
     }
 }
 
+/// The content of a proposed asset version: its layer decides which
+/// (RFC 0004 section 6).
+enum Content {
+    Mesh(GlbMesh),
+    Points(PointsDocument),
+}
+
 /// A new asset version proposed by the change set.
 struct Proposed {
     manifest_id: ContentId,
     manifest: AssetManifest,
-    mesh: GlbMesh,
+    content: Content,
+}
+
+impl Proposed {
+    /// The mesh, for an asset in a mesh layer.
+    fn mesh(&self) -> Option<&GlbMesh> {
+        match &self.content {
+            Content::Mesh(m) => Some(m),
+            Content::Points(_) => None,
+        }
+    }
+
+    /// The points document, for an asset in a point layer.
+    fn points(&self) -> Option<&PointsDocument> {
+        match &self.content {
+            Content::Points(d) => Some(d),
+            Content::Mesh(_) => None,
+        }
+    }
+}
+
+/// Reads and checks the content of the asset `m` describes, as G1 needs it
+/// to read the asset: its size, and a mesh's bounds, or a points document's
+/// agreement with its manifest (RFC 0004 sections 1, 2 and 6).
+fn read_content(store: &Store, m: &AssetManifest) -> Result<Content> {
+    match m.layer.content() {
+        ContentKind::Mesh => {
+            let bytes = store.read_object(&m.content_id, ObjectKind::Glb)?;
+            if bytes.len() as u64 != m.size_bytes {
+                return Err(Error::Invalid("size_bytes does not match the mesh".into()));
+            }
+            let mesh = glb::read(&bytes)?;
+            if mesh.bounds_mm() != Some(m.bounds_mm) {
+                return Err(Error::Invalid("bounds_mm does not match the mesh".into()));
+            }
+            Ok(Content::Mesh(mesh))
+        }
+        ContentKind::Points => {
+            let bytes = store.read_document(&m.content_id, Document::Points)?;
+            if bytes.len() as u64 != m.size_bytes {
+                return Err(Error::Invalid(
+                    "size_bytes does not match the points document".into(),
+                ));
+            }
+            let doc = PointsDocument::from_bytes(&bytes)?;
+            let problems = doc.asset_problems(m.layer, &m.feature_id, m.tile, &m.bounds_mm);
+            if !problems.is_empty() {
+                return Err(Error::Invalid(problems.join("; ")));
+            }
+            Ok(Content::Points(doc))
+        }
+    }
 }
 
 /// Runs the gate on the change set in `bundle_dir` (`change.json` plus an
@@ -297,18 +390,11 @@ pub fn run(world_dir: &Path, bundle_dir: &Path, candidate_dir: &Path) -> Result<
             .read_document(&manifest_id, Document::AssetManifest)
             .and_then(|b| AssetManifest::from_bytes(&b))
             .and_then(|m| {
-                let bytes = bundle.read_object(&m.content_id, ObjectKind::Glb)?;
-                if bytes.len() as u64 != m.size_bytes {
-                    return Err(Error::Invalid("size_bytes does not match the mesh".into()));
-                }
-                let mesh = glb::read(&bytes)?;
-                if mesh.bounds_mm() != Some(m.bounds_mm) {
-                    return Err(Error::Invalid("bounds_mm does not match the mesh".into()));
-                }
-                Ok((m, mesh))
+                let content = read_content(&bundle, &m)?;
+                Ok((m, content))
             });
         match loaded {
-            Ok((manifest, mesh)) => {
+            Ok((manifest, content)) => {
                 if (manifest.tile, manifest.layer, manifest.feature_id.as_str())
                     != (c.tile, c.layer, c.feature_id.as_str())
                 {
@@ -328,7 +414,7 @@ pub fn run(world_dir: &Path, bundle_dir: &Path, candidate_dir: &Path) -> Result<
                     Proposed {
                         manifest_id,
                         manifest,
-                        mesh,
+                        content,
                     },
                 );
             }
@@ -370,9 +456,22 @@ pub fn run(world_dir: &Path, bundle_dir: &Path, candidate_dir: &Path) -> Result<
                 &change,
                 &current_assets,
                 &proposed,
+                baseline,
             ) {
                 checks
                     .g(7)
+                    .note(Outcome::Fail, format!("candidate world: {e}"));
+            }
+            if let Err(e) = review_points(
+                &mut checks,
+                &candidate,
+                &tiles,
+                &change,
+                &current_assets,
+                &proposed,
+            ) {
+                checks
+                    .g(3)
                     .note(Outcome::Fail, format!("candidate world: {e}"));
             }
         }
@@ -431,6 +530,11 @@ fn check_policy(
                 // there, and the next baseline refresh brings the fixes in.
                 Layer::Water => Err(format!(
                     "{what}: the water layer does not accept contributions; fix it in the source (OpenStreetMap), and the next baseline refresh brings the fix in"
+                )),
+                // Points come from open data too (RFC 0004 section 8).
+                Layer::StreetObjects | Layer::Vegetation => Err(format!(
+                    "{what}: the {} layer does not accept contributions; fix it in the source (the open data it comes from), and the next baseline refresh brings the fix in",
+                    c.layer.as_str()
                 )),
                 Layer::Furniture | Layer::Interactivity | Layer::Interior | Layer::Transport => {
                     Err(format!(
@@ -622,9 +726,15 @@ fn build_candidate(
     candidate.write_world(&world)
 }
 
+/// The triangles of a tile's meshes, and of its colliders. Points
+/// documents have none (RFC 0004 section 8).
 fn tile_triangles(candidate: &Store, index: &TileIndex) -> Result<(usize, usize)> {
     let (mut all, mut colliders) = (0, 0);
-    for a in &index.assets {
+    for a in index
+        .assets
+        .iter()
+        .filter(|a| a.layer.content() == ContentKind::Mesh)
+    {
         let n =
             glb::read(&candidate.read_object(&a.content_id, ObjectKind::Glb)?)?.triangle_count();
         all += n;
@@ -635,6 +745,20 @@ fn tile_triangles(candidate: &Store, index: &TileIndex) -> Result<(usize, usize)
     Ok((all, colliders))
 }
 
+/// The points document of a point asset listed in a tile index.
+fn read_points(store: &Store, asset: &TileAsset) -> Result<PointsDocument> {
+    PointsDocument::from_bytes(&store.read_document(&asset.content_id, Document::Points)?)
+}
+
+/// The points of a tile, over `vegetation` and `street_objects` (G7).
+fn tile_points(store: &Store, index: &TileIndex) -> Result<usize> {
+    let mut n = 0;
+    for a in index.assets.iter().filter(|a| a.layer.has_points()) {
+        n += read_points(store, a)?.points.len();
+    }
+    Ok(n)
+}
+
 /// G7 budgets and G8 placement, on the candidate world.
 fn check_budgets_and_placement(
     checks: &mut Checks,
@@ -642,6 +766,7 @@ fn check_budgets_and_placement(
     change: &ChangeSet,
     current: &BTreeMap<usize, TileAsset>,
     proposed: &BTreeMap<usize, Proposed>,
+    baseline: bool,
 ) -> Result<()> {
     let (_, world) = candidate.read_world()?;
     let mut indexes = BTreeMap::new();
@@ -654,16 +779,18 @@ fn check_budgets_and_placement(
     for (i, c) in change.changes.iter().enumerate() {
         let what = format!("{} {} {}", c.tile, c.layer.as_str(), c.feature_id);
         let Some(p) = proposed.get(&i) else { continue };
-        // G7 per asset.
-        let triangles = p.mesh.triangle_count();
+        // G7 per asset. Points count per tile, below.
+        let triangles = p.mesh().map_or(0, GlbMesh::triangle_count);
         let limit = match c.layer {
             Layer::Facade => Some((FACADE_MAX_TRIANGLES, Some(FACADE_MAX_BYTES))),
             Layer::Shell => Some((SHELL_MAX_TRIANGLES, None)),
             Layer::Furniture
             | Layer::Interactivity
             | Layer::Interior
+            | Layer::StreetObjects
             | Layer::Terrain
             | Layer::Transport
+            | Layer::Vegetation
             | Layer::Water => None,
         };
         let mut over_budget = true;
@@ -706,7 +833,8 @@ fn check_budgets_and_placement(
                     let refused = proposed
                         .values()
                         .find(|s| s.manifest_id == shell.manifest_id)
-                        .map(|s| s.mesh.triangle_count())
+                        .and_then(Proposed::mesh)
+                        .map(GlbMesh::triangle_count)
                         .filter(|&n| n > SHELL_MAX_TRIANGLES);
                     match refused {
                         Some(n) => checks.g(8).note(
@@ -716,7 +844,10 @@ fn check_budgets_and_placement(
                             ),
                         ),
                         None => {
-                            check_facade_placement(checks.g(8), &what, candidate, shell, &p.mesh)?
+                            let facade = p.mesh().ok_or_else(|| {
+                                Error::Invalid(format!("{what}: a facade is a mesh"))
+                            })?;
+                            check_facade_placement(checks.g(8), &what, candidate, shell, facade)?
                         }
                     }
                 }
@@ -747,7 +878,10 @@ fn check_budgets_and_placement(
                 Some(old) => {
                     let old_mesh =
                         glb::read(&candidate.read_object(&old.content_id, ObjectKind::Glb)?)?;
-                    let missing = missing_boundary_vertices(&old_mesh, &p.mesh);
+                    let new_mesh = p
+                        .mesh()
+                        .ok_or_else(|| Error::Invalid(format!("{what}: terrain is a mesh")))?;
+                    let missing = missing_boundary_vertices(&old_mesh, new_mesh);
                     if missing == 0 {
                         checks.g(8).pass();
                     } else {
@@ -762,6 +896,18 @@ fn check_budgets_and_placement(
                     format!("{what}: new terrain; reviewers check the evidence"),
                 ),
             },
+            // Anchors on the ground (RFC 0004 sections 5 and 8).
+            Layer::StreetObjects | Layer::Vegetation => {
+                let doc = p.points().ok_or_else(|| {
+                    Error::Invalid(format!("{what}: a point asset is a points document"))
+                })?;
+                let mismatch = if baseline {
+                    Outcome::Review
+                } else {
+                    Outcome::Fail
+                };
+                check_anchors(checks.g(8), &what, candidate, index, doc, mismatch)?;
+            }
             // No placement rule.
             Layer::Furniture
             | Layer::Interactivity
@@ -770,9 +916,54 @@ fn check_budgets_and_placement(
             | Layer::Water => {}
         }
     }
-    // G7 per affected tile.
+    // G8: a terrain replacement lists the anchors it would strand, for
+    // review (RFC 0004 section 8). The point assets this change set
+    // proposes are checked on their own, above.
+    let proposed_ids: BTreeSet<ContentId> = proposed.values().map(|p| p.manifest_id).collect();
+    for c in &change.changes {
+        if c.layer != Layer::Terrain || c.op == Op::Add {
+            continue;
+        }
+        let what = format!("{} {} {}", c.tile, c.layer.as_str(), c.feature_id);
+        let index = &indexes[&c.tile];
+        for a in index
+            .assets
+            .iter()
+            .filter(|a| a.layer.has_points() && !proposed_ids.contains(&a.manifest_id))
+        {
+            let doc = read_points(candidate, a)?;
+            let whose = format!("{} {}", a.layer.as_str(), a.feature_id);
+            check_stranded(checks.g(8), &what, &whose, candidate, index, &doc)?;
+        }
+    }
+    // G7 per affected tile. The points budget applies where the change set
+    // changes points: a tile whose canonical points were accepted over it,
+    // by review, does not fail a change to its other layers.
     let affected: BTreeSet<TileKey> = change.changes.iter().map(|c| c.tile).collect();
+    let with_points: BTreeSet<TileKey> = change
+        .changes
+        .iter()
+        .filter(|c| c.layer.has_points())
+        .map(|c| c.tile)
+        .collect();
     for key in affected {
+        let points = if with_points.contains(&key) {
+            tile_points(candidate, &indexes[&key])?
+        } else {
+            0
+        };
+        if points > TILE_MAX_POINTS {
+            checks.g(7).note(
+                if baseline {
+                    Outcome::Review
+                } else {
+                    Outcome::Fail
+                },
+                format!(
+                    "tile {key}: {points} points in vegetation and street_objects, at most {TILE_MAX_POINTS}"
+                ),
+            );
+        }
         let (all, colliders) = tile_triangles(candidate, &indexes[&key])?;
         if all > TILE_MAX_TRIANGLES {
             checks.g(7).note(
@@ -786,6 +977,408 @@ fn check_budgets_and_placement(
                 format!("tile {key}: {colliders} collider triangles, at most {TILE_MAX_COLLIDER_TRIANGLES}"),
             );
         }
+    }
+    Ok(())
+}
+
+/// The terrain of a tile, for G8's anchors: each terrain asset's mesh, and
+/// whether its licence names `ODbL-1.0` (anchors are checked against
+/// non-OSM ground, RFC 0004 section 8).
+fn tile_ground(candidate: &Store, index: &TileIndex) -> Result<Vec<(GlbMesh, bool)>> {
+    let mut ground = Vec::new();
+    for a in index.assets.iter().filter(|a| a.layer == Layer::Terrain) {
+        let mesh = glb::read(&candidate.read_object(&a.content_id, ObjectKind::Glb)?)?;
+        ground.push((mesh, a.license.contains("ODbL-1.0")));
+    }
+    Ok(ground)
+}
+
+/// Where one anchor is in relation to its tile's terrain (G8).
+#[derive(Clone, Copy, PartialEq, Eq, Debug, Default)]
+struct AnchorFit {
+    /// Over a triangle of terrain licensed with `ODbL-1.0`.
+    odbl: bool,
+    /// The least vertical distance from the anchor to a triangle of the
+    /// other terrain whose horizontal projection holds it, in millimetres,
+    /// rounded up; `None` if no such triangle holds it.
+    off_mm: Option<i64>,
+}
+
+/// How far `p` lies above or below the triangle `t` (millimetres, rounded
+/// up), measured vertically at `p`, if the triangle's horizontal
+/// projection holds `p`, edges included; `None` otherwise, and for a
+/// triangle with no horizontal extent. Exact: integer arithmetic on
+/// coordinates within [`GROUND_MAX_MM`], in 128 bits. A height more than
+/// 2^40 mm (about 1.1 million km) beyond the triangle's counts as that far.
+fn vertical_offset(t: &[[i64; 3]; 3], p: [i64; 3]) -> Option<i64> {
+    let [a, b, c] = t.map(|v| v.map(i128::from));
+    let p = p.map(i128::from);
+    let d = (b[0] - a[0]) * (c[2] - a[2]) - (c[0] - a[0]) * (b[2] - a[2]);
+    // The weights of b and c at p, times d.
+    let u = (p[0] - a[0]) * (c[2] - a[2]) - (c[0] - a[0]) * (p[2] - a[2]);
+    let v = (b[0] - a[0]) * (p[2] - a[2]) - (p[0] - a[0]) * (b[2] - a[2]);
+    let (u, v, d) = if d < 0 { (-u, -v, -d) } else { (u, v, d) };
+    if d == 0 || u < 0 || v < 0 || u + v > d {
+        return None;
+    }
+    const SPAN: i128 = 1 << 40;
+    let lo = a[1].min(b[1]).min(c[1]);
+    let hi = a[1].max(b[1]).max(c[1]);
+    let y = p[1].clamp(lo - SPAN, hi + SPAN);
+    // (p.y - surface height at p) * d.
+    let e = (y - a[1]) * d - u * (b[1] - a[1]) - v * (c[1] - a[1]);
+    let off = (e.abs() + d - 1) / d;
+    Some(i64::try_from(off).unwrap_or(i64::MAX))
+}
+
+/// Places `anchors` on `ground` (meshes, and whether each is licensed with
+/// `ODbL-1.0`): an [`AnchorFit`] for each anchor, or `None` if that takes
+/// more than `limit` steps; and the steps taken.
+///
+/// The anchors fall in 2 m cells, by x then z. Each ground triangle visits
+/// the columns and cells of anchors within its horizontal bounds, a step
+/// each, and measures each anchor in them, a step each, so the work does
+/// not grow with the triangles' area. Triangles with a vertex farther than
+/// [`GROUND_MAX_MM`] from the tile origin are not ground.
+fn fit_anchors(
+    anchors: &[[i64; 3]],
+    ground: &[(GlbMesh, bool)],
+    limit: u64,
+) -> (Option<Vec<AnchorFit>>, u64) {
+    const CELL_MM: i64 = 2_000;
+    let cell = |v: i64| v.div_euclid(CELL_MM);
+    let mut columns: BTreeMap<i64, BTreeMap<i64, Vec<usize>>> = BTreeMap::new();
+    for (k, a) in anchors.iter().enumerate() {
+        columns
+            .entry(cell(a[0]))
+            .or_default()
+            .entry(cell(a[2]))
+            .or_default()
+            .push(k);
+    }
+    let mut fits = vec![AnchorFit::default(); anchors.len()];
+    let mut steps = 0u64;
+    for (mesh, odbl) in ground {
+        for prim in mesh.nodes.iter().flat_map(|n| &n.primitives) {
+            for t in prim.indices.as_chunks::<3>().0 {
+                let mut tri = [[0i64; 3]; 3];
+                let mut ok = true;
+                for (corner, &i) in tri.iter_mut().zip(t) {
+                    for (k, value) in corner.iter_mut().enumerate() {
+                        match prim
+                            .positions
+                            .get(i as usize)
+                            .and_then(|v| glb::f32_to_mm(v[k]))
+                        {
+                            Some(mm) if mm.abs() <= GROUND_MAX_MM => *value = mm,
+                            _ => ok = false,
+                        }
+                    }
+                }
+                if !ok {
+                    continue;
+                }
+                let lo = |k: usize| tri.iter().map(|v| v[k]).min().unwrap_or_default();
+                let hi = |k: usize| tri.iter().map(|v| v[k]).max().unwrap_or_default();
+                let (x0, x1, z0, z1) = (lo(0), hi(0), lo(2), hi(2));
+                for (_, column) in columns.range(cell(x0)..=cell(x1)) {
+                    if !step(&mut steps, limit) {
+                        return (None, steps);
+                    }
+                    for (_, listed) in column.range(cell(z0)..=cell(z1)) {
+                        if !step(&mut steps, limit) {
+                            return (None, steps);
+                        }
+                        for &k in listed {
+                            if !step(&mut steps, limit) {
+                                return (None, steps);
+                            }
+                            let a = anchors[k];
+                            if a[0] < x0 || a[0] > x1 || a[2] < z0 || a[2] > z1 {
+                                continue;
+                            }
+                            let Some(off) = vertical_offset(&tri, a) else {
+                                continue;
+                            };
+                            let fit = &mut fits[k];
+                            if *odbl {
+                                fit.odbl = true;
+                            } else {
+                                fit.off_mm = Some(fit.off_mm.map_or(off, |o| o.min(off)));
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+    (Some(fits), steps)
+}
+
+/// Most characters of point ids one list in a report detail shows; the
+/// rest are counted.
+const ID_LIST_CHARS: usize = 900;
+
+/// Point ids for a report detail: as many as fit in [`ID_LIST_CHARS`],
+/// then how many more there are.
+fn id_list(ids: &[&str]) -> String {
+    let mut out = String::new();
+    let mut shown = 0;
+    for id in ids {
+        if !out.is_empty() && out.len() + id.len() + 2 > ID_LIST_CHARS {
+            break;
+        }
+        if !out.is_empty() {
+            out.push_str(", ");
+        }
+        out.push_str(id);
+        shown += 1;
+    }
+    if shown < ids.len() {
+        out.push_str(&format!(" and {} more", ids.len() - shown));
+    }
+    out
+}
+
+/// G8 for a proposed points document (RFC 0004 section 8): every anchor
+/// lies within [`ANCHOR_TOLERANCE_MM`] of its tile's terrain surface. An
+/// anchor with no terrain below (which also catches a point outside its
+/// tile) or over terrain licensed with `ODbL-1.0` fails; any other mismatch
+/// gets `mismatch`: `fail` for a contribution, `review` for a refresh.
+fn check_anchors(
+    check: &mut Check,
+    what: &str,
+    candidate: &Store,
+    index: &TileIndex,
+    doc: &PointsDocument,
+    mismatch: Outcome,
+) -> Result<()> {
+    let ground = tile_ground(candidate, index)?;
+    let anchors: Vec<[i64; 3]> = doc.points.iter().map(|p| p.anchor_mm).collect();
+    let Some(fits) = fit_anchors(&anchors, &ground, ANCHOR_MAX_STEPS).0 else {
+        check.note(
+            Outcome::Fail,
+            format!(
+                "{what}: too complex to check: placing its anchors on the terrain takes more than {ANCHOR_MAX_STEPS} steps"
+            ),
+        );
+        return Ok(());
+    };
+    let total = doc.points.len();
+    let (mut nowhere, mut odbl, mut off) = (Vec::new(), Vec::new(), Vec::new());
+    let mut worst = 0;
+    for (p, fit) in doc.points.iter().zip(&fits) {
+        match fit.off_mm {
+            _ if fit.odbl => odbl.push(p.id.as_str()),
+            None => nowhere.push(p.id.as_str()),
+            Some(mm) if mm > ANCHOR_TOLERANCE_MM => {
+                worst = worst.max(mm);
+                off.push(p.id.as_str());
+            }
+            Some(_) => {}
+        }
+    }
+    if !nowhere.is_empty() {
+        check.note(
+            Outcome::Fail,
+            format!(
+                "{what}: {} of {total} anchors have no terrain below; a point lies in its tile, on its terrain: {}",
+                nowhere.len(),
+                id_list(&nowhere)
+            ),
+        );
+    }
+    if !odbl.is_empty() {
+        check.note(
+            Outcome::Fail,
+            format!(
+                "{what}: {} of {total} anchors lie over terrain licensed ODbL-1.0; anchors are checked against non-OSM ground: {}",
+                odbl.len(),
+                id_list(&odbl)
+            ),
+        );
+    }
+    if !off.is_empty() {
+        check.note(
+            mismatch,
+            format!(
+                "{what}: {} of {total} anchors are more than {ANCHOR_TOLERANCE_MM} mm from the terrain surface (worst {worst} mm): {}",
+                off.len(),
+                id_list(&off)
+            ),
+        );
+    }
+    if nowhere.is_empty() && odbl.is_empty() && off.is_empty() {
+        check.pass();
+    }
+    Ok(())
+}
+
+/// G8 for a terrain replacement or removal `what` (RFC 0004 section 8): the
+/// anchors of the point asset `whose` that the candidate's terrain would
+/// strand (no terrain below, over terrain licensed with `ODbL-1.0`, or more
+/// than [`ANCHOR_TOLERANCE_MM`] off), listed for review.
+fn check_stranded(
+    check: &mut Check,
+    what: &str,
+    whose: &str,
+    candidate: &Store,
+    index: &TileIndex,
+    doc: &PointsDocument,
+) -> Result<()> {
+    let ground = tile_ground(candidate, index)?;
+    let anchors: Vec<[i64; 3]> = doc.points.iter().map(|p| p.anchor_mm).collect();
+    let Some(fits) = fit_anchors(&anchors, &ground, ANCHOR_MAX_STEPS).0 else {
+        check.note(
+            Outcome::Fail,
+            format!(
+                "{what}: too complex to check: placing the anchors of {whose} on the new terrain takes more than {ANCHOR_MAX_STEPS} steps"
+            ),
+        );
+        return Ok(());
+    };
+    let stranded: Vec<&str> = doc
+        .points
+        .iter()
+        .zip(&fits)
+        .filter(|(_, f)| f.odbl || f.off_mm.is_none_or(|mm| mm > ANCHOR_TOLERANCE_MM))
+        .map(|(p, _)| p.id.as_str())
+        .collect();
+    if !stranded.is_empty() {
+        check.note(
+            Outcome::Review,
+            format!(
+                "{what}: the terrain strands {} of the {} anchors of {whose} (no terrain below, over terrain licensed ODbL-1.0, or more than {ANCHOR_TOLERANCE_MM} mm off): {}",
+                stranded.len(),
+                doc.points.len(),
+                id_list(&stranded)
+            ),
+        );
+    }
+    Ok(())
+}
+
+/// How the points of one asset change (G3's review aid): by id, the points
+/// added and removed, those whose anchor moved, and those with the same
+/// anchor whose kind, attributes or estimates changed.
+#[derive(Default)]
+struct PointChanges<'a> {
+    added: Vec<&'a str>,
+    removed: Vec<&'a str>,
+    moved: Vec<&'a str>,
+    changed: Vec<&'a str>,
+}
+
+/// Compares two lists of points sorted by id.
+fn point_changes<'a>(old: &'a [Point], new: &'a [Point]) -> PointChanges<'a> {
+    let mut out = PointChanges::default();
+    let (mut o, mut n) = (old.iter().peekable(), new.iter().peekable());
+    loop {
+        match (o.peek(), n.peek()) {
+            (None, None) => break,
+            (Some(a), Some(b)) if a.id == b.id => {
+                if a.anchor_mm != b.anchor_mm {
+                    out.moved.push(&b.id);
+                } else if a != b {
+                    out.changed.push(&b.id);
+                }
+                o.next();
+                n.next();
+            }
+            (Some(a), Some(b)) if a.id < b.id => {
+                out.removed.push(&a.id);
+                o.next();
+            }
+            (Some(a), None) => {
+                out.removed.push(&a.id);
+                o.next();
+            }
+            (_, Some(b)) => {
+                out.added.push(&b.id);
+                n.next();
+            }
+        }
+    }
+    out
+}
+
+/// G3's review aid for the point layers (RFC 0004 section 8): for each
+/// point asset the change set adds, replaces or removes, the points added,
+/// removed, moved and changed, and for each tile with such a change, its
+/// points before and after, so that a refresh that drops many points
+/// stands out. Each is a detail with the outcome `review`.
+fn review_points(
+    checks: &mut Checks,
+    candidate: &Store,
+    base: &BTreeMap<TileKey, (usize, TileIndex)>,
+    change: &ChangeSet,
+    current: &BTreeMap<usize, TileAsset>,
+    proposed: &BTreeMap<usize, Proposed>,
+) -> Result<()> {
+    let mut tiles = BTreeSet::new();
+    for (i, c) in change.changes.iter().enumerate() {
+        if !c.layer.has_points() {
+            continue;
+        }
+        let old = current
+            .get(&i)
+            .filter(|a| a.layer.has_points())
+            .map(|a| read_points(candidate, a))
+            .transpose()?;
+        let new = proposed.get(&i).and_then(Proposed::points);
+        if old.is_none() && new.is_none() {
+            continue;
+        }
+        tiles.insert(c.tile);
+        let none: &[Point] = &[];
+        let (before, after) = (
+            old.as_ref().map_or(none, |d| d.points.as_slice()),
+            new.map_or(none, |d| d.points.as_slice()),
+        );
+        let diff = point_changes(before, after);
+        let mut detail = format!(
+            "{} {} {}: {} points (was {}): {} added, {} removed, {} moved, {} changed",
+            c.tile,
+            c.layer.as_str(),
+            c.feature_id,
+            after.len(),
+            before.len(),
+            diff.added.len(),
+            diff.removed.len(),
+            diff.moved.len(),
+            diff.changed.len()
+        );
+        for (name, ids) in [
+            ("added", &diff.added),
+            ("removed", &diff.removed),
+            ("moved", &diff.moved),
+            ("changed", &diff.changed),
+        ] {
+            if !ids.is_empty() {
+                detail.push_str(&format!("; {name}: {}", id_list(ids)));
+            }
+        }
+        checks.g(3).note(Outcome::Review, detail);
+    }
+    if tiles.is_empty() {
+        return Ok(());
+    }
+    let (_, world) = candidate.read_world()?;
+    for key in tiles {
+        let before = tile_points(candidate, &base[&key].1)?;
+        let wt =
+            world.tiles.iter().find(|t| t.tile == key).ok_or_else(|| {
+                Error::Invalid(format!("tile {key} is not in the candidate world"))
+            })?;
+        let index =
+            TileIndex::from_bytes(&candidate.read_document(&wt.tile_id, Document::TileIndex)?)?;
+        let after = tile_points(candidate, &index)?;
+        checks.g(3).note(
+            Outcome::Review,
+            format!(
+                "tile {key}: {after} points in vegetation and street_objects after the change set (was {before})"
+            ),
+        );
     }
     Ok(())
 }
@@ -1710,5 +2303,202 @@ mod tests {
             fewer(needed.grid, needed.distances - 1),
             Err(TooComplex::Distances)
         );
+    }
+
+    // ------------------------------------------------ point layers (G8) --
+
+    /// `vertical_offset` by rational arithmetic in another form: the height
+    /// of the plane through the triangle at p as a fraction, compared with
+    /// p's height.
+    fn offset_by_fractions(t: &[[i64; 3]; 3], p: [i64; 3]) -> Option<i64> {
+        let [a, b, c] = t.map(|v| v.map(i128::from));
+        let p = p.map(i128::from);
+        let det = (b[0] - a[0]) * (c[2] - a[2]) - (c[0] - a[0]) * (b[2] - a[2]);
+        if det == 0 {
+            return None;
+        }
+        let s = (p[0] - a[0]) * (c[2] - a[2]) - (c[0] - a[0]) * (p[2] - a[2]);
+        let r = (b[0] - a[0]) * (p[2] - a[2]) - (p[0] - a[0]) * (b[2] - a[2]);
+        let inside = if det > 0 {
+            s >= 0 && r >= 0 && s + r <= det
+        } else {
+            s <= 0 && r <= 0 && s + r >= det
+        };
+        if !inside {
+            return None;
+        }
+        // height = a.y + (s (b.y - a.y) + r (c.y - a.y)) / det
+        let num = a[1] * det + s * (b[1] - a[1]) + r * (c[1] - a[1]);
+        let diff = (p[1] * det - num).abs();
+        let den = det.abs();
+        Some(i64::try_from((diff + den - 1) / den).unwrap())
+    }
+
+    #[test]
+    fn anchors_are_measured_exactly() {
+        let t = [[0, 1000, 0], [2000, 1000, 0], [0, 3000, 2000]];
+        // A vertex, an edge, the inside, and the plane's exact height.
+        assert_eq!(vertical_offset(&t, [0, 1000, 0]), Some(0));
+        assert_eq!(vertical_offset(&t, [1000, 1000, 0]), Some(0));
+        assert_eq!(vertical_offset(&t, [500, 1500, 500]), Some(0));
+        assert_eq!(vertical_offset(&t, [500, 1550, 500]), Some(50));
+        assert_eq!(vertical_offset(&t, [500, 1449, 500]), Some(51));
+        // Outside the horizontal projection, or a vertical triangle.
+        assert_eq!(vertical_offset(&t, [2001, 1000, 0]), None);
+        assert_eq!(vertical_offset(&t, [1500, 1000, 1000]), None);
+        let wall = [[0, 0, 0], [1000, 0, 0], [0, 1000, 0]];
+        assert_eq!(vertical_offset(&wall, [10, 0, 0]), None);
+        // Rounded up: 1/3 mm off is 1 mm, so it counts as more than 0.
+        let thirds = [[0, 0, 0], [3, 1, 0], [0, 0, 3]];
+        assert_eq!(vertical_offset(&thirds, [1, 0, 1]), Some(1));
+        assert_eq!(offset_by_fractions(&thirds, [1, 0, 1]), Some(1));
+        // Far heights are clamped, not overflowed.
+        let big = GROUND_MAX_MM;
+        let wide = [[-big, -big, -big], [big, big, -big], [-big, big, big]];
+        assert!(vertical_offset(&wide, [0, i64::from(i32::MAX), 0]).is_some());
+        assert_eq!(
+            vertical_offset(&wide, [0, (1 << 53) - 1, 0]),
+            vertical_offset(&wide, [0, big + (1 << 40), 0])
+        );
+        // Against the other form, on random triangles and points.
+        let mut n = numbers(4);
+        let mut r = |span: i64| n(2 * span as u64 + 1) as i64 - span;
+        for _ in 0..20_000 {
+            let t = [0; 3].map(|_| [r(5_000), r(2_000), r(5_000)]);
+            let p = [r(5_000), r(3_000), r(5_000)];
+            assert_eq!(
+                vertical_offset(&t, p),
+                offset_by_fractions(&t, p),
+                "{t:?} {p:?}"
+            );
+        }
+    }
+
+    /// `fit_anchors` without its grid: every anchor against every triangle.
+    fn fit_by_brute_force(anchors: &[[i64; 3]], ground: &[(GlbMesh, bool)]) -> Vec<AnchorFit> {
+        let mut fits = vec![AnchorFit::default(); anchors.len()];
+        for (mesh, odbl) in ground {
+            for p in mesh.nodes.iter().flat_map(|n| &n.primitives) {
+                for t in p.indices.as_chunks::<3>().0 {
+                    let tri =
+                        t.map(|i| p.positions[i as usize].map(|c| glb::f32_to_mm(c).unwrap()));
+                    if tri.iter().flatten().any(|c| c.abs() > GROUND_MAX_MM) {
+                        continue;
+                    }
+                    for (k, a) in anchors.iter().enumerate() {
+                        if let Some(off) = vertical_offset(&tri, *a) {
+                            if *odbl {
+                                fits[k].odbl = true;
+                            } else {
+                                fits[k].off_mm = Some(fits[k].off_mm.map_or(off, |o| o.min(off)));
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        fits
+    }
+
+    #[test]
+    fn anchors_fit_as_by_brute_force() {
+        let mut n = numbers(9);
+        let mut r = |span: i64| n(2 * span as u64 + 1) as i64 - span;
+        for round in 0..30 {
+            // Random grounds of a few meshes, some licensed ODbL-1.0.
+            let ground: Vec<(GlbMesh, bool)> = (0..3)
+                .map(|k| {
+                    let count = 3 * (1 + (r(20) + 20) as usize);
+                    let points: Vec<[i64; 3]> = (0..count)
+                        .map(|_| [r(30_000), r(3_000), r(30_000)])
+                        .collect();
+                    (
+                        mesh(&points, (0..count as u32).collect()),
+                        k == 2 && round % 2 == 0,
+                    )
+                })
+                .collect();
+            let anchors: Vec<[i64; 3]> =
+                (0..200).map(|_| [r(32_000), r(3_000), r(32_000)]).collect();
+            let (fits, steps) = fit_anchors(&anchors, &ground, u64::MAX);
+            assert_eq!(
+                fits.expect("no limit"),
+                fit_by_brute_force(&anchors, &ground)
+            );
+            // One step fewer is too few.
+            assert_eq!(fit_anchors(&anchors, &ground, steps - 1).0, None);
+            assert_eq!(fit_anchors(&anchors, &ground, steps).1, steps);
+        }
+    }
+
+    /// A crafted terrain cannot keep G8 busy: one huge triangle, repeated,
+    /// over many anchors, stops at the step limit.
+    #[test]
+    fn anchor_work_is_bounded() {
+        let h = 10_000_000; // 10 km
+        let huge = stacked([[-h, 0, -h], [h, 0, -h], [-h, 0, h]], 1_000);
+        let anchors: Vec<[i64; 3]> = (0..1_000).map(|k| [k * 2_000, 0, 0]).collect();
+        let (fits, steps) = fit_anchors(&anchors, &[(huge, false)], 100_000);
+        assert_eq!((fits, steps), (None, 100_001));
+        // A triangle beyond GROUND_MAX_MM is not ground at all.
+        let far = mesh(
+            &[[0, 0, 0], [2 * GROUND_MAX_MM, 0, 0], [0, 0, 1000]],
+            vec![0, 2, 1],
+        );
+        let (fits, steps) = fit_anchors(&[[1, 0, 1]], &[(far, false)], u64::MAX);
+        assert_eq!((fits, steps), (Some(vec![AnchorFit::default()]), 0));
+    }
+
+    fn point(id: &str, x: i64, genus: Option<&str>) -> Point {
+        use crate::points::{Attributes, PointKind, TreeAttributes};
+        Point {
+            id: id.into(),
+            kind: PointKind::Tree,
+            anchor_mm: [x, 0, 0],
+            attributes: Attributes::Tree(TreeAttributes {
+                genus: genus.map(str::to_string),
+                ..TreeAttributes::default()
+            }),
+            estimated: vec![],
+        }
+    }
+
+    #[test]
+    fn point_changes_by_id() {
+        let old = [
+            point("a:1", 0, None),
+            point("a:2", 0, None),
+            point("a:3", 0, None),
+            point("a:5", 0, None),
+        ];
+        let new = [
+            point("a:0", 0, None),
+            point("a:2", 7, Some("Tilia")),
+            point("a:3", 0, Some("Tilia")),
+            point("a:5", 0, None),
+            point("a:6", 0, None),
+        ];
+        let d = point_changes(&old, &new);
+        assert_eq!(d.added, ["a:0", "a:6"]);
+        assert_eq!(d.removed, ["a:1"]);
+        assert_eq!(d.moved, ["a:2"]);
+        assert_eq!(d.changed, ["a:3"]);
+        let none = point_changes(&old, &old);
+        assert!(none.added.is_empty() && none.removed.is_empty());
+        assert!(none.moved.is_empty() && none.changed.is_empty());
+        assert_eq!(point_changes(&[], &old).added.len(), 4);
+        assert_eq!(point_changes(&old, &[]).removed.len(), 4);
+    }
+
+    #[test]
+    fn id_lists_are_bounded() {
+        assert_eq!(id_list(&["a:1", "a:2"]), "a:1, a:2");
+        let many: Vec<String> = (0..1000).map(|k| format!("a:{k:05}")).collect();
+        let ids: Vec<&str> = many.iter().map(String::as_str).collect();
+        let listed = id_list(&ids);
+        assert!(listed.len() < ID_LIST_CHARS + 32, "{}", listed.len());
+        assert!(listed.ends_with(" more"), "{listed}");
+        let long = "a:".to_string() + &"x".repeat(254);
+        assert_eq!(id_list(&[&long]), long, "one id is always shown");
     }
 }

@@ -1,8 +1,9 @@
 #![allow(dead_code)] // each test binary uses a different subset
 
+use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 
-use op_world::{ContentId, Store};
+use op_world::{ContentId, Layer, Store};
 
 pub fn repo_root() -> PathBuf {
     Path::new(env!("CARGO_MANIFEST_DIR")).join("../..")
@@ -21,6 +22,24 @@ pub fn expected_world_id() -> ContentId {
     let bytes = std::fs::read(format_dir().join("expected.json")).expect("expected.json");
     let v: serde_json::Value = serde_json::from_slice(&bytes).expect("expected.json is JSON");
     ContentId::parse(v["world_id"].as_str().expect("world_id")).expect("valid id")
+}
+
+/// The content ids of the golden points documents, by layer, pinned in
+/// `fixtures/format/expected.json`.
+pub fn expected_points_ids() -> BTreeMap<Layer, ContentId> {
+    let bytes = std::fs::read(format_dir().join("expected.json")).expect("expected.json");
+    let v: serde_json::Value = serde_json::from_slice(&bytes).expect("expected.json is JSON");
+    v["points"]
+        .as_object()
+        .expect("points")
+        .iter()
+        .map(|(layer, id)| {
+            (
+                serde_json::from_value(serde_json::Value::String(layer.clone())).expect("a layer"),
+                ContentId::parse(id.as_str().expect("an id")).expect("valid id"),
+            )
+        })
+        .collect()
 }
 
 /// All files under `dir`, as sorted relative paths with `/` separators.
