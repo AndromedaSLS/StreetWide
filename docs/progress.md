@@ -3134,3 +3134,68 @@ licence and credits of its own sources.
 | `op_world validate fixtures/world` | world `fd6446c2…`, 45 assets, 0 errors, unchanged |
 | Fixture tile re-ingested offline into a scratch directory (copied cache) | world `fd6446c2…`; every committed file byte-identical, plus the four notices |
 | District re-ingested the same way | world `4689c972…`, the 3,013 files of `data/world/zurich-altstadt` byte-identical, plus the four notices; `op_world validate`: 1,491 assets, 0 errors |
+
+### RFC 0006 drafted: the licence allowlist's rules (2026-11-25)
+
+[RFC 0006](../rfcs/0006-licence-allowlist.md) drafts the gate and
+validation rules that [ADR-0017](adr/0017-licence-allowlist.md) calls
+for, with RFC 0002's question 14 (ADR-0020's A6): G4 and G5 on
+refreshes too. **Nothing is decided;** comments run until at least
+2026-12-02, then the maintainer decides.
+
+| Choice | Options | Recommended |
+|---|---|---|
+| Where the licence rules live (0.1.0 is frozen) | A: world format 0.2.0 with the rules in validation; B: the gate and the ingest only; C: B plus validation warnings until the next format version; D: amend 0.1.0 in place | **C**: no id changes, every new asset held to the rules now, errors at the next format version |
+| The contribution contract | amend 0.1.0 in place; bump to 0.2.0 | **in place**, as question 14 was decided; `GATE_VERSION` 0.1.4 → 0.1.5 |
+| What an ODbL fit `to_check` means | merging allowed, publishing refused; G4 `review`; G4 `fail` | **publishing refused** |
+| The first file | every entry ADR-0017 accepted; only the entries in use | **every entry**, with its stored text |
+| MeteoSwiss's "CC-BY" (ADR-0022, open question 6) | `CC-BY-4.0`; a `LicenseRef`; ask first | **`CC-BY-4.0`**: MeteoSwiss's terms page names CC BY 4.0 |
+| Forbidden sources | URL prefixes on forbidden entries; words, as today; none | **URL prefixes** |
+| Extra ids in an asset's licence | refused; allowed | **refused**, as G4 does for contributions today |
+
+- **The list:** `LICENSES/allowlist.json`, checked by
+  `schemas/allowlist.schema.json`. Each entry: an SPDX id or
+  `LicenseRef-`; world data, client assets or both; whether
+  contributions may build on it; `odbl` (`fits` or `to_check`, from
+  ADR-0019's readings); the credit and other obligations; a fixed notice;
+  its stored text, URL and date read; the review; and for a forbidden
+  entry its reason and the source URL prefixes it refuses. The gate
+  embeds it, and a test pins its id with `GATE_VERSION`. Entries change
+  by pull request, under ADR-0017's delegation.
+- **First entries:** ADR-0017's 14 allowed ids (CC0 1.0 and CC BY 4.0
+  for world data and client assets; CC BY-SA 4.0, the ODbL, swisstopo,
+  OGL-UK-3.0, etalab-2.0, the two DL-DE licences, CDLA-Permissive-2.0,
+  US federal public domain and three Copernicus ids for world data) and
+  its forbidden list (NC and ND licences, Sonniss, Quaternius's licence,
+  Mixamo, Google's, Apple's and Microsoft's map terms, the restricted
+  Copernicus DEM).
+- **Rules:** L1 to L4 for any asset (`AND` only, one id per source, the
+  licence exactly its sources' ids, every source's credit), P1 to P3
+  against the list (listed for world data, no forbidden source,
+  contributions only on entries that allow it). New G4 and G5 rows and
+  their messages; `op_world licences` for whole worlds; the ingest's
+  licence check at download, cached with the data; client assets in CI;
+  notices taking names and texts from the list.
+- **Checked for the draft** (a script over the manifests): the 50 asset
+  manifests in `fixtures/` and the 1,491 of a local district build pass
+  L1 to L4, and use only listed ids. Read on 2026-11-25: swisstopo's
+  STAC collections state `license: "proprietary"` with no licence link;
+  MeteoSwiss's states `"CC-BY"`, and its terms of use say its open data
+  are published under CC BY 4.0, credited "Source: MeteoSwiss".
+- **Also changed:** the RFC index and the roadmap's section 8 row.
+- **No code, schema, fixture or replay changes.**
+
+**Waiting for the maintainer:**
+1. The choices above, after 2026-12-02.
+2. Under option A, whether readers keep reading 0.1.0 or the project
+   cuts over before the first publication.
+3. Departing from question 14's wording under B or C: the coverage
+   check runs in G4 and G5, not in validation, with the same outcome
+   for the canonical world.
+4. The stored swisstopo terms, with the 2021 clarification quoted
+   (ADR-0019), before the first new source.
+
+| Check | Result |
+|---|---|
+| Doc checker on the four files | 0 problems |
+| `git diff --check` | clean |

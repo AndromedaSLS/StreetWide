@@ -585,7 +585,7 @@ options. What still waits:
 | Hosting provider, its account, and who pays | [ADR-0010](adr/0010-hosting-the-canonical-world.md) (option A accepted) | the maintainer chooses and sets up | publishing (M1) |
 | Who owns costs and receives donations | with ADR-0010 | to be drafted | M1 |
 | Questions to the OpenStreetMap Foundation's Licensing Working Group; swisstopo's confirmation | [ADR-0019](adr/0019-odbl-and-the-published-world.md) (option A accepted) | the maintainer writes | publishing (M1) |
-| The licence allowlist's gate and validation rules | an RFC that [ADR-0017](adr/0017-licence-allowlist.md) calls for | to be drafted; it needs world format 0.2.0, since 0.1.0 is frozen | M1, new sources in M2 |
+| The licence allowlist's gate and validation rules | [RFC 0006](../rfcs/0006-licence-allowlist.md), which [ADR-0017](adr/0017-licence-allowlist.md) calls for | Draft, open for comment until at least 2026-12-02; the maintainer chooses between a world format 0.2.0 now and keeping 0.1.0 (recommended: the gate and the ingest enforce the rules, validation warns until the next format version) | M1, new sources in M2 |
 | Questions to ewz and Grün Stadt Zürich; the fixture's source answers as a release asset | [ADR-0015](adr/0015-zurich-trees-and-lights.md), [ADR-0022](adr/0022-drawing-trees-lamps-and-windows.md) | the maintainer writes and publishes | trees and lights (M2) |
 | A reference card of the RX 6600 class | [ADR-0018](adr/0018-performance-tier.md) | the maintainer obtains one | measuring M2 |
 | hystreet's licence version | [ADR-0021](adr/0021-pedestrians.md), question 2 | the maintainer asks the city | the crowd's profiles (M2) |
