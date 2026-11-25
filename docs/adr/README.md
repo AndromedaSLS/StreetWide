@@ -33,3 +33,4 @@ instead.
 | [0017](0017-licence-allowlist.md) | An allowlist of licences for world data and client assets | Proposed |
 | [0018](0018-performance-tier.md) | A performance tier and a benchmark route | Proposed |
 | [0019](0019-odbl-and-the-published-world.md) | How the published world meets the ODbL | Proposed |
+| [0021](0021-pedestrians.md) | Pedestrians: in the client, the simulation or both | Proposed |

@@ -25,9 +25,12 @@ pull request.
 - **M2's next drafts** wait for the maintainer: RFC 0004 (trees and street
   lights), ADR-0015 (their Zurich sources), ADR-0016 (measured heights)
   and ADR-0018 (performance tier). RFC 0004 recommends deciding the
-  pedestrian ADR, not drafted yet, first.
+  pedestrian ADR first. It is drafted as
+  [ADR-0021](adr/0021-pedestrians.md) (Proposed), which recommends
+  people drawn by the client from a shared seed, outside the
+  simulation's state, so that trunks and poles stay visual in M2.
 
-*Last reviewed: 2026-11-24.*
+*Last reviewed: 2026-11-25.*
 
 ## 1. Where we are going
 
@@ -562,7 +565,7 @@ arrives) and servers per area for larger groups.
 | Trees and street lights in the world format | [RFC 0004](../rfcs/0004-point-features.md) | Draft; comments until at least 2026-12-01 | M2 |
 | Trees and lights from Zurich's open data; measured heights | [ADR-0015](adr/0015-zurich-trees-and-lights.md), [ADR-0016](adr/0016-swisssurface3d-heights.md) | Proposed | M2 |
 | Performance tier | [ADR-0018](adr/0018-performance-tier.md) | Proposed | M2 |
-| Pedestrians | ADR | to be drafted; RFC 0004 recommends deciding it first | M2 |
+| Pedestrians | [ADR-0021](adr/0021-pedestrians.md) | Proposed; RFC 0004 recommends deciding it first | M2 |
 | Navigation data; how the client draws trees, lamps and lit windows | an RFC after the pedestrian ADR; an ADR extending ADR-0012 | to be drafted | M2 |
 | Code of Conduct contact, branch protection, filing the issue drafts, announcing | tasks, see M1 | open | announcing (M1) |
 | Who owns costs and receives donations | with ADR-0010 | to be drafted | M1 |
