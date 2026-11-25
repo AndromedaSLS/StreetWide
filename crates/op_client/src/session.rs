@@ -199,6 +199,16 @@ impl Session {
         ]
     }
 
+    /// A region-frame point (m) in the render frame.
+    pub fn region_to_render(&self, p: [f64; 3]) -> Vec3 {
+        let o = self.render_origin_mm.map(|v| v as f64 / 1000.0);
+        Vec3::new(
+            (p[0] - o[0]) as f32,
+            (p[1] - o[1]) as f32,
+            (p[2] - o[2]) as f32,
+        )
+    }
+
     /// The player's feet in the render frame now.
     fn render_feet(&self) -> Vec3 {
         feet(&self.sim) + sim_to_render(self.sim_origin_mm, self.render_origin_mm)

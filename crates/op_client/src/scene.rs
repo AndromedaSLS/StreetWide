@@ -122,11 +122,16 @@ pub struct ScenePlugin;
 
 impl Plugin for ScenePlugin {
     fn build(&self, app: &mut App) {
+        // The drawing prototype's `--preset fast` starts on F4's lighter set.
+        let fast = app
+            .world()
+            .get_resource::<crate::Options>()
+            .is_some_and(|o| o.proto.preset_fast);
         app.init_resource::<Shown>()
             .init_resource::<PickIndex>()
             .init_resource::<StreamStats>()
             .init_resource::<HeightIndex>()
-            .insert_resource(Quality { high: true })
+            .insert_resource(Quality { high: !fast })
             .add_systems(Startup, (materials::setup, setup_camera, find_facades))
             .add_systems(
                 Update,
@@ -285,6 +290,7 @@ fn stream_meshes(
     mut pick: ResMut<PickIndex>,
     mut stats: ResMut<StreamStats>,
     mut heights: ResMut<HeightIndex>,
+    options: Res<crate::Options>,
 ) {
     let streamer = session.streamer();
     let eye = camera.translation;
@@ -399,8 +405,21 @@ fn stream_meshes(
         for prim in drawn.nodes.iter().flat_map(|n| &n.primitives) {
             for (surface, part) in materials::parts(prim, w.origin_m, &w.look, &mut ground) {
                 let looks = set.looks(surface, prim.material, &w.look);
+                // The drawing prototype's lit windows read a mask through a
+                // second set of texture coordinates on facade parts.
+                let uv1 = options
+                    .proto
+                    .windows
+                    .then(|| {
+                        crate::proto::windows::uv1(&part, surface, w.origin_m, &w.id.feature_id)
+                    })
+                    .flatten();
+                let mut mesh = materials::mesh(part);
+                if let Some(uv1) = uv1 {
+                    mesh.insert_attribute(Mesh::ATTRIBUTE_UV_1, uv1);
+                }
                 let mut entity = commands.spawn((
-                    Mesh3d(meshes.add(materials::mesh(part))),
+                    Mesh3d(meshes.add(mesh)),
                     MeshMaterial3d(set.current(&looks)),
                     looks,
                     Transform::from_translation(w.offset),

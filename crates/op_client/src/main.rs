@@ -9,6 +9,9 @@
 //!     [--screenshot <file.png> [--screenshot-tick <n>]]
 //! ```
 //!
+//! The drawing prototype (`proto`, branch `drawing-prototype`) adds options
+//! of its own, all off by default; `--help` lists them.
+//!
 //! The deterministic simulation (`op_sim`) runs in Bevy's `FixedUpdate` at
 //! 60 Hz. Input is sampled every frame and latched for the next tick;
 //! rendering interpolates between the last two simulated states. Meshes
@@ -27,6 +30,7 @@ mod hud;
 mod inspect;
 mod materials;
 mod pick;
+mod proto;
 mod scene;
 mod session;
 mod sky;
@@ -64,6 +68,8 @@ pub struct Options {
     pub details: bool,
     /// Start in inspect mode (I).
     pub inspect: bool,
+    /// The drawing prototype's options (`proto`): all off by default.
+    pub proto: proto::ProtoOptions,
 }
 
 const USAGE: &str = "usage: op_client [--world <dir>] [--seed <n>] [--place <name|number> | --at <lon>,<lat>[,<heading>]] [--pitch <degrees>] [--time <HH:MM>] [--date <YYYY-MM-DD>] [--view walk|fly|map] [--details] [--inspect] [--replay <file.oprep>] [--exit-when-done] [--screenshot <file.png> [--screenshot-tick <n>]]";
@@ -134,10 +140,18 @@ fn parse_args() -> Result<Options, String> {
                 }
                 o.view = Some(v)
             }
-            "-h" | "--help" => return Err(USAGE.into()),
-            other => return Err(format!("unknown argument {other}\n{USAGE}")),
+            "-h" | "--help" => return Err(format!("{USAGE}\n{}", proto::USAGE)),
+            other => {
+                if !proto::parse_arg(&mut o.proto, other, &mut value)? {
+                    return Err(format!(
+                        "unknown argument {other}\n{USAGE}\n{}",
+                        proto::USAGE
+                    ));
+                }
+            }
         }
     }
+    proto::validate(&o.proto)?;
     Ok(o)
 }
 
@@ -169,9 +183,21 @@ fn main() -> ExitCode {
         debug: options.details,
     };
     let inspect = inspect::Inspect::new(options.inspect);
+    // The prototype's benchmark: 1920 x 1080 physical pixels, vsync off.
+    let window = if options.proto.bench.is_some() {
+        Window {
+            title,
+            resolution: bevy::window::WindowResolution::new(1920, 1080)
+                .with_scale_factor_override(1.0),
+            present_mode: bevy::window::PresentMode::AutoNoVsync,
+            ..default()
+        }
+    } else {
+        Window { title, ..default() }
+    };
     let exit = App::new()
         .add_plugins(DefaultPlugins.set(WindowPlugin {
-            primary_window: Some(Window { title, ..default() }),
+            primary_window: Some(window),
             ..default()
         }))
         .insert_resource(options)
@@ -187,6 +213,7 @@ fn main() -> ExitCode {
             travel::TravelPlugin,
             inspect::InspectPlugin,
             hud::HudPlugin,
+            proto::ProtoPlugin,
         ))
         .run();
     match exit {

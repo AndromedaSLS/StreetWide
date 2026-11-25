@@ -119,9 +119,18 @@ pub fn exposure_ev100(elevation_deg: f64) -> f32 {
     6.5 + 7.3 * s
 }
 
+/// The same ramp down to another night floor (the drawing prototype's
+/// `--proto-night-ev`, for ADR-0018's proposed EV100 3 to 5).
+pub fn exposure_with_floor(elevation_deg: f64, floor: f32) -> f32 {
+    let t = ((elevation_deg + 10.0) / 25.0).clamp(0.0, 1.0) as f32;
+    let s = t * t * (3.0 - 2.0 * t);
+    floor + (13.8 - floor) * s
+}
+
 fn update_sun(
     clock: Res<Clock>,
     session: Res<Session>,
+    options: Res<crate::Options>,
     mut state: ResMut<SunState>,
     mut sun: Single<(&mut Transform, &mut DirectionalLight), With<Sun>>,
     mut exposure: Query<&mut Exposure>,
@@ -143,8 +152,12 @@ fn update_sun(
     let day = ((elevation + 3.0) / 5.0).clamp(0.0, 1.0) as f32;
     light.illuminance = lux::RAW_SUNLIGHT * day;
     light.shadow_maps_enabled = day > 0.0;
+    let ev100 = match options.proto.night_ev100 {
+        Some(floor) => exposure_with_floor(elevation, floor),
+        None => exposure_ev100(elevation),
+    };
     for mut e in &mut exposure {
-        e.ev100 = exposure_ev100(elevation);
+        e.ev100 = ev100;
     }
 }
 

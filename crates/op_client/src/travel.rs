@@ -281,7 +281,7 @@ fn probe_open(streamer: &Streamer, x: f64, z: f64) -> Open {
 
 /// The water at a point.
 #[derive(Clone, Copy, Debug, PartialEq)]
-enum Water {
+pub(crate) enum Water {
     /// The water surface's height (region frame, m).
     At(f64),
     Dry,
@@ -293,7 +293,7 @@ enum Water {
 /// only, never colliders). Loads the meshes it needs. Water is decoration:
 /// where its mesh cannot be loaded, the scene draws the terrain as it is,
 /// and the point counts as dry rather than holding up the trip.
-fn water_level(streamer: &Streamer, x: f64, z: f64) -> Water {
+pub(crate) fn water_level(streamer: &Streamer, x: f64, z: f64) -> Water {
     let mut best: Option<f64> = None;
     let mut loading = false;
     for tile in streamer.index().tiles() {

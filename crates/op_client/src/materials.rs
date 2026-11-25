@@ -574,6 +574,16 @@ impl MaterialSet {
         }
     }
 
+    /// The detailed look's windowed walls (facade and ground-floor styles,
+    /// every tint), for the drawing prototype's lit windows.
+    pub fn window_materials(&self) -> Vec<(Surface, Handle<StandardMaterial>)> {
+        self.detailed
+            .iter()
+            .filter(|((s, _), _)| matches!(s, Surface::Facade(_) | Surface::GroundFloor(_)))
+            .map(|((s, _), h)| (*s, h.clone()))
+            .collect()
+    }
+
     /// The detailed look's water, whose ripples drift.
     pub fn water(&self) -> Option<&Handle<StandardMaterial>> {
         self.detailed.get(&(Surface::Water, 0))
