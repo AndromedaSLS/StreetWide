@@ -16,6 +16,14 @@
   (crates/op_world/src/manifest.rs) that the schema cannot state, as it
   must for the gate to read it.
 
+Change sets and stores come from anyone, so every reader here takes any
+input: `parse` any bytes, `problems` any parsed JSON value, `Objects` any
+directory and `apply` any parsed world and change set. Each returns a
+value or raises ChangeError (`problems` only returns), with time and
+memory in proportion to its input. Files are read with
+`store.read_file`: a regular file itself (not a link, a FIFO or a
+device) of at most MAX_FILE_BYTES.
+
 The field rules (`is_text`, `is_feature_id`, `is_license`,
 `is_https_url`, `is_sorted_unique`, `tile_xy`) mirror
 crates/op_world/src/rules.rs and keys.rs.
@@ -42,7 +50,7 @@ from __future__ import annotations
 import copy
 import json
 import re
-import unicodedata
+import stat
 from collections.abc import Iterable, Mapping, Sequence
 from dataclasses import dataclass
 from pathlib import Path
@@ -50,7 +58,8 @@ from typing import Any, Union
 
 from tools.worldfmt import cjson, schemas
 from tools.worldfmt.ids import content_id, is_content_id
-from tools.worldfmt.store import Store
+from tools.worldfmt.rust import rust_debug
+from tools.worldfmt.store import MAX_FILE_BYTES, Store, read_file
 
 FORMAT = "streetwide.change"
 CONTRIBUTION_CONTRACT_VERSION = "0.1.0"
@@ -70,8 +79,8 @@ _FEATURE_ID = re.compile(r"[a-z][a-z0-9_-]*:[!-~]+")
 _LICENSE = re.compile(r"[A-Za-z0-9.+:() -]+")
 _URL_REST = re.compile(r"[!-~]+")
 _CONTROL = re.compile(r"[\x00-\x1f\x7f]")
+_TOO_DEEP = f"arrays and objects nested deeper than {cjson.MAX_DEPTH} levels"
 _UNSIGNED = re.compile(r"\+?[0-9]+")
-_RUST_ESCAPES = {'"': '\\"', "\\": "\\\\", "\n": "\\n", "\r": "\\r", "\t": "\\t", "\0": "\\0"}
 _OP_RULE = "add needs a manifest and no parent, replace both, remove a parent and no manifest"
 
 
@@ -97,30 +106,32 @@ class ChangeError(ValueError):
 
 def is_text(s: object) -> bool:
     """`rules::is_text`: a non-empty string of at most 4096 characters, with
-    no control character (U+0000 to U+001F, U+007F)."""
+    no control character (U+0000 to U+001F, U+007F). A lone surrogate,
+    which Rust strings cannot hold, is left to canonical JSON to refuse."""
     return isinstance(s, str) and 0 < len(s) <= MAX_TEXT_CHARS and _CONTROL.search(s) is None
+
+
+# The next three patterns are ASCII, so a string they match has as many
+# bytes as characters: the byte limits are checked on its length, which
+# needs no encoding (a lone surrogate cannot be encoded).
 
 
 def is_feature_id(s: object) -> bool:
     """`rules::is_feature_id`: `^[a-z][a-z0-9_-]*:[!-~]+$`, at most 256
     bytes. Handles such as `github:<login>` follow the same rule."""
-    return (
-        isinstance(s, str)
-        and len(s.encode("utf-8")) <= MAX_FEATURE_ID_BYTES
-        and _FEATURE_ID.fullmatch(s) is not None
-    )
+    return isinstance(s, str) and len(s) <= MAX_FEATURE_ID_BYTES and _FEATURE_ID.fullmatch(s) is not None
 
 
 def is_license(s: object) -> bool:
     """`rules::is_license`: `^[A-Za-z0-9.+:() -]+$`, at most 256 bytes."""
-    return isinstance(s, str) and len(s.encode("utf-8")) <= 256 and _LICENSE.fullmatch(s) is not None
+    return isinstance(s, str) and len(s) <= 256 and _LICENSE.fullmatch(s) is not None
 
 
 def is_https_url(s: object) -> bool:
     """`rules::is_https_url`: `^https://[!-~]+$`, at most 2048 bytes."""
     return (
         isinstance(s, str)
-        and len(s.encode("utf-8")) <= 2048
+        and len(s) <= 2048
         and s.startswith("https://")
         and _URL_REST.fullmatch(s[len("https://"):]) is not None
     )
@@ -132,8 +143,9 @@ def is_sorted_unique(items: Sequence[Any]) -> bool:
 
 
 def _texts_sorted_unique(items: Sequence[Any]) -> bool:
-    # As Rust compares `String`s: by their UTF-8 bytes.
-    return all(is_text(t) for t in items) and is_sorted_unique([t.encode("utf-8") for t in items])
+    # As Rust compares `String`s: by their UTF-8 bytes. "surrogatepass" lets
+    # a lone surrogate through: only a document canonical JSON refuses has one.
+    return all(is_text(t) for t in items) and is_sorted_unique([t.encode("utf-8", "surrogatepass") for t in items])
 
 
 def manifest_problems(m: Mapping[str, Any]) -> list[str]:
@@ -194,37 +206,16 @@ def tile_xy(key: str) -> tuple[int, int]:
     return x, y
 
 
-def rust_debug(value: object) -> str:
-    """How Rust's `{:?}` writes a string: in double quotes, with quotes,
-    backslashes and control characters escaped, and `\\u{...}` for a
-    character that is not printable or that extends the grapheme before it
-    (a combining mark, categories Mn and Me). Other values are written as
-    JSON. Python's Unicode tables decide what is printable, so a character
-    that one of the two Unicode versions does not know yet is written
-    differently; Rust also escapes the few characters of
-    Other_Grapheme_Extend that are not marks."""
-    if not isinstance(value, str):
-        return json.dumps(value, ensure_ascii=False)
-    out = ['"']
-    for ch in value:
-        if ch in _RUST_ESCAPES:
-            out.append(_RUST_ESCAPES[ch])
-        elif _CONTROL.match(ch) or not ch.isprintable() or unicodedata.category(ch) in ("Mn", "Me"):
-            out.append(f"\\u{{{ord(ch):x}}}")
-        else:
-            out.append(ch)
-    out.append('"')
-    return "".join(out)
-
-
 def sort_key(change: Mapping[str, Any]) -> tuple[bytes, bytes, bytes]:
     """The order of changes in a change set (`Change::sort_key`): tile key,
     layer and feature id, each as a string in byte order. This is not the
-    numeric tile order of world manifests: "17/10/5" sorts before "17/9/5"."""
+    numeric tile order of world manifests: "17/10/5" sorts before "17/9/5".
+    A lone surrogate, which only an invalid document holds, sorts by its
+    surrogate code (it cannot be UTF-8)."""
     return (
-        change["tile"].encode("utf-8"),
-        change["layer"].encode("utf-8"),
-        change["feature_id"].encode("utf-8"),
+        change["tile"].encode("utf-8", "surrogatepass"),
+        change["layer"].encode("utf-8", "surrogatepass"),
+        change["feature_id"].encode("utf-8", "surrogatepass"),
     )
 
 
@@ -249,8 +240,28 @@ def problems(change: Any) -> list[str]:
 
     Layers 2 and 3 pass over values of the wrong JSON type, which layer 1
     reports. The canonical form of the bytes is checked by `parse`.
+
+    `change` may be any parsed JSON value. One nested deeper than
+    canonical JSON allows (`cjson.MAX_DEPTH`) gets that one message,
+    "arrays and objects nested deeper than 127 levels", as op_world's
+    parser refuses it before anything else. A set of more than
+    MAX_CHANGES + 1 changes, which breaks the cap whatever they are, is
+    checked against the schema as its first MAX_CHANGES + 1 changes:
+    jsonschema takes about a millisecond per change, so a crafted set of
+    thousands took seconds.
     """
-    found = schema_problems(SCHEMA_FILE, change)
+    if cjson.deeper_than(change, cjson.MAX_DEPTH):
+        return [_TOO_DEEP]
+    return _problems(change)
+
+
+def _problems(change: Any) -> list[str]:
+    """`problems` of a value nested at most `cjson.MAX_DEPTH` levels deep."""
+    entries = change.get("changes") if isinstance(change, dict) else None
+    if isinstance(entries, list) and len(entries) > MAX_CHANGES + 1:
+        found = _schema_problems(SCHEMA_FILE, dict(change, changes=entries[: MAX_CHANGES + 1]))
+    else:
+        found = _schema_problems(SCHEMA_FILE, change)
     if isinstance(change, dict):
         found += id_problems(change)
         found += rule_problems(change)
@@ -259,7 +270,16 @@ def problems(change: Any) -> list[str]:
 
 def schema_problems(schema_file: str, doc: Any) -> list[str]:
     """The errors of `doc` against `schemas/<schema_file>`, as
-    "schema: <JSON path>: <message>", sorted."""
+    "schema: <JSON path>: <message>", sorted. jsonschema recurses and
+    quotes values in its messages, so a document nested deeper than
+    `cjson.MAX_DEPTH` is not validated: it gets the one message
+    "schema: $: arrays and objects nested deeper than 127 levels"."""
+    if cjson.deeper_than(doc, cjson.MAX_DEPTH):
+        return [f"schema: $: {_TOO_DEEP}"]
+    return _schema_problems(schema_file, doc)
+
+
+def _schema_problems(schema_file: str, doc: Any) -> list[str]:
     errors = sorted((e.json_path, e.message) for e in schemas.validator(schema_file).iter_errors(doc))
     return [f"schema: {path}: {message}" for path, message in errors]
 
@@ -338,10 +358,10 @@ def parse(data: bytes) -> dict:
     """Reads the bytes of a `change.json` as `ChangeSet::from_bytes` does:
     canonical JSON, then `problems`. Raises ChangeError."""
     try:
-        change = cjson.loads(data)
+        change = cjson.loads(data)  # nested at most cjson.MAX_DEPTH levels deep
     except cjson.CanonicalError as e:
         raise ChangeError(f"not canonical JSON: {e}") from e
-    found = problems(change)
+    found = _problems(change)
     if found:
         raise ChangeError("; ".join(found))
     return change
@@ -354,7 +374,10 @@ def to_bytes(change: dict) -> bytes:
     found = problems(change)
     if found:
         raise ChangeError("; ".join(found))
-    return cjson.dumps(change)
+    try:
+        return cjson.dumps(change)
+    except cjson.CanonicalError as e:  # a value only Python holds, such as a float
+        raise ChangeError(f"not canonical JSON: {e}") from e
 
 
 # --------------------------------------------------------------- objects --
@@ -393,15 +416,25 @@ class Objects:
         self._sources.insert(0, source)
 
     def read(self, cid: str) -> bytes:
-        """The bytes of JSON object `cid`, from the first source that has it."""
+        """The bytes of JSON object `cid`, from the first source that has it.
+
+        A directory has an object only as a regular file: as in op_world's
+        layered store, a link, a directory or a FIFO in one source does not
+        hide the object in the next. The file is read with
+        `store.read_file`, at most MAX_FILE_BYTES. Raises ChangeError when
+        `cid` is not a content id, no source has the object, its file
+        cannot be read, or its bytes hash to another id."""
         if not is_content_id(cid):
             raise ChangeError(f"{rust_debug(cid)} is not a content id (blake3:<64 hex>)")
         for source in self._sources:
             if isinstance(source, Store):
                 path = source.object_path(cid, "json")
-                if not path.is_file():
+                if not _is_regular_file(path):
                     continue
-                data = path.read_bytes()
+                try:
+                    data = read_file(path, MAX_FILE_BYTES)
+                except (OSError, ValueError) as e:  # too large, or replaced since it was looked up
+                    raise ChangeError(f"object {cid}: {e}") from e
             else:
                 data = source.get(cid)
                 if data is None:
@@ -413,8 +446,11 @@ class Objects:
         raise ChangeError(f"object {cid}: not found")
 
     def doc(self, cid: str) -> dict:
-        """JSON object `cid`, parsed as canonical JSON."""
-        doc = self._docs.get(cid)
+        """JSON object `cid`, parsed as canonical JSON. Raises ChangeError as
+        `read` does, or when the object is not canonical JSON."""
+        # An id that is not a content id (any JSON value, a list included)
+        # goes to `read`, which refuses it, not to the cache.
+        doc = self._docs.get(cid) if is_content_id(cid) else None
         if doc is None:
             try:
                 doc = cjson.loads(self.read(cid))
@@ -433,7 +469,7 @@ class Objects:
         return self._checked_doc(cid, "streetwide.asset")
 
     def _checked_doc(self, cid: str, fmt: str) -> dict:
-        doc = self._checked.get((cid, fmt))
+        doc = self._checked.get((cid, fmt)) if is_content_id(cid) else None
         if doc is None:
             doc = self.doc(cid)
             if not isinstance(doc, dict) or doc.get("format") != fmt:
@@ -445,6 +481,15 @@ class Objects:
                 raise ChangeError(f"object {cid}: {'; '.join(errors)}")
             self._checked[(cid, fmt)] = doc
         return doc
+
+
+def _is_regular_file(path: Path) -> bool:
+    """Whether `path` names a regular file itself, not a link to one (op_world's
+    `store::is_regular_file`)."""
+    try:
+        return stat.S_ISREG(path.lstat().st_mode)
+    except (OSError, ValueError):  # missing, or a path the system cannot name
+        return False
 
 
 # ----------------------------------------------------------------- apply --
@@ -512,16 +557,25 @@ def apply(world: dict, change: Mapping[str, Any], objects: Objects | Source) -> 
     be sorted by (layer, feature_id) without duplicates". Unlike the gate,
     `apply` never reads meshes, so it does not check that a manifest
     agrees with its mesh.
+
+    `world` and `change` may be any parsed JSON values: a world that is
+    not a valid world manifest in canonical JSON, or a change that is not
+    an object naming a tile, a layer, a feature id and an op, is a
+    ChangeError too.
     """
     if not isinstance(objects, Objects):
         objects = Objects(objects)
-    _check_world(world, "the base world")
+    _world_bytes(world, "the base world")
     base = copy.deepcopy(world)
     position = {wt["tile"]: i for i, wt in enumerate(base["tiles"])}
     edited: dict[str, dict] = {}
     entries = change.get("changes") if isinstance(change, Mapping) else None
     if not isinstance(entries, list):
         raise ChangeError("a change set lists its changes in `changes`")
+    # `changes` is the second level of a change set. Deeper, op_world could
+    # not parse it, and quoting a change in a message would recurse too far.
+    if cjson.deeper_than(entries, cjson.MAX_DEPTH - 1):
+        raise ChangeError(f"the change set: {_TOO_DEEP}")
     for c in entries:
         _check_entry(c)
         key = c["tile"]
@@ -576,8 +630,7 @@ def apply(world: dict, change: Mapping[str, Any], objects: Objects | Source) -> 
         for a in index["assets"]:
             credits.update(objects.manifest(a["manifest_id"])["provenance"]["attribution"])
     base["attribution"] = sorted(credits, key=lambda s: s.encode("utf-8"))
-    _check_world(base, "the candidate world")
-    world_bytes = cjson.dumps(base)
+    world_bytes = _world_bytes(base, "the candidate world")
     return Candidate(
         world=base,
         world_bytes=world_bytes,
@@ -599,15 +652,28 @@ def union_bounds(bounds: Iterable[Mapping[str, Sequence[int]]]) -> dict:
     }
 
 
-def _check_world(world: dict, what: str) -> None:
-    errors = schemas.errors(world) if isinstance(world, dict) else ["not a JSON object"]
-    for wt in world.get("tiles", []) if not errors else []:
+def _world_bytes(world: Any, what: str) -> bytes:
+    """The canonical bytes of `world`, once it is checked as a world
+    manifest: its format (`schemas.errors` would check another document
+    against its own schema), its schema and its tile keys. Raises
+    ChangeError naming `what`."""
+    if not isinstance(world, dict):
+        errors = ["not a JSON object"]
+    elif world.get("format") != "streetwide.world":
+        errors = ["not a streetwide.world document"]
+    else:
+        errors = schemas.errors(world)
+    for wt in world["tiles"] if not errors else []:
         try:
             tile_xy(wt["tile"])
         except ValueError as e:
             errors.append(str(e))
     if errors:
         raise ChangeError(f"{what}: {'; '.join(sorted(errors))}")
+    try:
+        return cjson.dumps(world)
+    except cjson.CanonicalError as e:  # a value only Python holds, such as a float
+        raise ChangeError(f"{what}: not canonical JSON: {e}") from e
 
 
 def _check_entry(c: Any) -> None:

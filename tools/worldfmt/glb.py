@@ -24,7 +24,9 @@ import struct
 from collections.abc import Iterator
 from dataclasses import dataclass, field
 
+from tools.worldfmt import cjson
 from tools.worldfmt.cjson import write_string
+from tools.worldfmt.rust import rust_debug
 
 GENERATOR = "StreetWide world format 0.1"
 
@@ -263,6 +265,16 @@ _MAX_FEATURE_ID_BYTES = 256
 # `f32_to_mm` gives up above this many millimetres, as op_world does.
 _MAX_SNAPPED_MM = 9_000_000_000_000_000
 _MAX_U64 = (1 << 64) - 1
+# A JSON string as `op_world::cjson::check_depth` skips it: from a quote to
+# the next quote that no backslash escapes (a backslash escapes any byte),
+# or to the end of the text.
+_JSON_STRING = re.compile(rb'"[^"\\]*(?:\\.[^"\\]*)*"?', re.DOTALL)
+_NOT_BRACKETS = bytes(b for b in range(256) if b not in b"[]{}")
+_TOO_DEEP = f"not canonical JSON: arrays and objects nested deeper than {cjson.MAX_DEPTH} levels"
+# The escape of a UTF-16 surrogate, paired or not (or a backslash and text
+# that looks like one), and a surrogate code point in a parsed string.
+_SURROGATE_ESCAPE = re.compile(rb"\\u[dD][89a-fA-F]")
+_SURROGATE = re.compile(r"[\ud800-\udfff]")
 
 
 @dataclass(frozen=True)
@@ -384,10 +396,20 @@ def read(data: bytes) -> Mesh:
     """Reads a profile-0.1 glb, strictly, as `op_world::glb::read` does.
 
     Raises GlbError, with the reason, for anything outside the profile: a
-    broken container, references or accessors, a material outside the
-    palette, positions not snapped to the millimetre, and any byte that
-    differs from what `write` produces for the parsed mesh (node
-    transforms, extensions, URIs, padding, JSON layout).
+    broken container, a JSON chunk longer than MAX_JSON_BYTES or nested
+    deeper than `cjson.MAX_DEPTH` levels, broken references or accessors,
+    node i not showing mesh i, accessors that decode more data than the BIN
+    chunk holds, a material outside the palette, positions not snapped to
+    the millimetre, and any byte that differs from what `write` produces
+    for the parsed mesh (node transforms, extensions, URIs, padding, JSON
+    layout).
+
+    The rules run in op_world's order, with its messages, so both readers
+    refuse a file for the same reason. op_world reports a JSON chunk nested
+    too deeply as "not canonical JSON: ..." rather than as a glb error, and
+    this message starts the same way. The chunk lengths are checked before
+    anything is parsed, and each mesh and each BIN byte is decoded at most
+    once, so the work and the memory stay proportional to the file.
     """
     data = bytes(data)
     nodes = _parse(data)
@@ -427,12 +449,17 @@ def missing_boundary_vertices(old: Mesh, new: Mesh) -> int:
 
 
 def _is_feature_id(s: str) -> bool:
-    # `op_world::rules::is_feature_id`.
-    return len(s.encode("utf-8")) <= _MAX_FEATURE_ID_BYTES and _FEATURE_ID.fullmatch(s) is not None
+    # `op_world::rules::is_feature_id`. The pattern is ASCII, so a name it
+    # matches has as many bytes as characters. Encoding first raised
+    # UnicodeEncodeError on a lone surrogate, which JSON can spell (\ud800).
+    return len(s) <= _MAX_FEATURE_ID_BYTES and _FEATURE_ID.fullmatch(s) is not None
 
 
 def _quote(s: str) -> str:
-    return json.dumps(s, ensure_ascii=False)
+    # op_world writes node names with Rust's `{:?}`, which writes control
+    # and format characters, separators and combining marks as `\u{...}`.
+    # json.dumps wrote some of them raw and others as `\u0001`.
+    return rust_debug(s)
 
 
 def _is_int(v: object) -> bool:
@@ -454,6 +481,70 @@ def _reject_constant(token: str) -> object:
     raise GlbError(f"the JSON chunk contains {token}")
 
 
+_OUT_OF_RANGE = "the JSON chunk is not valid JSON: number out of range"
+
+
+def _parse_int(token: str) -> int | float:
+    # serde_json reads -0 as the float -0.0, which is not an index: a node
+    # showing mesh -0 breaks the same rule in both readers. It reads an
+    # integer beyond u64 as an f64, and one that would round to infinity
+    # makes the whole document invalid ("number out of range"), as such a
+    # float does.
+    if token == "-0":
+        return -0.0
+    value = int(token)
+    if abs(value) > _MAX_U64:
+        try:
+            float(value)
+        except OverflowError:
+            raise GlbError(_OUT_OF_RANGE) from None
+    return value
+
+
+def _parse_float(token: str) -> float:
+    # Python's json reads 1e400 as infinity, where serde_json refuses the
+    # document.
+    value = float(token)
+    if math.isinf(value):
+        raise GlbError(_OUT_OF_RANGE)
+    return value
+
+
+def _has_lone_surrogate(doc: object) -> bool:
+    """Whether a key or a string of `doc` holds a lone surrogate. JSON can
+    escape one (an unpaired \\ud800), but UTF-8 cannot hold it: serde_json
+    refuses the document, where Python's json lets the surrogate through."""
+    stack = [doc]
+    while stack:
+        v = stack.pop()
+        if isinstance(v, str):
+            if _SURROGATE.search(v):
+                return True
+        elif isinstance(v, dict):
+            stack.extend(v)
+            stack.extend(v.values())
+        elif isinstance(v, list):
+            stack.extend(v)
+    return False
+
+
+def _check_depth(json_chunk: bytes) -> None:
+    """`op_world::cjson::check_depth`: refuses JSON text whose arrays and
+    objects nest deeper than `cjson.MAX_DEPTH` levels, before it is parsed.
+    Brackets inside strings do not count, a closing bracket at level 0
+    changes nothing, and anything else that is not JSON is left to the
+    parser. Python's json would raise RecursionError on deep enough text,
+    and in any case would refuse it later than op_world does."""
+    depth = 0
+    for b in _JSON_STRING.sub(b"", json_chunk).translate(None, _NOT_BRACKETS):
+        if b == 0x5B or b == 0x7B:  # [ or {
+            depth += 1
+            if depth > cjson.MAX_DEPTH:
+                raise GlbError(_TOO_DEEP)
+        elif depth:
+            depth -= 1
+
+
 @dataclass
 class _Parsed:
     material: str
@@ -464,7 +555,8 @@ class _Parsed:
 
 
 def _parse(data: bytes) -> list[tuple[str, list[_Parsed]]]:
-    """The container and the glTF references, as `op_world::glb::parse`."""
+    """The container and the glTF references, as `op_world::glb::parse`, in
+    its order and with its messages."""
     if len(data) > MAX_GLB_BYTES:
         raise GlbError(f"file larger than {MAX_GLB_BYTES} bytes")
     if _u32_at(data, 0) != _GLB_MAGIC or _u32_at(data, 4) != _GLB_VERSION:
@@ -474,6 +566,9 @@ def _parse(data: bytes) -> list[tuple[str, list[_Parsed]]]:
     json_len = _u32_at(data, 12)
     if _u32_at(data, 16) != _CHUNK_JSON:
         raise GlbError("first chunk must be JSON")
+    # Parsing builds objects many times the size of their text.
+    if json_len > MAX_JSON_BYTES:
+        raise GlbError(f"JSON chunk longer than {MAX_JSON_BYTES} bytes")
     if 20 + json_len > len(data):
         raise GlbError("truncated JSON chunk")
     json_chunk = data[20 : 20 + json_len]
@@ -485,12 +580,18 @@ def _parse(data: bytes) -> list[tuple[str, list[_Parsed]]]:
         raise GlbError("truncated BIN chunk")
     if bin_header + 8 + bin_len != len(data):
         raise GlbError("unexpected data after the BIN chunk")
+    _check_depth(json_chunk)
     try:
-        doc = json.loads(json_chunk.decode("utf-8"), parse_constant=_reject_constant)
+        doc = json.loads(
+            json_chunk.decode("utf-8"), parse_constant=_reject_constant, parse_int=_parse_int, parse_float=_parse_float
+        )
     except ValueError as e:
         if isinstance(e, GlbError):
             raise
         raise GlbError(f"the JSON chunk is not valid JSON: {e}") from e
+    # Only an escape can spell a lone surrogate, so most chunks skip the walk.
+    if _SURROGATE_ESCAPE.search(json_chunk) and _has_lone_surrogate(doc):
+        raise GlbError("the JSON chunk is not valid JSON: a string holds a lone surrogate")
     view = _Doc(doc if isinstance(doc, dict) else {}, data[bin_header + 8 :])
 
     materials = []
@@ -501,10 +602,14 @@ def _parse(data: bytes) -> list[tuple[str, list[_Parsed]]]:
         materials.append(name)
 
     nodes = []
-    for node in view.array("nodes"):
+    for i, node in enumerate(view.array("nodes")):
         name = node.get("name") if isinstance(node, dict) else None
         if not isinstance(name, str):
             raise GlbError("node without a name")
+        # Node i shows mesh i, as the writer lays them out, so each mesh is
+        # decoded once: nodes sharing a mesh would decode it again for each.
+        if _as_index(node.get("mesh")) != i:
+            raise GlbError(f"node {i} must show mesh {i}")
         mesh = view.index_into("meshes", node.get("mesh"))
         prims = mesh.get("primitives") if isinstance(mesh, dict) else None
         if not isinstance(prims, list):
@@ -531,6 +636,12 @@ class _Doc:
     def __init__(self, doc: dict, bin_chunk: bytes):
         self.doc = doc
         self.bin = bin_chunk
+        # BIN bytes the accessors have not decoded yet. A valid file decodes
+        # each byte once (every accessor has a buffer view of its own, laid
+        # out one after the other), so accessors that ask for more are
+        # refused before they can make the reader decode the same bytes
+        # over and over.
+        self.unread = len(bin_chunk)
 
     def array(self, key: str) -> list:
         items = self.doc.get(key)
@@ -564,9 +675,15 @@ class _Doc:
             raise GlbError("buffer view without byteLength")
         if count * size != length:
             raise GlbError("accessor count does not match its buffer view")
-        if offset + length > len(self.bin):
+        end = offset + length
+        if end > _MAX_U64:  # op_world's usize addition overflows
+            raise GlbError("buffer view overflows")
+        if end > len(self.bin):
             raise GlbError("buffer view outside the BIN chunk")
-        return count, self.bin[offset : offset + length]
+        if length > self.unread:
+            raise GlbError("accessors read more data than the BIN chunk holds")
+        self.unread -= length
+        return count, self.bin[offset:end]
 
     def f32x3(self, accessor: object) -> tuple[list[tuple[float, float, float]], list[tuple[int, int, int]]]:
         count, data = self.accessor_bytes(accessor, _FLOAT, "VEC3", 12)

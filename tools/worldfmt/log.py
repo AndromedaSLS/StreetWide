@@ -25,6 +25,22 @@ allowed in Windows file names. The `*_path` functions give these paths.
 Check reports and world manifests are read only on request (`report`,
 `world`).
 
+A log may come from anyone, so `read_log` takes any directory: it returns
+a WorldLog or raises LogError, with time and memory in proportion to what
+it reads. As in op_world's `WorldLog`, nothing inside the log is a link:
+every directory on the way to a file (`log`, `changes`, `changes/<hex>`,
+`reports`, `worlds`) must be a directory itself, not a link or a Windows
+junction, and every file is read with `store.read_file`: a regular file
+itself (not a link, a FIFO or a device) of at most MAX_FILE_BYTES. A change
+set that several records name is read and checked once, and so is each
+world or report read on request.
+
+Merge records may list any number of reviews, and each is checked against
+the schema, which takes about 0.15 ms per review: a record of a few MB takes
+seconds, one of MAX_FILE_BYTES minutes. That time grows with the input, so
+it is no hang, but RFC 0001 has yet to set a size limit for JSON documents
+(ADR-0020 lists the question).
+
 Typical use:
 
     log = read_log(log_dir)
@@ -36,14 +52,17 @@ Typical use:
 
 from __future__ import annotations
 
+import os
+import stat
 from collections.abc import Sequence
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path, PurePosixPath
 from typing import Any
 
 from tools.worldfmt import changes, cjson, schemas
 from tools.worldfmt.changes import is_feature_id, is_sorted_unique, is_text, rust_debug
 from tools.worldfmt.ids import content_id, hex_of
+from tools.worldfmt.store import MAX_FILE_BYTES, is_link, read_file
 
 FORMAT = "streetwide.merge"
 SCHEMA_FILE = "merge-record.schema.json"
@@ -51,6 +70,7 @@ DECISIONS = ("baseline", "merged", "takedown")
 VERDICTS = ("better", "not_better", "blocked")
 
 _LINKS = ("change_id", "world_before", "check_report_id", "previous_record_id")
+_TOO_DEEP = f"arrays and objects nested deeper than {cjson.MAX_DEPTH} levels"
 
 
 class LogError(ValueError):
@@ -89,7 +109,17 @@ def record_problems(record: Any) -> list[str]:
     """Every rule a merge record breaks; [] when op_world accepts it. As
     `changes.problems`: the schema's messages (starting with "schema: "),
     then `ContentId::parse`'s for the ids, then `MergeRecord::problems`,
-    message for message."""
+    message for message. `record` may be any parsed JSON value; one nested
+    deeper than `cjson.MAX_DEPTH` gets that one message, as in
+    `changes.problems`."""
+    if cjson.deeper_than(record, cjson.MAX_DEPTH):
+        return [_TOO_DEEP]
+    return _record_problems(record)
+
+
+def _record_problems(record: Any) -> list[str]:
+    """`record_problems` of a value nested at most `cjson.MAX_DEPTH` levels
+    deep (schema_problems checks that again, but a record is small)."""
     found = changes.schema_problems(SCHEMA_FILE, record)
     if not isinstance(record, dict):
         return found
@@ -113,8 +143,9 @@ def record_problems(record: Any) -> list[str]:
     reviews = record.get("reviews")
     reviews = [r for r in reviews if isinstance(r, dict)] if isinstance(reviews, list) else []
     reviewers = [r.get("reviewer") for r in reviews]
+    # "surrogatepass": only an invalid record holds a lone surrogate.
     if all(isinstance(r, str) for r in reviewers) and not is_sorted_unique(
-        [r.encode("utf-8") for r in reviewers]
+        [r.encode("utf-8", "surrogatepass") for r in reviewers]
     ):
         found.append("reviews must be sorted by reviewer, one per reviewer")
     for r in reviews:
@@ -132,10 +163,10 @@ def parse_record(data: bytes) -> dict:
     """Reads the bytes of a merge record as `MergeRecord::from_bytes` does:
     canonical JSON, then `record_problems`. Raises LogError."""
     try:
-        record = cjson.loads(data)
+        record = cjson.loads(data)  # nested at most cjson.MAX_DEPTH levels deep
     except cjson.CanonicalError as e:
         raise LogError(f"not canonical JSON: {e}") from e
-    found = record_problems(record)
+    found = _record_problems(record)
     if found:
         raise LogError("; ".join(found))
     return record
@@ -258,6 +289,8 @@ class WorldLog:
 
     root: Path
     records: tuple[Record, ...]
+    _documents: dict = field(default_factory=dict, compare=False, repr=False)
+    """The worlds and reports read so far, by path: each is read once."""
 
     @property
     def baseline(self) -> Record:
@@ -296,29 +329,86 @@ class WorldLog:
 
     def world(self, world_id: str) -> dict | None:
         """World manifest `world_id` from `worlds/<hex>.json`, or None if
-        the log does not keep it."""
-        return self._optional(world_path(world_id), world_id)
+        the log does not keep it. Raises LogError when the file is there
+        but cannot be read, does not hash to `world_id` or is not a valid
+        world manifest, and ValueError when `world_id` is not a content id."""
+        return self._optional(world_path(world_id), world_id, "streetwide.world")
 
     def report(self, report_id: str) -> dict | None:
         """Check report `report_id` from `reports/<hex>.json`, or None if
-        the log does not keep it."""
-        return self._optional(report_path(report_id), report_id)
+        the log does not keep it. Raises as `world` does."""
+        return self._optional(report_path(report_id), report_id, "streetwide.check")
 
-    def _optional(self, rel: str, cid: str) -> dict | None:
-        path = self.root / rel
-        if not path.is_file():
+    def _optional(self, rel: str, cid: str, fmt: str) -> dict | None:
+        if rel not in self._documents:
+            self._documents[rel] = self._checked(rel, cid, fmt)
+        return self._documents[rel]
+
+    def _checked(self, rel: str, cid: str, fmt: str) -> dict | None:
+        data = _read(self.root, rel)
+        if data is None:
             return None
-        data = path.read_bytes()
         if content_id(data) != cid:
             raise LogError(f"{rel} does not hash to {cid}")
         try:
             doc = cjson.loads(data)
         except cjson.CanonicalError as e:
             raise LogError(f"{rel}: not canonical JSON: {e}") from e
-        errors = schemas.errors(doc) if isinstance(doc, dict) else ["not a JSON object"]
+        # schemas.errors would check another document against its own schema.
+        if not isinstance(doc, dict) or doc.get("format") != fmt:
+            raise LogError(f"{rel} is not a {fmt} document")
+        errors = schemas.errors(doc)
         if errors:
             raise LogError(f"{rel}: {'; '.join(sorted(errors))}")
         return doc
+
+
+def _directories_problem(root: Path, rel: str) -> str | None:
+    """Why a directory on the way to file `rel` of the log in `root` is not
+    a directory itself, in op_world's words (`changes is a link`,
+    `worlds is not a directory`); None when each is one, or when one is
+    missing, so that the file is missing too. Links are never followed."""
+    parts = rel.split("/")[:-1]
+    path = root
+    for k, part in enumerate(parts):
+        path = path / part
+        try:
+            info = path.lstat()
+        except FileNotFoundError:
+            return None
+        where = "/".join(parts[: k + 1])
+        if is_link(info):
+            return f"{where} is a link"
+        if not stat.S_ISDIR(info.st_mode):
+            return f"{where} is not a directory"
+    return None
+
+
+def _read(root: Path, rel: str) -> bytes | None:
+    """File `rel` of the log in `root`, read with `store.read_file`; None
+    when nothing is at that path. Raises LogError naming `rel` for a
+    directory on the way that is a link or not a directory, for what
+    read_file refuses (a link, a directory, a FIFO, a device, a file larger
+    than MAX_FILE_BYTES) and for any other error."""
+    try:
+        problem = _directories_problem(root, rel)
+        if problem is not None:
+            raise LogError(f"cannot read {rel}: {problem}")
+        return read_file(root / rel, MAX_FILE_BYTES)
+    except (FileNotFoundError, NotADirectoryError):
+        return None
+    except ValueError as e:  # LogError is one
+        if isinstance(e, LogError):
+            raise
+        raise LogError(f"cannot read {rel}: {e}") from e
+    except OSError as e:
+        raise LogError(f"cannot read {rel}: {e.strerror or e}") from e
+
+
+def _listed_name(path: Path) -> str:
+    """A file name as text: undecodable bytes become U+FFFD, as op_world's
+    `to_string_lossy` makes them, so that it can be sorted and quoted."""
+    return os.fsencode(path.name).decode("utf-8", "replace")
 
 
 def read_log(root: Path | str) -> WorldLog:
@@ -326,12 +416,27 @@ def read_log(root: Path | str) -> WorldLog:
     documentation). Raises LogError, naming files relative to `root`."""
     root = Path(root)
     log_dir = root / "log"
-    names = sorted((p.name for p in log_dir.iterdir()), key=lambda s: s.encode("utf-8")) if log_dir.is_dir() else []
+    try:
+        info = log_dir.lstat()
+    except FileNotFoundError:
+        info = None
+    except OSError as e:
+        raise LogError(f"cannot list log/: {e.strerror or e}") from e
+    if info is not None and (is_link(info) or not stat.S_ISDIR(info.st_mode)):
+        raise LogError(
+            "the world log's log is not a directory; a world log holds its records in a directory log/, "
+            "not in a link to one"
+        )
+    try:
+        listed = [_listed_name(p) for p in log_dir.iterdir()] if info is not None else []
+    except OSError as e:
+        raise LogError(f"cannot list log/: {e.strerror or e}") from e
+    names = sorted(listed, key=lambda s: s.encode("utf-8"))
     if not names:
         raise LogError(f"the world log has no records: {record_path(0)}, the baseline record, is missing")
     for i, name in enumerate(names):
         expected = record_path(i)
-        if f"log/{name}" != expected or not (log_dir / name).is_file():
+        if f"log/{name}" != expected:
             raise LogError(
                 f"the world log has log/{name} where {expected} should be; "
                 "records are numbered from 00000000, with no gaps and no other files"
@@ -340,7 +445,9 @@ def read_log(root: Path | str) -> WorldLog:
     read: list[tuple[str, str, dict]] = []
     for i in range(len(names)):
         path = record_path(i)
-        data = (root / path).read_bytes()
+        data = _read(root, path)
+        if data is None:
+            raise LogError(f"cannot read {path}: it went away while the log was read")
         try:
             record = parse_record(data)
         except LogError as e:
@@ -348,19 +455,26 @@ def read_log(root: Path | str) -> WorldLog:
         read.append((path, content_id(data), record))
     verify_log([(record_id, record) for _, record_id, record in read])
 
+    # Each change set is read once, however many records name it, as in
+    # op_world: records cost a few hundred bytes, and a large change set
+    # read again for each would make time and memory grow with their
+    # product. Found by review.
     records = []
+    change_sets: dict[str, dict] = {}
     for i, (path, record_id, record) in enumerate(read):
-        change = None if record["decision"] == "baseline" else _read_change(root, record["change_id"], path)
+        change = None
+        if record["decision"] != "baseline":
+            change_id = record["change_id"]
+            if change_id not in change_sets:
+                change_sets[change_id] = _read_change(root, change_id, path)
+            change = change_sets[change_id]
         records.append(Record(index=i, path=path, record_id=record_id, record=record, change=change))
     return WorldLog(root=root, records=tuple(records))
 
 
 def _read_change(root: Path, change_id: str, record_file: str) -> dict:
     rel = change_path(change_id)
-    try:
-        data = (root / rel).read_bytes()
-    except OSError:
-        data = None
+    data = _read(root, rel)
     if data is None or content_id(data) != change_id:
         raise LogError(
             f"the world log names change set {change_id} ({record_file}) "

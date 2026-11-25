@@ -13,6 +13,7 @@ regular file of at most MAX_FILE_BYTES.
 
 from __future__ import annotations
 
+import os
 import stat
 from pathlib import Path
 
@@ -22,6 +23,18 @@ from tools.worldfmt.ids import content_id, hex_of
 MAX_FILE_BYTES = 64 << 20
 """Largest file the store reads: the largest asset a manifest may describe
 (`op_world`'s MAX_ASSET_BYTES), far more than any JSON document needs."""
+
+_NAME_SURROGATE = 0x20000000
+"""The bit of a Windows reparse tag that marks a reparse point naming
+another path: a symbolic link or a junction."""
+
+
+def is_link(info: os.stat_result) -> bool:
+    """Whether `info`, from `lstat` or `DirEntry.stat(follow_symlinks=False)`,
+    describes a link: a symbolic link, or on Windows a junction, which
+    `lstat` reports as a directory, and which needs no privilege to make.
+    Readers of untrusted directories follow neither."""
+    return stat.S_ISLNK(info.st_mode) or bool(getattr(info, "st_reparse_tag", 0) & _NAME_SURROGATE)
 
 
 def read_file(path: Path, limit: int = MAX_FILE_BYTES, *, follow_links: bool = False) -> bytes:
