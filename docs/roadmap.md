@@ -32,7 +32,11 @@ pull request.
   pedestrian ADR first. It is drafted as
   [ADR-0021](adr/0021-pedestrians.md) (Proposed), which recommends
   people drawn by the client from a shared seed, outside the
-  simulation's state, so that trunks and poles stay visual in M2.
+  simulation's state, so that trunks and poles stay visual in M2. How
+  the client draws trees, lamps and lit windows is drafted as
+  [ADR-0022](adr/0022-drawing-trees-lamps-and-windows.md) (Proposed),
+  measured with a prototype: trees in leaf are the main cost, and the
+  night needs more than a lower exposure.
 
 *Last reviewed: 2026-11-25.*
 
@@ -574,7 +578,7 @@ arrives) and servers per area for larger groups.
 | Trees and lights from Zurich's open data; measured heights | [ADR-0015](adr/0015-zurich-trees-and-lights.md), [ADR-0016](adr/0016-swisssurface3d-heights.md) | Proposed | M2 |
 | Performance tier | [ADR-0018](adr/0018-performance-tier.md) | Proposed | M2 |
 | Pedestrians | [ADR-0021](adr/0021-pedestrians.md) | Proposed; RFC 0004 recommends deciding it first | M2 |
-| Navigation data; how the client draws trees, lamps and lit windows | an RFC after the pedestrian ADR; an ADR extending ADR-0012 | to be drafted | M2 |
+| Navigation data; how the client draws trees, lamps and lit windows | an RFC after the pedestrian ADR; [ADR-0022](adr/0022-drawing-trees-lamps-and-windows.md), extending ADR-0012 | the RFC to be drafted; ADR-0022 Proposed | M2 |
 | Code of Conduct contact, branch protection, filing the issue drafts, announcing | tasks, see M1 | open | announcing (M1) |
 | Who owns costs and receives donations | with ADR-0010 | to be drafted | M1 |
 | Whether there is an in-game economy | none yet | not drafted | later |

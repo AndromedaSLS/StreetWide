@@ -35,3 +35,4 @@ instead.
 | [0019](0019-odbl-and-the-published-world.md) | How the published world meets the ODbL | Proposed |
 | [0020](0020-baseline-refreshes.md) | Baseline refreshes | Proposed |
 | [0021](0021-pedestrians.md) | Pedestrians: in the client, the simulation or both | Proposed |
+| [0022](0022-drawing-trees-lamps-and-windows.md) | How the client draws trees, street lamps and lit windows | Proposed |
