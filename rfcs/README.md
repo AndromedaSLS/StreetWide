@@ -22,3 +22,4 @@ Process (see [GOVERNANCE.md](../GOVERNANCE.md)):
 | [0003](0003-water-layer.md) | A water layer | Accepted |
 | [0004](0004-point-features.md) | Point features: vegetation and street objects | Accepted |
 | [0005](0005-navigation-data.md) | Navigation data: lanes, places and population profiles | Accepted |
+| [0006](0006-licence-allowlist.md) | The licence allowlist: gate and validation rules | Draft |
