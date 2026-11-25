@@ -158,7 +158,8 @@ there, so F9 saves the walk since you arrived
 ([ADR-0013](docs/adr/0013-travel-by-starting-new-sessions.md)). You can also
 start somewhere: `--place Grossmünsterplatz` (or a number), `--at <lon>,<lat>`,
 `--pitch -20` (looking down), `--time 19:30`, `--date 2026-06-21`,
-`--view map`, `--inspect`.
+`--view map`, `--inspect`; and `--preset fast` starts on the lighter
+graphics (F4 switches).
 
 The windows, doors, roof tiles and paving are drawn by the client, not
 taken from the world data
@@ -172,6 +173,31 @@ the sky and the street. F2 shows the data alone, without any of these. Real faca
 ([docs/contributing/facades.md](docs/contributing/facades.md)). Press I and
 point at a building to see whether it has one, and to get the command that
 starts yours.
+
+To measure the frame rate, run the district's benchmark route
+([ADR-0018](docs/adr/0018-performance-tier.md)):
+
+```sh
+cargo run --release -p op_client -- --benchmark worlds/zurich-altstadt.route.json --preset high
+```
+
+It visits Lindenhof, Hirschenplatz and Rathausbrücke, each on 21 June at
+18:00 and 22:30 and on 21 December at 18:00, in a 1920 × 1080 window
+without vsync. At each stop it waits until everything in range has
+loaded, then turns the camera once round in 20 seconds and records every
+frame. Keep the mouse and keyboard still and the window open for the 4
+minutes it takes: a stop whose window is minimised or resized is not
+measured. It
+prints a summary and writes a JSON report to `benchmarks/` (or
+`--out <file>`): the median, 95th and 99th percentile and worst frame
+time per stop and overall, the GPU time per render pass (Vulkan and
+DX12), and the GPU, driver, CPU, memory, system, commit, world id,
+preset and resolution. `--shots <dir>` also saves each stop's
+screenshot. The budget is a 99th percentile at or under 16.7 ms at every
+stop on the high preset. A route file (`worlds/<world>.route.json`)
+lists stops by place or position, each with a date (or a month, day and
+day type) and a time; the format is described in
+`crates/op_client/src/benchmark/route.rs`.
 
 ### 5. Check and watch your replay
 

@@ -96,12 +96,22 @@ pub enum Landing {
     OpenGround,
 }
 
+/// How a trip ended.
+#[derive(Clone, Debug, PartialEq)]
+pub enum TripEnd {
+    Arrived,
+    /// Why not.
+    Failed(String),
+}
+
 #[derive(Resource)]
 pub struct Travel {
     pub view: View,
     pub fly_speed: f32,
     pub places: Vec<Place>,
     pub pending: Option<Trip>,
+    /// How the last trip ended (the benchmark waits for it).
+    pub last_end: Option<TripEnd>,
     /// Set when the camera jumped: effects that build up over frames
     /// (temporal anti-aliasing) start over.
     pub cut: bool,
@@ -416,6 +426,7 @@ fn init_travel(mut commands: Commands, options: Res<Options>, mut session: ResMu
         fly_speed: FLY_SPEED.2,
         places,
         pending: None,
+        last_end: None,
         cut: false,
     };
     if !session.is_playback() {
@@ -698,21 +709,25 @@ fn resolve_trip(
             };
             travel.cut = true;
             travel.pending = None;
+            travel.last_end = Some(TripEnd::Arrived);
             session.message = Some((format!("Arrived at {}", trip.name), 4.0));
         }
         Arrival::Loading => {
             let waited = trip.waited + time.delta_secs();
             if waited > TRIP_TIMEOUT_S {
+                let why = format!("Could not load the ground at {}", trip.name);
                 travel.pending = None;
-                session.message =
-                    Some((format!("Could not load the ground at {}", trip.name), 5.0));
+                travel.last_end = Some(TripEnd::Failed(why.clone()));
+                session.message = Some((why, 5.0));
             } else if let Some(t) = &mut travel.pending {
                 t.waited = waited;
             }
         }
         Arrival::Nothing => {
+            let why = format!("Nothing to stand on at {}", trip.name);
             travel.pending = None;
-            session.message = Some((format!("Nothing to stand on at {}", trip.name), 5.0));
+            travel.last_end = Some(TripEnd::Failed(why.clone()));
+            session.message = Some((why, 5.0));
         }
     }
 }

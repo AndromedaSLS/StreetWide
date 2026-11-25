@@ -108,10 +108,31 @@ pub struct StreamStats {
     pub wanted: usize,
 }
 
-/// Rendering effects: `high` (default) or a lighter set for slower GPUs.
+/// Rendering effects: `high` (default) or a lighter set for slower GPUs,
+/// `fast`. `--preset` chooses one at start; F4 switches.
 #[derive(Resource, Clone, Copy, Debug, PartialEq, Eq)]
 pub struct Quality {
     pub high: bool,
+}
+
+impl Default for Quality {
+    fn default() -> Self {
+        Quality { high: true }
+    }
+}
+
+impl Quality {
+    pub fn name(&self) -> &'static str {
+        if self.high { "high" } else { "fast" }
+    }
+
+    pub fn parse(name: &str) -> Option<Quality> {
+        match name {
+            "high" => Some(Quality { high: true }),
+            "fast" => Some(Quality { high: false }),
+            _ => None,
+        }
+    }
 }
 
 /// The scene systems: the camera has followed the player, and the meshes
@@ -127,7 +148,7 @@ impl Plugin for ScenePlugin {
             .init_resource::<PickIndex>()
             .init_resource::<StreamStats>()
             .init_resource::<HeightIndex>()
-            .insert_resource(Quality { high: true })
+            .init_resource::<Quality>()
             .add_systems(Startup, (materials::setup, setup_camera, find_facades))
             .add_systems(
                 Update,
@@ -195,10 +216,7 @@ fn scene_keys(
     }
     if keys.just_pressed(KeyCode::F4) {
         quality.high = !quality.high;
-        session.message = Some((
-            format!("Graphics: {}", if quality.high { "high" } else { "fast" }),
-            3.0,
-        ));
+        session.message = Some((format!("Graphics: {}", quality.name()), 3.0));
     }
 }
 

@@ -2666,3 +2666,191 @@ repair: ADR-0014 leaves that question open.
 | `STREETWIDE_GATE=1`, CI's gate step (`test_changes_gate.py`, `test_changes_fixture.py`, and `tools/worldfmt`'s `test_changes.py`, `test_log.py`, `test_glb_reader.py`) | 303 passed |
 | District re-ingest, offline, into a scratch directory | byte-identical, 3,013 files, world `4689c972…`, 250 s |
 | `op_replay check fixtures/replays/sample.oprep` | 20/20 checkpoints, final `212bd353…`, unchanged |
+
+### Benchmark route, first run (2026-11-25, ADR-0018)
+
+ADR-0018's measuring tool, option A, is built: a benchmark mode in the
+client, with the route for zurich-altstadt. It is step 1 of the ADR's
+order of work in M2 ("the benchmark mode, and today's client measured at
+1080p"); this entry is that first run, before any tree or lamp code.
+
+- **Command:** `op_client --benchmark <route.json> [--world <dir>]
+  [--preset high|fast] [--out <report.json>] [--shots <dir>]`, in a
+  window of 1920 × 1080 physical pixels with vsync off (`AutoNoVsync`).
+  `--preset high|fast` also works without the benchmark: the graphics
+  at start, F4 still switches. The benchmark refuses the options that
+  would change what it measures (`--place`, `--at`, `--pitch`, `--time`,
+  `--date`, `--view`, `--details`, `--inspect`, `--replay`,
+  `--screenshot`, `--exit-when-done`). The help panel stays hidden.
+- **At each stop,** in order, the client sets the clock to the stop's
+  date and time and goes there as `--place` does: a new session, facing
+  the place's heading (ADR-0013). It waits until every mesh in range is
+  shown and the simulation ticks, lets frames settle (3 s and at least
+  120 frames), saves the stop's screenshot with `--shots`, then turns
+  the camera once round at eye height in 1,200 ticks (20 s), in flight
+  view so that only the camera moves, and records every frame. The
+  turn's tick counts from the end of loading (0 while frames settle and
+  for the screenshot), as ADR-0021 asks of the crowd's pinned tick. A
+  stop not reached or loaded within 60 s, or whose window is not
+  1920 × 1080 from the screenshot to the end of the turn (minimised or
+  resized), is reported as not measured. It then writes the report,
+  prints a summary, and exits with 0 only if every stop was measured.
+- **Route files:** `worlds/<world>.route.json`, format
+  `streetwide.route`, version 1: the world, and stops each with a name,
+  a place of the world (its position and heading; `yaw_deg` overrides
+  the heading) or a `lon`, `lat` and `yaw_deg`, a date and a time
+  (`HH:MM`, Swiss time). The date is a full date (`YYYY-MM-DD`), whose
+  day type follows from it, or a month and day (`MM-DD`) with a day type
+  (`weekday`, `saturday` or `sunday`), drawn on the first such date from
+  2026 on: ADR-0021's "a full date or a day type". Holidays are not a
+  day type: RFC 0005 carries them per tile, and the list is empty.
+  Unknown keys are refused. `worlds/zurich-altstadt.route.json` holds
+  ADR-0018's nine stops: Lindenhof, Hirschenplatz and Rathausbrücke, at
+  18:00 and 22:30 on 2026-06-21 (a Sunday) and at 18:00 on 2026-12-21 (a
+  Monday). It has no `name` key, so the client still reads the world's
+  places from `zurich-altstadt.json`.
+- **The report** (`streetwide.benchmark`, version 1; keys sorted, and
+  every stop with the same keys, `null` where nothing was measured): per
+  stop and over all stops, the frame time's median, mean, 95th and 99th
+  percentile, best and worst (nearest rank), the main update's CPU time,
+  and GPU time in total and per render pass (Bevy's
+  `RenderDiagnosticsPlugin`, which only the benchmark adds; Vulkan and
+  DX12, not Metal); per stop also the date, the date as given, the day
+  type, the time, the sun's elevation, the meshes shown, the window's
+  size, the screenshot, the load time and every frame's time; the
+  budget (a 99th percentile at or under 16.7 ms at every stop, applying
+  on high), with the stops over it and those not measured; the GPU,
+  backend, driver, CPU, cores, memory and system (from wgpu and Bevy's
+  `SystemInfo`); the build: the Git commit at build time and whether the
+  code differed from it (a new `build.rs`; `STREETWIDE_COMMIT`
+  overrides), the profile and optimisation level; the world's name and
+  id, the preset, resolution, present mode and route file. By default it
+  goes to `benchmarks/<world>-<preset>-<UTC time>.json`, which Git
+  ignores, as ADR-0018 keeps raw frame logs out of Git.
+- **Frame time** is the time from one frame to the next, as the player
+  sees it, which is what the budget measures. GPU total is the sum of
+  Bevy's top-level render passes in a frame; Bevy delivered them for 96
+  to 99% of frames (its read-back buffer is sometimes still busy).
+- **The ODbL notice:** ADR-0019 asks that screenshots the project
+  publishes carry the notice of ODbL 4.3, and, as scripted screenshots
+  hide the help panel, that the credit line name the ODbL. The credit
+  line, always on screen and so on every screenshot, the benchmark's
+  included, now reads "© OpenStreetMap contributors, under the ODbL:
+  openstreetmap.org/copyright · © swisstopo" for a world that credits
+  OpenStreetMap.
+- **Chosen here, not by an ADR:** the route file's format and the
+  report's fields; settling for 3 s and 120 frames; 60 s a stop;
+  nearest-rank percentiles; the first year from 2026 for a day type;
+  the `benchmarks/` directory; a minimised or resized window voiding a
+  stop.
+- **Tests** (15 new in `op_client`): the route format (day types against
+  the calendar, places and positions, every refusal naming its stop,
+  ADR-0018's route at the world's own places); nearest-rank percentiles
+  and statistics; the report's shape (sorted keys, the same keys for
+  measured and failed stops and for other values, a stop failed part
+  way left out of the totals and the budget) and summary; file names
+  and times; a route for another world refused; the build information;
+  `--preset` and the benchmark's options; the credit line.
+
+**First run.** The maintainer's machine: an NVIDIA GeForce RTX 3070
+(8 GB) on Vulkan, driver 610.88, an AMD Ryzen 9 3900 (12 cores), 32 GB,
+Windows 11 Pro (build 22000). It is not the reference card (an AMD
+Radeon RX 6600, not yet obtained) but faster than the tier's class, so
+these results are marked as faster than the tier, as ADR-0018 says until
+the project has one. The desktop may have been in use during the runs.
+Release build of `225d35c` with this entry's changes, not yet committed
+(the report says "with changes"); world `4689c972…`; 1920 × 1080 without
+vsync; seed 0. Two runs a preset, in separate processes, in the order
+high, fast, high, fast. The first try at the second high run had its
+window minimised from its second stop on: the build then only warned,
+and it measured an idle window at 60 frames a second (1,200 frames a
+stop). It was thrown away, the benchmark now reports such a stop as not
+measured, and the run was repeated on that build; the other three ran on
+the build before, which measures the same way. Screenshots came from the
+first run of each preset. The sun stood at 31.6°, −8.7° and −13.2°, as
+ADR-0018's table gives.
+
+**High** (ms, run 1 / run 2):
+
+| Stop | Frame median | Frame p95 | Frame p99 | Worst frame | GPU median | Main update median |
+|---|---|---|---|---|---|---|
+| Lindenhof, 21 June, 18:00 | 5.47 / 5.43 | 7.58 / 6.68 | 9.02 / 7.57 | 19.16 / 21.94 | 4.27 / 4.59 | 4.01 / 3.97 |
+| Lindenhof, 21 June, 22:30 | 5.02 / 4.66 | 6.92 / 5.83 | 8.22 / 6.73 | 14.99 / 10.82 | 3.04 / 3.18 | 3.63 / 3.46 |
+| Lindenhof, 21 December, 18:00 | 4.94 / 4.80 | 6.93 / 6.54 | 8.02 / 7.76 | 13.61 / 15.32 | 3.02 / 3.27 | 3.59 / 3.56 |
+| Hirschenplatz, 21 June, 18:00 | 5.74 / 6.28 | 7.73 / 8.16 | 9.14 / 9.44 | 12.91 / 16.14 | 4.82 / 5.16 | 4.26 / 4.61 |
+| Hirschenplatz, 21 June, 22:30 | 5.27 / 5.39 | 7.30 / 7.16 | 8.59 / 8.53 | 12.91 / 13.97 | 3.25 / 3.62 | 3.87 / 3.96 |
+| Hirschenplatz, 21 December, 18:00 | 5.25 / 4.83 | 7.26 / 6.92 | 8.37 / 8.11 | 12.51 / 11.91 | 3.23 / 3.62 | 3.86 / 3.66 |
+| Rathausbrücke, 21 June, 18:00 | 5.93 / 5.73 | 7.59 / 11.20 | 9.21 / 13.58 | 12.38 / 18.35 | 4.74 / 4.98 | 4.39 / 4.18 |
+| Rathausbrücke, 21 June, 22:30 | 5.26 / 5.25 | 7.10 / 9.67 | 8.17 / 12.59 | 13.27 / 28.26 | 3.18 / 3.44 | 3.86 / 3.82 |
+| Rathausbrücke, 21 December, 18:00 | 4.99 / 4.74 | 6.90 / 6.05 | 8.39 / 6.94 | 11.03 / 20.25 | 3.16 / 3.51 | 3.70 / 3.50 |
+| All stops | 5.31 / 5.14 | 7.30 / 7.40 | 8.59 / 10.61 | 19.16 / 28.26 | 3.23 / 3.59 | 3.90 / 3.79 |
+
+**Fast** (ms, run 1 / run 2):
+
+| Stop | Frame median | Frame p95 | Frame p99 | Worst frame | GPU median | Main update median |
+|---|---|---|---|---|---|---|
+| Lindenhof, 21 June, 18:00 | 5.21 / 5.31 | 7.00 / 7.25 | 8.34 / 8.35 | 13.36 / 11.29 | 3.46 / 3.71 | 4.01 / 3.98 |
+| Lindenhof, 21 June, 22:30 | 4.27 / 5.02 | 6.03 / 6.74 | 7.23 / 7.70 | 15.59 / 12.60 | 2.73 / 2.88 | 3.33 / 3.75 |
+| Lindenhof, 21 December, 18:00 | 4.27 / 4.96 | 5.80 / 6.89 | 6.77 / 8.28 | 13.14 / 17.01 | 2.71 / 2.82 | 3.31 / 3.71 |
+| Hirschenplatz, 21 June, 18:00 | 5.00 / 5.78 | 6.73 / 7.95 | 7.75 / 9.19 | 11.28 / 11.97 | 4.18 / 4.40 | 3.89 / 4.38 |
+| Hirschenplatz, 21 June, 22:30 | 4.40 / 5.07 | 6.09 / 6.95 | 7.35 / 8.60 | 17.13 / 13.73 | 3.22 / 3.48 | 3.46 / 3.85 |
+| Hirschenplatz, 21 December, 18:00 | 4.77 / 5.31 | 6.70 / 7.48 | 8.00 / 8.64 | 12.89 / 13.79 | 3.24 / 3.48 | 3.72 / 3.97 |
+| Rathausbrücke, 21 June, 18:00 | 5.37 / 5.43 | 7.21 / 7.28 | 8.25 / 8.70 | 12.28 / 11.05 | 3.86 / 4.14 | 4.16 / 4.13 |
+| Rathausbrücke, 21 June, 22:30 | 4.49 / 5.18 | 6.27 / 6.82 | 7.54 / 8.32 | 13.52 / 12.63 | 2.98 / 3.29 | 3.49 / 3.90 |
+| Rathausbrücke, 21 December, 18:00 | 4.86 / 4.97 | 7.00 / 6.87 | 8.69 / 8.25 | 140.90 / 14.62 | 3.00 / 3.30 | 3.71 / 3.77 |
+| All stops | 4.72 / 5.21 | 6.65 / 7.19 | 7.86 / 8.52 | 140.90 / 17.01 | 3.15 / 3.40 | 3.65 / 3.93 |
+
+- **Against the budget:** on high, every stop's 99th percentile is at
+  or under 16.7 ms in both runs; the highest is 13.58 ms, at
+  Rathausbrücke on 21 June at 18:00 in run 2 (9.21 ms in run 1). The
+  budget is met on the RTX 3070. That does not settle ADR-0018's open
+  question, whether today's high preset meets it on the reference
+  class: a card of that class is slower (the review: some 8 GB cards run
+  at about half an RTX 3070's speed). A run on the RX 6600 decides it,
+  before trees and lamps merge (the ADR's order of work, step 2).
+- **Where the time goes:** on high, the GPU takes 4.3 to 5.2 ms a frame
+  (median) by day, 1.3 to 1.8 ms of it the sun's shadow pass, and 3.0 to
+  3.6 ms at night; ambient occlusion 0.5 ms, the atmosphere's tables and
+  light probes about 1.2 ms together. Frame medians (4.7 to 6.3 ms) stay
+  0.8 to 2 ms above the GPU's, and the main update alone takes 3.5 to
+  4.6 ms. Fast saves 0.6 to 0.9 ms of GPU time by day and up to 0.3 ms
+  at night (its 4× MSAA main pass takes 1.2 ms, against high's 0.5 ms
+  main pass, 0.3 ms prepass, 0.5 ms ambient occlusion and 0.1 ms TAA),
+  yet its frame medians are only 0 to 0.6 ms below high's (the mean of
+  two runs), no more than a stop's two runs differ (up to 0.8 ms): on
+  this machine the CPU side sets the pace as much as the GPU.
+- **Spread between runs:** a stop's frame median differed by up to 9%
+  between the two high runs and 15% between the fast ones, its 99th
+  percentile by up to 35% and 18%. In the second high run, Rathausbrücke
+  in June went from 9.21 to 13.58 ms (18:00) and from 8.17 to 12.59 ms
+  (22:30) while its GPU and main-update medians hardly moved, which
+  points to other work on the machine. On a desktop in use, ADR-0018's
+  starting value of 10% for a regression is within the noise: it needs
+  runs on a quiet machine, or more runs a checkpoint, before it can flag
+  one.
+- **Worst frames:** single frames up to 28.3 ms on high, and one of
+  140.9 ms on fast (Rathausbrücke, 21 December, run 1, whose 99th
+  percentile was 8.69 ms). The budget looks at the 99th percentile; each
+  report's frame log keeps them.
+- **Loading:** the first stop was ready 4.1 to 4.6 s after the client's
+  first frame, the others 0.1 to 0.5 s after their trip began: the whole district lies within
+  600 m of every stop and stays loaded (1,358 to 1,459 meshes shown).
+- **Not built or not measured:** the comparison with the previous
+  checkpoint (ADR-0018's 10% rule) is done by hand from two reports;
+  video memory (Bevy reports buffer sizes only, as the ADR notes); the
+  reference card, DX12 and Metal; the render app's own CPU time; draw
+  calls (Bevy 0.20.1 counts none); the dusk stop, which ADR-0018 adds
+  once lamps switch on; people, and the crowd's population version that
+  ADR-0021 has reports record, as `main` has no crowd yet.
+- **Also changed:** the README (`--preset`, the benchmark), CI's comment
+  on what the client tests cover, and `.gitignore` (`/benchmarks/`). No
+  ADR, RFC, schema, world, fixture or replay changes; the simulation is
+  untouched.
+
+| Check | Result |
+|---|---|
+| `cargo fmt --all --check`, `cargo clippy --workspace --all-targets --locked -- -D warnings` | pass |
+| `cargo test --workspace --locked` | 288 passed, 1 ignored |
+| `op_replay check fixtures/replays/sample.oprep` | 20/20 checkpoints, final `212bd353…`, unchanged |
+| The route, two runs a preset | 36 of 36 stops measured, exit code 0 (with the repeated high run) |
+| Screenshots of the first run of each preset | 18; the three looked at show the credit line naming the ODbL |

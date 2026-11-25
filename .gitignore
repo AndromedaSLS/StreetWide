@@ -31,3 +31,7 @@ Thumbs.db
 
 # Local agent settings
 .claude/settings.local.json
+
+# Benchmark reports and screenshots (op_client --benchmark, ADR-0018);
+# progress.md keeps the summaries
+/benchmarks/
