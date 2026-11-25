@@ -12,7 +12,7 @@ use crate::inspect::{self, Inspect, InspectStats, InspectSystems};
 use crate::materials::MaterialSet;
 use crate::scene::{PlayerCamera, Quality, StreamStats};
 use crate::session::{Playback, Session};
-use crate::sky::{Clock, SunState, exposure_ev100};
+use crate::sky::{Clock, MoonState, SunState, exposure_ev100};
 use crate::travel::{Travel, View};
 
 #[derive(Component)]
@@ -309,7 +309,7 @@ fn update_panels(
     quality: Res<Quality>,
     set: Res<MaterialSet>,
     stats: Res<StreamStats>,
-    (inspect, pick): (Res<Inspect>, Res<InspectStats>),
+    (inspect, pick, moon): (Res<Inspect>, Res<InspectStats>, Res<MoonState>),
     camera: Single<&Transform, With<PlayerCamera>>,
     mut help: Single<(&mut Text, &mut Visibility), (With<HelpText>, Without<DebugText>)>,
     mut debug: Single<(&mut Text, &mut Visibility), (With<DebugText>, Without<HelpText>)>,
@@ -376,6 +376,12 @@ fn update_panels(
             sun.azimuth,
             sun.elevation,
             exposure_ev100(sun.elevation)
+        ),
+        format!(
+            "moon azimuth {:.0}°, elevation {:.1}°, {:.0}% lit",
+            moon.0.azimuth,
+            moon.0.elevation,
+            moon.0.illuminated * 100.0
         ),
         format!(
             "graphics {} · look {}",

@@ -9,7 +9,9 @@
 //!   describes the surfaces.
 //!
 //! The windows are decoration drawn by the client, not world data: they
-//! appear only where no contributor has modelled the real facade.
+//! appear only where no contributor has modelled the real facade. At night
+//! a seeded share of them is lit (`windows`, ADR-0022); the plain look has
+//! no lit windows.
 
 use std::collections::BTreeMap;
 
@@ -21,6 +23,7 @@ use bevy::render::render_resource::{Extent3d, TextureDimension, TextureFormat};
 use op_world::glb::{Material as Palette, Primitive};
 
 use crate::texgen::{self, FACADES, Pattern};
+use crate::windows::{self, Kind, WindowGlow, WindowMaterial};
 
 /// Texels per side of each generated texture.
 const TEXTURE_SIZE: usize = 512;
@@ -113,6 +116,9 @@ pub struct AssetLook {
     /// Facade colour and roof variation.
     pub tint: usize,
     pub roof_tint: usize,
+    /// A hash of the building's feature id: with each wall's plane, it
+    /// seeds which of its windows are lit at night.
+    pub building: u64,
 }
 
 impl AssetLook {
@@ -125,6 +131,7 @@ impl AssetLook {
             style: windowed.then_some((h % FACADES.len() as u64) as usize),
             tint: ((h >> 8) % FACADE_TINTS.len() as u64) as usize,
             roof_tint: ((h >> 16) % ROOF_TINTS.len() as u64) as usize,
+            building: h,
         }
     }
 
@@ -134,6 +141,7 @@ impl AssetLook {
             style: None,
             tint: 0,
             roof_tint: 0,
+            building: 0,
         }
     }
 }
@@ -153,6 +161,10 @@ pub struct Part {
     pub positions: Vec<[f32; 3]>,
     pub normals: Vec<[f32; 3]>,
     pub uvs: Vec<[f32; 2]>,
+    /// Windowed walls only: each vertex's wall seed for lit windows
+    /// ([`windows::wall_seed`]), as second texture coordinates; empty
+    /// otherwise.
+    pub seeds: Vec<[f32; 2]>,
     pub indices: Vec<u32>,
 }
 
@@ -202,6 +214,7 @@ fn top(prim: &Primitive, origin: [f64; 3], period: [f32; 2]) -> Part {
         positions: prim.positions.clone(),
         normals: prim.normals.clone(),
         uvs,
+        seeds: Vec::new(),
         indices: prim.indices.clone(),
     }
 }
@@ -323,6 +336,10 @@ fn walls(
     struct Plane {
         key: (i64, i64),
         tangent: [f64; 2],
+        /// The horizontal normal (one orientation per plane) and the
+        /// plane's distance from the origin along it.
+        normal: [f64; 2],
+        distance: f64,
     }
     let planes: Vec<Option<Plane>> = tris
         .iter()
@@ -347,9 +364,60 @@ fn walls(
                     (distance / 0.25).round() as i64,
                 ),
                 tangent: [-h[1], h[0]],
+                normal: h,
+                distance,
             })
         })
         .collect();
+    // Which wall each plane key's windows belong to, for their seed. A thin
+    // sliver's normal is imprecise, so it gets a key of its own though it
+    // lies in a larger wall and draws that wall's windows; a window must not
+    // be split between two choices. Keys are taken from the largest area
+    // down, and a key whose vertices all lie within 0.2 m of a larger key's
+    // plane (from its largest triangle) joins that wall.
+    // Per key: total area, its largest triangle, and its triangles.
+    let mut by_key: BTreeMap<(i64, i64), (f64, usize, Vec<usize>)> = BTreeMap::new();
+    let areas: Vec<f64> = tris
+        .iter()
+        .map(|t| {
+            let (a, b, c) = (world(t[0]), world(t[1]), world(t[2]));
+            let x = cross(sub(b, a), sub(c, a));
+            dot(x, x).sqrt() / 2.0
+        })
+        .collect();
+    for (i, plane) in planes.iter().enumerate() {
+        let Some(p) = plane else { continue };
+        let e = by_key.entry(p.key).or_insert((0.0, i, Vec::new()));
+        e.0 += areas[i];
+        e.2.push(i);
+        if areas[i] > areas[e.1] {
+            e.1 = i;
+        }
+    }
+    let mut order: Vec<(i64, i64)> = by_key.keys().copied().collect();
+    order.sort_by(|a, b| by_key[b].0.total_cmp(&by_key[a].0).then(a.cmp(b)));
+    let mut found: Vec<(i64, i64)> = Vec::new();
+    let mut wall_of: BTreeMap<(i64, i64), (i64, i64)> = BTreeMap::new();
+    for k in order {
+        let within = |r: &(i64, i64)| {
+            let Some(rp) = &planes[by_key[r].1] else {
+                return false;
+            };
+            by_key[&k].2.iter().flat_map(|&i| tris[i]).all(|v| {
+                let w = world(v);
+                (rp.normal[0] * w[0] + rp.normal[1] * w[2] - rp.distance).abs() < 0.2
+            })
+        };
+        let wall = found
+            .iter()
+            .find(|r| within(r))
+            .copied()
+            .unwrap_or_else(|| {
+                found.push(k);
+                k
+            });
+        wall_of.insert(k, wall);
+    }
     let mut extent: BTreeMap<(i64, i64), (f64, f64)> = BTreeMap::new();
     // Per plane: sum of x, sum of z, count, lowest y.
     let mut spread: BTreeMap<(i64, i64), (f64, f64, f64, f64)> = BTreeMap::new();
@@ -425,11 +493,20 @@ fn walls(
             }
             _ => pieces.push((tri.to_vec(), true, None)),
         }
+        // Windowed walls carry their wall's seed for lit windows.
+        let seed = look.style.map(|_| {
+            plane.as_ref().map_or([0.0; 2], |p| {
+                windows::wall_seed(look.building, wall_of[&p.key])
+            })
+        });
         for (poly, is_upper, fixed) in pieces {
             let part = if is_upper { &mut upper } else { &mut lower };
             for t in triangulate(&poly) {
                 for c in &t {
                     part.push(c.local, c.normal, fixed.unwrap_or_else(|| uv_of(c, plane)));
+                    if let Some(seed) = seed {
+                        part.seeds.push(seed);
+                    }
                 }
             }
         }
@@ -516,7 +593,8 @@ pub fn parts(
     }
 }
 
-/// A Bevy mesh with texture coordinates and tangents.
+/// A Bevy mesh with texture coordinates and tangents, and a windowed
+/// wall's seeds as second texture coordinates.
 pub fn mesh(part: Part) -> Mesh {
     let mut mesh = Mesh::new(
         PrimitiveTopology::TriangleList,
@@ -526,6 +604,9 @@ pub fn mesh(part: Part) -> Mesh {
     .with_inserted_attribute(Mesh::ATTRIBUTE_NORMAL, part.normals)
     .with_inserted_attribute(Mesh::ATTRIBUTE_UV_0, part.uvs)
     .with_inserted_indices(Indices::U32(part.indices));
+    if !part.seeds.is_empty() {
+        mesh.insert_attribute(Mesh::ATTRIBUTE_UV_1, part.seeds);
+    }
     // Degenerate input keeps no tangents and is drawn without normal mapping.
     let _ = mesh.generate_tangents();
     mesh
@@ -536,18 +617,42 @@ pub fn mesh(part: Part) -> Mesh {
 pub struct MaterialSet {
     plain: BTreeMap<&'static str, Handle<StandardMaterial>>,
     detailed: BTreeMap<(Surface, usize), Handle<StandardMaterial>>,
+    /// Windowed walls (facade and ground-floor styles, every tint), whose
+    /// windows light up at night.
+    windowed: BTreeMap<(Surface, usize), Handle<WindowMaterial>>,
+    /// The plain look of windowed walls: the palette's wall colour, and no
+    /// lit windows.
+    plain_windowed: Handle<WindowMaterial>,
     /// Whether the detailed look is on (F2).
     pub detailed_on: bool,
 }
 
-/// Both materials of a placed part, so F2 can switch them.
+/// Both materials of a placed part, so F2 can switch them. Windowed walls
+/// use [`WindowMaterial`] in both looks.
 #[derive(Component, Clone)]
-pub struct Looks {
-    pub detailed: Handle<StandardMaterial>,
-    pub plain: Handle<StandardMaterial>,
+pub struct Looks<M: Asset = StandardMaterial> {
+    pub detailed: Handle<M>,
+    pub plain: Handle<M>,
 }
 
 impl MaterialSet {
+    /// The looks of a windowed wall (a facade or ground-floor style), or
+    /// `None` for other surfaces.
+    pub fn window_looks(
+        &self,
+        surface: Surface,
+        look: &AssetLook,
+    ) -> Option<Looks<WindowMaterial>> {
+        let detailed = self
+            .windowed
+            .get(&(surface, look.tint))
+            .or_else(|| self.windowed.get(&(surface, 0)))?;
+        Some(Looks {
+            detailed: detailed.clone(),
+            plain: self.plain_windowed.clone(),
+        })
+    }
+
     pub fn looks(&self, surface: Surface, palette: Palette, look: &AssetLook) -> Looks {
         let tint = match surface {
             Surface::Facade(_) | Surface::GroundFloor(_) | Surface::Plaster => look.tint,
@@ -566,7 +671,7 @@ impl MaterialSet {
         }
     }
 
-    pub fn current(&self, looks: &Looks) -> Handle<StandardMaterial> {
+    pub fn current<M: Asset>(&self, looks: &Looks<M>) -> Handle<M> {
         if self.detailed_on {
             looks.detailed.clone()
         } else {
@@ -667,11 +772,26 @@ fn srgb(c: [f32; 3]) -> Color {
     Color::srgb(c[0], c[1], c[2])
 }
 
+/// The plain look's material for a palette entry.
+fn plain_material(m: Palette) -> StandardMaterial {
+    let [r, g, b, a] = m.base_color_milli().map(|v| v as f32 / 1000.0);
+    StandardMaterial {
+        base_color: Color::srgba(r, g, b, a),
+        perceptual_roughness: 1.0,
+        metallic: 0.0,
+        // A few source surfaces face inwards; draw both sides.
+        double_sided: true,
+        cull_mode: None,
+        ..default()
+    }
+}
+
 /// Generates every texture and material (about a second of CPU time).
 pub fn setup(
     mut commands: Commands,
     mut images: ResMut<Assets<Image>>,
     mut materials: ResMut<Assets<StandardMaterial>>,
+    mut window_materials: ResMut<Assets<WindowMaterial>>,
 ) {
     let plain = [
         Palette::Roof,
@@ -684,20 +804,12 @@ pub fn setup(
         Palette::Water,
     ]
     .into_iter()
-    .map(|m| {
-        let [r, g, b, a] = m.base_color_milli().map(|v| v as f32 / 1000.0);
-        let handle = materials.add(StandardMaterial {
-            base_color: Color::srgba(r, g, b, a),
-            perceptual_roughness: 1.0,
-            metallic: 0.0,
-            // A few source surfaces face inwards; draw both sides.
-            double_sided: true,
-            cull_mode: None,
-            ..default()
-        });
-        (m.name(), handle)
-    })
+    .map(|m| (m.name(), materials.add(plain_material(m))))
     .collect();
+    let plain_windowed = window_materials.add(WindowMaterial {
+        base: plain_material(Palette::Wall),
+        extension: WindowGlow::default(),
+    });
 
     let surfaces = [
         Surface::Facade(0),
@@ -718,8 +830,11 @@ pub fn setup(
     ];
     let started = std::time::Instant::now();
     let mut detailed = BTreeMap::new();
+    let mut windowed = BTreeMap::new();
     for surface in surfaces {
         let pattern = surface.pattern();
+        // Windowed walls: the glass mask of their style.
+        let glass = windows::glass_image(surface).map(|(image, mean)| (images.add(image), mean));
         let levels =
             texgen::mip_chain(&texgen::generate(pattern, TEXTURE_SIZE), pattern.period_m());
         let albedo = images.add(texture(&levels, |l| &l.albedo, true));
@@ -733,7 +848,7 @@ pub fn setup(
             _ => vec![Color::WHITE],
         };
         for (i, tint) in tints.into_iter().enumerate() {
-            let handle = materials.add(StandardMaterial {
+            let material = StandardMaterial {
                 base_color: tint,
                 base_color_texture: Some(albedo.clone()),
                 normal_map_texture: Some(normal.clone()),
@@ -743,8 +858,20 @@ pub fn setup(
                 double_sided: true,
                 cull_mode: None,
                 ..default()
-            });
-            detailed.insert((surface, i), handle);
+            };
+            match &glass {
+                Some((mask, mean)) => {
+                    let extension = WindowGlow::new(Kind::of(surface), mask.clone(), *mean);
+                    let handle = window_materials.add(WindowMaterial {
+                        base: material,
+                        extension,
+                    });
+                    windowed.insert((surface, i), handle);
+                }
+                None => {
+                    detailed.insert((surface, i), materials.add(material));
+                }
+            }
         }
     }
     // Water has one colour and smoothness everywhere: only its ripples are
@@ -761,14 +888,17 @@ pub fn setup(
     commands.insert_resource(MaterialSet {
         plain,
         detailed,
+        windowed,
+        plain_windowed,
         detailed_on: true,
     });
 }
 
-/// F2: switches every placed part between the two looks.
-pub fn apply_look(
+/// F2: switches every placed part between the two looks (run for each
+/// material type).
+pub fn apply_look<M: Material>(
     set: Res<MaterialSet>,
-    mut parts: Query<(&Looks, &mut MeshMaterial3d<StandardMaterial>)>,
+    mut parts: Query<(&Looks<M>, &mut MeshMaterial3d<M>)>,
 ) {
     if !set.is_changed() {
         return;
@@ -802,8 +932,7 @@ mod tests {
     fn walls_fit_a_whole_number_of_bays() {
         let look = AssetLook {
             style: Some(0),
-            tint: 0,
-            roof_tint: 0,
+            ..AssetLook::plain()
         };
         // Tile origin far from zero, like real tiles, at 400 m; no terrain
         // known, so storeys count from the bottom of the wall.
@@ -817,9 +946,8 @@ mod tests {
         assert!(out[0].1.positions.iter().all(|p| p[1] >= 3.1 - 1e-4));
         let part: Part = Part {
             positions: [&out[0].1.positions[..], &ground.positions[..]].concat(),
-            normals: Vec::new(),
             uvs: [&out[0].1.uvs[..], &ground.uvs[..]].concat(),
-            indices: Vec::new(),
+            ..Part::default()
         };
         let us: Vec<f32> = part.uvs.iter().map(|uv| uv[0]).collect();
         let (lo, hi) = us
@@ -864,6 +992,56 @@ mod tests {
             .map(|i| ground_floor.uvs[i][1])
             .collect();
         assert!(at_street.iter().any(|v| v.abs() < 1e-4), "{at_street:?}");
+    }
+
+    /// Windowed walls carry one seed per wall for lit windows: a thin
+    /// sliver lying in the wall, whose normal is imprecise, keeps the
+    /// wall's seed, so no window is split between two choices; another wall
+    /// of the building gets another seed; plain walls carry none.
+    #[test]
+    fn each_windowed_wall_has_one_seed() {
+        let mut prim = wall_prim(10.0);
+        // A sliver along the top of the wall, 1 mm out of its plane.
+        prim.positions
+            .extend([[0.0, 12.0, 0.0], [10.0, 12.0, 0.001], [10.0, 12.05, 0.0]]);
+        // A second wall, facing east, from the wall's end.
+        prim.positions
+            .extend([[10.0, 0.0, 0.0], [10.0, 0.0, -8.0], [10.0, 12.0, -8.0]]);
+        prim.normals = vec![[0.0, 0.0, 1.0]; prim.positions.len()];
+        prim.indices.extend([4, 5, 6, 7, 8, 9]);
+        let look = AssetLook::for_building("test:seeded", 12.0, false);
+        assert!(look.style.is_some());
+        // Each triangle has its own three vertices; the east wall's reach
+        // back from z = 0.
+        let seeds_at = |out: &[(Surface, Part)], east: bool| -> Vec<[f32; 2]> {
+            out.iter()
+                .flat_map(|(_, p)| {
+                    assert_eq!(p.seeds.len(), p.positions.len());
+                    p.positions.chunks(3).zip(p.seeds.chunks(3))
+                })
+                .filter(|(tri, _)| tri.iter().any(|v| v[2] < -0.01) == east)
+                .flat_map(|(_, s)| s.iter().copied())
+                .collect()
+        };
+        let out = walls(&prim, [0.0; 3], &look, &mut |_, _| None);
+        let south = seeds_at(&out, false);
+        let east = seeds_at(&out, true);
+        assert!(south.len() > 6 && !east.is_empty());
+        assert!(south.iter().all(|s| *s == south[0]), "{south:?}");
+        assert!(east.iter().all(|s| *s == east[0]));
+        assert_ne!(south[0], east[0]);
+        // The same building gives the same seeds; another, others.
+        let again = walls(&prim, [0.0; 3], &look, &mut |_, _| None);
+        assert_eq!(seeds_at(&again, false)[0], south[0]);
+        let other = AssetLook::for_building("test:other", 12.0, false);
+        let out = walls(&prim, [0.0; 3], &other, &mut |_, _| None);
+        assert_ne!(seeds_at(&out, false)[0], south[0]);
+        // Plaster walls have no windows and no seeds.
+        let plain = AssetLook::plain();
+        for (_, part) in walls(&prim, [0.0; 3], &plain, &mut |_, _| None) {
+            assert!(part.seeds.is_empty());
+            assert_eq!(mesh(part).attribute(Mesh::ATTRIBUTE_UV_1), None);
+        }
     }
 
     #[test]

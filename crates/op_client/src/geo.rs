@@ -206,6 +206,88 @@ pub fn sun_position(utc_days: i64, utc_minute: u32, lon: f64, lat: f64) -> (f64,
     (azimuth, elevation)
 }
 
+/// The Moon seen from a place.
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
+pub struct MoonPosition {
+    /// Degrees clockwise from north.
+    pub azimuth: f64,
+    /// Degrees above the horizon, seen from the ground (topocentric),
+    /// without refraction.
+    pub elevation: f64,
+    /// The share of its disc that is lit, 0 (new) to 1 (full).
+    pub illuminated: f64,
+    /// The angle Sun-Moon-Earth (degrees): 0 at full moon, 180 at new moon.
+    pub phase_angle: f64,
+}
+
+/// The Moon's position and phase at a UTC instant, seen from a longitude
+/// and latitude (degrees).
+///
+/// The Astronomical Almanac's low-precision formulae for the Moon's
+/// ecliptic longitude, latitude and horizontal parallax (section D, "Low
+/// precision formulas for the Moon's coordinates"; about 0.3° in longitude
+/// and 0.2° in latitude), turned to the horizon with the mean obliquity and
+/// mean sidereal time, then corrected for parallax, which lowers the Moon
+/// by up to a degree near the horizon. The Sun's longitude for the phase
+/// comes from the Almanac's low-precision formula for the Sun (section C).
+/// Within about a quarter of a degree of JPL Horizons in the tests below;
+/// rendering only.
+pub fn moon_position(utc_days: i64, utc_minute: u32, lon: f64, lat: f64) -> MoonPosition {
+    let sin = |deg: f64| deg.to_radians().sin();
+    let cos = |deg: f64| deg.to_radians().cos();
+    // Days and Julian centuries from J2000.0 (2000-01-01 12:00 UT).
+    let d = (utc_days - 10_957) as f64 + (f64::from(utc_minute) - 720.0) / 1440.0;
+    let t = d / 36_525.0;
+    let lambda = 218.32 + 481_267.881 * t + 6.29 * sin(135.0 + 477_198.87 * t)
+        - 1.27 * sin(259.3 - 413_335.36 * t)
+        + 0.66 * sin(235.7 + 890_534.22 * t)
+        + 0.21 * sin(269.9 + 954_397.74 * t)
+        - 0.19 * sin(357.5 + 35_999.05 * t)
+        - 0.11 * sin(186.5 + 966_404.03 * t);
+    let beta = 5.13 * sin(93.3 + 483_202.02 * t) + 0.28 * sin(228.2 + 960_400.89 * t)
+        - 0.28 * sin(318.3 + 6_003.15 * t)
+        - 0.17 * sin(217.6 - 407_332.21 * t);
+    let parallax = 0.9508
+        + 0.0518 * cos(135.0 + 477_198.87 * t)
+        + 0.0095 * cos(259.3 - 413_335.36 * t)
+        + 0.0078 * cos(235.7 + 890_534.22 * t)
+        + 0.0028 * cos(269.9 + 954_397.74 * t);
+    // Ecliptic to equatorial, with the mean obliquity.
+    let eps = 23.439 - 0.013 * t;
+    let (l, m, n) = (
+        cos(beta) * cos(lambda),
+        cos(eps) * cos(beta) * sin(lambda) - sin(eps) * sin(beta),
+        sin(eps) * cos(beta) * sin(lambda) + cos(eps) * sin(beta),
+    );
+    let ra = m.atan2(l).to_degrees();
+    let dec = n.clamp(-1.0, 1.0).asin().to_degrees();
+    // Local hour angle from the mean sidereal time at Greenwich.
+    let gmst = 280.460_618_37 + 360.985_647_366_29 * d;
+    let h = gmst + lon - ra;
+    let geocentric = (sin(lat) * sin(dec) + cos(lat) * cos(dec) * cos(h))
+        .clamp(-1.0, 1.0)
+        .asin()
+        .to_degrees();
+    let azimuth = (-cos(dec) * sin(h))
+        .atan2(sin(dec) * cos(lat) - cos(dec) * sin(lat) * cos(h))
+        .to_degrees()
+        .rem_euclid(360.0);
+    // The Sun's ecliptic longitude, for the elongation and the phase.
+    let (mean_long, anomaly) = (280.460 + 0.985_647_4 * d, 357.528 + 0.985_600_3 * d);
+    let sun = mean_long + 1.915 * sin(anomaly) + 0.020 * sin(2.0 * anomaly);
+    let elongation = (cos(beta) * cos(lambda - sun))
+        .clamp(-1.0, 1.0)
+        .acos()
+        .to_degrees();
+    let phase_angle = 180.0 - elongation;
+    MoonPosition {
+        azimuth,
+        elevation: geocentric - parallax * cos(geocentric),
+        illuminated: (1.0 + cos(phase_angle)) / 2.0,
+        phase_angle,
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -284,5 +366,46 @@ mod tests {
         let (az, el) = sun_position(june, 4 * 60, lon, lat);
         assert!(el > 0.0 && (40.0..80.0).contains(&az), "{az} {el}");
         assert!(sun_position(june, 23 * 60, lon, lat).1 < -10.0);
+    }
+
+    /// Against JPL Horizons (DE441 ephemeris; observer at 8.541° E,
+    /// 47.372° N, 430 m; airless apparent azimuth and elevation, and the
+    /// illuminated share; queried 2026-11-25 at
+    /// <https://ssd.jpl.nasa.gov/horizons/>): within a degree, as a
+    /// low-precision formula allows, and the phase within a few percent.
+    #[test]
+    fn moon_over_zurich_matches_horizons() {
+        // (UTC date, minute, Horizons azimuth, elevation, illuminated %).
+        let cases = [
+            // 18:00 Swiss time on 21 December 2026: waxing gibbous, east.
+            ((2026, 12, 21), 17 * 60, 94.662, 37.459, 91.958),
+            // 22:30 Swiss time on 21 June 2026: first quarter, south-west.
+            ((2026, 6, 21), 20 * 60 + 30, 234.473, 24.775, 49.384),
+            // The 2025 Lindenhof photos: a new moon below the horizon.
+            ((2025, 3, 28), 18 * 60 + 30, 287.637, -17.090, 0.841),
+            ((2026, 11, 25), 20 * 60, 86.467, 34.854, 97.538),
+        ];
+        for ((y, m, d), minute, az, el, lit) in cases {
+            let p = moon_position(days_from_civil(y, m, d), minute, 8.541, 47.372);
+            let daz = (p.azimuth - az + 540.0).rem_euclid(360.0) - 180.0;
+            assert!(
+                daz.abs() < 1.0,
+                "{y}-{m}-{d}: azimuth {} against {az}",
+                p.azimuth
+            );
+            assert!(
+                (p.elevation - el).abs() < 1.0,
+                "{y}-{m}-{d}: elevation {} against {el}",
+                p.elevation
+            );
+            assert!(
+                (p.illuminated * 100.0 - lit).abs() < 3.0,
+                "{y}-{m}-{d}: {}% against {lit}%",
+                p.illuminated * 100.0
+            );
+        }
+        // Full moon is near 0° of phase angle, new moon near 180°.
+        let full = moon_position(days_from_civil(2026, 11, 24), 15 * 60, 8.541, 47.372);
+        assert!(full.phase_angle < 10.0, "{full:?}");
     }
 }

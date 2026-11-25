@@ -405,6 +405,72 @@ fn ground_floor(style: usize, u: f32, v: f32) -> Texel {
     t
 }
 
+/// How brightly a pattern's window glass glows when the room behind it is
+/// lit (0 to 1), at the same texture coordinates as its albedo: 0 off the
+/// glass, on frames and on glazing bars; on the glass, brighter towards the
+/// top, where ceiling lights and shop spotlights hang. Only the facade and
+/// ground-floor patterns have glass. Nothing behind the glass is drawn:
+/// interiors are fictional and left out (RFC 0004, ADR-0022).
+pub fn window_glow(pattern: Pattern, u: f32, v: f32) -> f32 {
+    let inside =
+        |x: f32, y: f32, [x0, x1, y0, y1]: [f32; 4]| x >= x0 && x < x1 && y >= y0 && y < y1;
+    // Up the glass from 0 at its bottom to 1 at its top.
+    let rise = |y: f32, y0: f32, y1: f32| (y - y0) / (y1 - y0);
+    match pattern {
+        Pattern::Facade(f) => {
+            let (x, y) = (u * f.bay_w, (1.0 - v) * f.storey_h);
+            let (wx0, wy0) = ((f.bay_w - f.win_w) / 2.0, f.win_bottom);
+            let (wx1, wy1) = (wx0 + f.win_w, wy0 + f.win_h);
+            // The frame, mullion and transom drawn by `facade`.
+            let transom = wy0 + 0.68 * f.win_h;
+            let bar = x - wx0 < 0.07
+                || wx1 - x < 0.07
+                || y - wy0 < 0.07
+                || wy1 - y < 0.07
+                || (x - (wx0 + wx1) / 2.0).abs() < 0.03
+                || (y - transom).abs() < 0.03;
+            if inside(x, y, [wx0, wx1, wy0, wy1]) && !bar {
+                0.75 + 0.25 * rise(y, wy0, wy1)
+            } else {
+                0.0
+            }
+        }
+        Pattern::GroundFloor(style) => {
+            let f = FACADES[style];
+            let (w, x, y) = (f.bay_w, u * f.bay_w, (1.0 - v) * f.storey_h);
+            // The glass of `ground_floor`, less its frames and bars.
+            let (rect, bar) = match style {
+                0 => {
+                    let r = [(w - 1.9) / 2.0, (w + 1.9) / 2.0, 0.45, 2.6];
+                    let edge =
+                        x - r[0] < 0.08 || r[1] - x < 0.08 || y - r[2] < 0.08 || r[3] - y < 0.08;
+                    (r, edge || (y - 2.05).abs() < 0.03)
+                }
+                1 => {
+                    let r = [1.65, 2.55, 0.9, 2.3];
+                    let edge =
+                        x - r[0] < 0.07 || r[1] - x < 0.07 || y - r[2] < 0.07 || r[3] - y < 0.07;
+                    (r, edge || (x - (r[0] + r[1]) / 2.0).abs() < 0.03)
+                }
+                _ => {
+                    let r = [(w - f.win_w) / 2.0, (w + f.win_w) / 2.0, 0.9, 2.4];
+                    let edge =
+                        x - r[0] < 0.07 || r[1] - x < 0.07 || y - r[2] < 0.07 || r[3] - y < 0.07;
+                    (r, edge)
+                }
+            };
+            if inside(x, y, rect) && !bar {
+                // Shop windows are lit from spotlights above the display.
+                let top = if style == 0 { 0.35 } else { 0.25 };
+                1.0 - top + top * rise(y, rect[2], rect[3])
+            } else {
+                0.0
+            }
+        }
+        _ => 0.0,
+    }
+}
+
 fn roof_tiles(u: f32, v: f32) -> Texel {
     // 6 tiles of 0.18 m across, 6 rows of 0.15 m down the slope.
     let (cols, rows) = (6.0, 6.0);
@@ -841,6 +907,36 @@ mod tests {
         // Beside the window: rough, light plaster.
         let wall = at(0.2, 1.5);
         assert!(t.roughness[wall] > 0.85 && t.albedo[wall][0] > 0.7);
+    }
+
+    /// The glow lies exactly on the glass the albedo draws (the only texels
+    /// with a roughness of 0.04), never on frames, bars, doors or plaster.
+    #[test]
+    fn windows_glow_only_on_their_glass() {
+        for p in ALL {
+            let size = 128;
+            let t = generate(p, size);
+            let mut lit = 0;
+            for row in 0..size {
+                for col in 0..size {
+                    let (u, v) = (
+                        (col as f32 + 0.5) / size as f32,
+                        (row as f32 + 0.5) / size as f32,
+                    );
+                    let g = window_glow(p, u, v);
+                    let glass = t.roughness[row * size + col] == 0.04;
+                    assert_eq!(g > 0.0, glass, "{p:?} at {u} {v}");
+                    assert!((0.0..=1.0).contains(&g));
+                    lit += usize::from(g > 0.0);
+                }
+            }
+            let windowed = matches!(p, Pattern::Facade(_) | Pattern::GroundFloor(_));
+            assert_eq!(lit > 0, windowed, "{p:?}");
+        }
+        // Brighter at the top of the glass than at its bottom.
+        let f = FACADES[0];
+        let at = |y: f32| window_glow(Pattern::Facade(f), 0.4, 1.0 - y / f.storey_h);
+        assert!(at(f.win_bottom + f.win_h - 0.1) > at(f.win_bottom + 0.1));
     }
 
     #[test]
