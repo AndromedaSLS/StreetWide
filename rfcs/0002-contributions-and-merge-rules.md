@@ -312,7 +312,8 @@ compares its output with the current world asset by asset, matched by
     refresh would change its mesh, move it, rename it or remove it;
   - a feature that a contribution removed;
   - a new or enlarged feature that overlaps, in its layer, a contributed
-    asset, or a feature that a contribution or a takedown removed;
+    asset or a feature that a contribution removed, or that touches at
+    all a feature that a takedown removed;
   - a new or enlarged feature in a tile where a contribution or a
     takedown removed a feature of its layer whose bounds can no longer
     be read.

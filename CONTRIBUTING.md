@@ -104,11 +104,17 @@ of untrusted files:
   `crates/op_replay/tests/fuzz_replay.rs`): canonical JSON and every
   document type, glb meshes, ids and tile keys, store reads, validation of
   a whole world, the gate on contribution bundles, the world log and
-  replays.
+  replays; and for baseline refreshes, world-log directories
+  (`WorldLog::open`), merges with `--log` on crafted logs, `--require-base`
+  on crafted bundles and the merge commands' arguments.
 - **Python** (`tools/*/tests/test_fuzz_*.py`): canonical JSON, schemas,
   store reads, the glTF importer and the facade tool, Overpass answers for
   roads and water, STAC searches, GeoTIFF terrain, CityGML sheets and the
-  derived building cache.
+  derived building cache; and for baseline refreshes, the strict glb
+  reader (`glb.read`), change sets, world-log directories (`read_log`),
+  objects read from a directory, `apply`, and the planner's overrides
+  files, written plans, stores and the gate's reports as `verify` reads
+  them.
 
 A reader must accept its input or return its documented error. It must
 never panic or raise anything else, hang, or take memory out of proportion

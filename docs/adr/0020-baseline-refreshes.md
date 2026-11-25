@@ -147,13 +147,18 @@ Both merge commands gain two flags:
   which is not adopted.
 
 Both merge commands also hold a lock file in the store, and with `--log`
-one in the log, from before they read them until they have written them.
-A second merge stops when it finds one. Two merges started from the same
-world would otherwise leave the store and the log naming different
-worlds. `op_replay merge` refuses a `--replay` recorded in another world
-than the store's, which G10 would ignore without a word. These are checks
-of the tools, not merge rules: they change nothing about which change
-sets may be merged.
+one in the log, from before they read them until they have written the
+store and the record. A second merge stops when it finds one, before it
+writes anything. Two merges started from the same world would otherwise
+leave the store and the log naming different worlds. An empty path
+(`--log ""`, an unset variable) is refused, since it would name the
+current directory. With `--log`, the merge checks that the log can take
+the record before it writes the store, and if the store is ahead of the
+log, as a merge stopped between the two writes leaves it, the next merge
+says so and how to put the store back. `op_replay merge` refuses a
+`--replay` recorded in another world than the store's, which G10 would
+ignore without a word. These are checks of the tools, not merge rules:
+they change nothing about which change sets may be merged.
 
 [ADR-0002](0002-crate-layout-and-dependency-direction.md) already lets
 `op_replay` depend on `op_world`, and `op_world` keeps no workspace
@@ -190,7 +195,9 @@ must never be written late.
 
 `plan` checks that every record follows RFC 0002's rules, that the
 chain verifies and ends at the current world, and that every change set
-is present and hashes to its id.
+is present and hashes to its id. A log may come from elsewhere, so
+nothing inside it may be a link, and both `plan` and the merge commands
+refuse one.
 
 ### 5. The workflow
 
@@ -265,17 +272,17 @@ it back.
 | `origin-unclear` | conflict | a change to an asset whose manifest and log disagree about who made it (Q2) | an accept, in a decision set |
 | `removed-by-contribution` | conflict | an add of a key that a contribution removed (Q5) | an accept, in a decision set |
 | `dependent-contribution` | conflict | a mesh change, move, rename or removal of a shell that a contributed facade sits on | nothing (A2) |
-| `possible-duplicate` | conflict | an add, or a replace whose bounds grow, that newly overlaps, in its layer, a contribution that stays, or a feature that a contribution or a takedown removed | an accept |
+| `possible-duplicate` | conflict | an add, or a replace whose bounds grow, that newly overlaps (Q8), in its layer, a current contribution or a feature that a contribution removed, or that newly touches a feature that a takedown removed (any overlap) | an accept |
 | `removed-bounds-unknown` | conflict | every add, and every replace whose bounds grow, in the same layer and tile as a key that a contribution or a takedown removed, when that key's bounds cannot be read | an accept |
 | `tile-not-in-world` | held | an add into a tile the world lacks; G2 would fail it | nothing (A5) |
 | `terrain-edges` | held | a terrain replace that moves a vertex of its open edges; G8 would fail it | nothing (A1) |
-| `height-coupled` | held | every change draped on the same height-model items as a terrain change, when any one of them is held, in both directions; and every change draped on the height model over a contributed terrain that stays (Q17) | an accept |
+| `height-coupled` | held | every change draped on the same height-model items as a terrain change, when any one of them is held, in both directions; and every change of a mesh draped on the height model over a contributed terrain, while that contribution is in the current world (Q17) | an accept |
 | `per-tile-removal` | held | any removal of a tile's terrain, ribbons or water (Q4) | an allowance or an accept |
 | `mass-removal` | held | removals in an ingest group that no add, move or replace of their unit accounts for, above max(2, ceil(5 % of the group)) (Q4) | an allowance or an accept |
 | `unexplained-change` | held | changed content with the same sources, versions and generator: another platform, an ingest change without a `VERSION` bump, or an item republished under the same id | an accept |
 | `manual-hold` | held | a hold in the overrides file | removing the hold |
 | `unit-held`, `unit-too-large`, `would-empty-tile` | held | another member of the unit is held; the unit has more than 50 changes; the removals would empty a tile, after the whole refresh or after their own set, since each set is merged on its own | nothing |
-| `spawn` | held | terrain that rises to within 100 mm of the spawn's feet, or a collider that newly reaches into the player's space at the spawn (300 mm around the feet, from 100 mm below them to 1.8 m above), a collider switched on in a manifest included | nothing (A5) |
+| `spawn` | held | terrain that takes the ground from under the spawn, that rises under its feet to within 100 mm of them where the current ground was lower, or that newly reaches into the player's space at the spawn (300 mm around the feet, from 100 mm below them to 1.8 m above); a collider whose mesh newly reaches into that space or encloses it, a collider switched on in a manifest included. Meshes are tested triangle by triangle, not by their bounds | nothing (A5) |
 
 A shell under a contributed facade changes only after the facade is
 removed or moved by a change set of its own, or once A2 is decided.
@@ -481,6 +488,13 @@ upstream changes the terrain under the contribution.
 
 **Default until decided:** hold. Terrain contributions can be merged
 with `op_replay merge` (section 3), so the case can arise from now on.
+The contribution stays until a merged decision set replaces it. So when
+the maintainer accepts the terrain's own change, the changes draped over
+it still wait for the plan made after that decision set. Merged before
+it, as ordinary sets are, they would stay draped over the contribution
+if its review judged the decision not better. They do not hold the
+decision set in turn. A replace that keeps its mesh is not held, since
+nothing in it moves.
 
 #### Q18. How far a takedown reaches
 
@@ -643,6 +657,14 @@ while it is a Draft and raise `GATE_VERSION`, as water did
 - Hosting, submissions and a merge bot (ADR-0010).
 - Running or scheduling the ingest, stable entity ids across sources,
   and carrying contributions across renames (M3).
+- Raised by the reviews of the merge tooling. Each keeps the default
+  shown until the maintainer decides:
+
+| Question | Options | Default |
+|---|---|---|
+| The exit code of a merge that wrote the store but not the log (a write into the log failed after its check) | (a) 2, like every refused merge, with a message that says how to put the store back; (b) a code of its own, such as 3, so that scripts can tell it apart | (a) |
+| Durability of a local merge if the machine stops (power loss), not just the process | (a) no flush: a crash of the system right after a merge can leave a truncated record or `world.json`, and the log is then refused until someone repairs it; (b) flush each file and its directory before the next step, at some cost on every merge; (c) leave it to the hosted store and log (ADR-0010) | (a) |
+| How large a JSON document a reader takes (RFC 0001 leaves it open) | (a) 64 MiB, the store's limit for any file; (b) a smaller limit for JSON documents, such as 1 MiB; (c) also a cap on the reviews of a merge record. Python checks each review against the schema, about 0.15 ms each, so a record of 64 MiB takes minutes to read | (a) |
 
 ## Consequences
 

@@ -1201,10 +1201,10 @@ a time.
 | Check | Result |
 |---|---|
 | `cargo fmt --all --check`, `cargo clippy --workspace --all-targets --locked -- -D warnings` | pass |
-| `cargo test --workspace --locked` | 179 passed, 1 ignored (24 new: the log and its locks, `--require-base`, `op_replay merge`, `rerecord` and `compare-worlds`) |
-| `python -m pytest` | 435 passed, 66 skipped (the opt-in tests below, and one that needs a fresh district ingest) |
-| `STREETWIDE_GATE=1 python -m pytest tools/ingest/tests/test_changes_gate.py` | 24 passed, about 25 s |
-| `STREETWIDE_GATE=1`, `tools/worldfmt` tests and the fixture plan | 284 passed: the Python change-set, manifest and log rules and the terrain-edge count give op_world's verdicts and messages |
+| `cargo test --workspace --locked` | 247 passed, 1 ignored, with main's reader fuzzing merged in: among them the log and its locks, `--require-base`, `op_replay merge`, `rerecord`, `compare-worlds`, and the refresh's fuzz targets and regression tests |
+| `python -m pytest` | 763 passed, 95 skipped (the opt-in tests below, links and FIFOs where Windows cannot make them, and one that needs a fresh district ingest) |
+| `STREETWIDE_GATE=1`, CI's gate step (`test_changes_gate.py`, the fixture plan, and `tools/worldfmt`'s `test_changes.py`, `test_log.py` and `test_glb_reader.py`) | 303 passed in 61 s: the refresh sets pass the full gate with the predicted ids, and the Python change-set, manifest, log and glb rules and the terrain-edge count give op_world's verdicts and messages |
+| Fuzz campaigns, `STREETWIDE_FUZZ_ITERS=20000`, `STREETWIDE_FUZZ_SEED=0xBADC0DE` (Windows) | Rust, the four refresh targets: no failures (merge-args 200,000 cases, require-base 20,000, log-open 15,000, log-merge 4,000; 206 s). Python: `test_fuzz_refresh_readers.py` 39 passed (294 s), `test_fuzz_changes_readers.py` 23 passed, 1 skipped (253 s) |
 | Fixture water refresh, pinned | change `49650252…`, report `08f8cb7d…`; from the pre-water world `6af9f186…` (rebuilt from `fixtures/world`, as committed at `c16572a`) to `fd6446c2…`, which is `fixtures/world`; `verify` passes, `--replan` byte-identical |
 | Synthetic refresh over two tiles | a ribbon, a shell replace, a move to the other tile, a 1-to-2 split and a removal give 2 sets; both pass the full gate (G9 with 3 probe points, G10 with a recorded walk; the whole-refresh comparison probes 22) and every id matches; two runs give the same summary bytes |
 | Terrain-edge mirror | a held terrain change forced into a bundle fails G8 with 3 edge vertices, as the planner counted |
@@ -1260,6 +1260,64 @@ a time.
   0002 section 7 says how a refresh is split and lists every conflict;
   code and CI cite ADR-0020 instead of the design notes outside the
   repository.
+
+**Merged with main's fuzzing** (2026-11-25): the refresh's readers now
+meet main's standard for files from elsewhere (CONTRIBUTING.md,
+"Fuzzing"). Three more reviews followed; each finding fixed has a test
+that fails without its fix.
+- **Bounded reads:** every file the refresh tools read is a regular file
+  itself, of at most 64 MiB (replays: op_replay's own limit), read with
+  `read_file` in Rust and `store.read_file` in Python. Links, FIFOs and
+  devices are refused unopened. Nothing inside a world log may be a link
+  (Windows junctions included), and neither may a plan's `sets/<k>` or
+  its `objects/`. Writes go through a new temporary file, never through
+  a link, and leave none behind when they fail.
+- **The glb reader:** Python refuses what `op_world` refuses, in its
+  order and words: the JSON chunk's length and nesting, node i showing
+  mesh i, accessors that read the BIN chunk twice, numbers no float
+  holds, and node names quoted as Rust quotes them. With
+  `STREETWIDE_GATE=1`, 42 crafted meshes go through `op_world
+  check-change` and the Python reader: the same verdicts, and the same
+  messages for all but the 7 that are invalid JSON.
+- **New fuzz targets:** in Rust, world-log directories, merges with
+  `--log` on crafted logs, `--require-base` on crafted bundles and the
+  merge arguments; in Python, the glb reader, change sets, the world log,
+  objects read from a directory, `apply`, and the planner's overrides,
+  plans, stores and gate reports. Besides the earlier campaigns (default
+  seed and `0xC0FFEE`, Linux and Windows), each ran once more with
+  `STREETWIDE_FUZZ_ITERS=20000` and `STREETWIDE_FUZZ_SEED=0xBADC0DE`.
+- **Merging:** an empty path (`--log ""`) skipped the locks, so two
+  merges from one store both went through; it is now refused, and the
+  library takes the lock in the current directory. The locks are held
+  until the record is appended. A log that cannot take the record (a
+  link inside it, a file with other bytes) is found before the store is
+  written. A merge that stopped between the store and the log is named
+  by the next one, with how to put the store back, before
+  `--require-base` calls the plan stale. The candidate world is checked
+  against the gate's before anything is written, in a scratch directory
+  the merge makes itself. `op_world id` and the store's writes follow no
+  link.
+- **Planning:** what is draped over a contributed terrain waits for that
+  terrain's decision set, which merges last and only if judged better
+  (Q17); `would-empty-tile` holds one set's removals at a time, then
+  packs again; `mass-removal` counts per-tile removals too (Q4); `spawn`
+  measures the ground under the feet, tests meshes triangle by triangle
+  (a building enclosing the spawn counts, a courtyard around it does
+  not) and holds a removal of the ground under the spawn. The world log
+  reads each change set once: 400 records naming one 55 KB change set
+  took 45 s, and now take 2.6 s.
+- **Left to the maintainer** (ADR-0020, "Left open by this ADR"): an
+  exit code of its own for a merge that wrote the store but not the log;
+  flushing merges to disk against power loss; a size limit for JSON
+  documents and the reviews of a record. The report's
+  `spawn_ground_gap_mm` still measures the highest vertex near the
+  spawn, since measuring under the feet changes the fixture report's
+  pinned id.
+- **Tests clean up after themselves:** `op_world`'s test helper and
+  `op_replay`'s `full_gate.rs` left their temporary directories in the
+  system's temporary folder, about 100 to 300 MB a run (674 MB had
+  built up here since 2026-11-23). A guard now deletes each one at the
+  end of its test.
 
 **Out of scope:** no gate rule, `GATE_VERSION`, schema,
 contract version or merge rule changed, and A1 to A8 are only drafted;

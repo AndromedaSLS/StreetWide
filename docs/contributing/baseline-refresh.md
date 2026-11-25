@@ -262,12 +262,31 @@ cargo run -p op_replay -- rerecord <suite> --world <canonical> --out <suite>
   The flag is opt-in. Amendment A7 would make the check mandatory for
   refreshes; it is not adopted.
 - **`--log <log>`** appends the merge record, the change set, the gate's
-  report and the new world to the log.
-- **One merge at a time.** A merge holds a lock file, `merge.lock` in
-  the store and `log.lock` in the log, until it has written both. A
-  second merge that finds one stops before it reads anything. If a merge
-  was interrupted and left a lock behind, check that no merge is
-  running, then delete the file.
+  report and the new world to the log. The merge checks that the log can
+  take them before it writes the store: a log that cannot (a link inside
+  it, a file that holds other bytes where the merge writes) is refused
+  with nothing written. No path may be empty: `--log ""`, which an unset
+  variable gives, is refused.
+- **One merge at a time.** A merge takes a lock file, `merge.lock` in
+  the store and `log.lock` in the log, before it reads either, and keeps
+  them until it has written the store and the record. A second merge
+  that finds one stops before it writes anything. If a merge was
+  interrupted and left a lock behind, check that no merge is running,
+  then delete the file.
+- **A merge that stopped between the store and the log.** If a merge is
+  killed after it wrote the store and before it appended its record,
+  the store is one world ahead of the log, and every later merge refuses
+  with "the store holds world ..., but the log's last record ends at
+  ...", followed by what to do. Put the store back as it says: copy the
+  log's `worlds/<hex>.json` of the log's last world over the store's
+  `world.json` (the objects the stopped merge copied in can stay). Then
+  merge the set again. A write into the log that fails during a merge
+  (a full disk) says the same, with the same advice.
+- **Inputs from elsewhere.** Plans, logs, bundles and replays may come
+  from someone else. A link, a FIFO or a file over 64 MiB where a file
+  should be (a replay may be larger) makes every command stop with exit
+  code 2 and one line saying what it refused, as does a link at or under
+  a set's `objects/` or anywhere inside a log.
 - **Review.** The gate leaves every change of a refresh to review (G3),
   and a merge needs a review that judges the set `better`. RFC 0002 says
   that the approving reviewer may not be the change set's author. Until
@@ -304,7 +323,7 @@ same bytes, so planning again is cheap and safe. Plan again also when:
 | `origin-unclear` | The manifest and the world log disagree about who made the asset. | Check the log. Accept the change with a reason only once you know: it goes into a decision set. |
 | `removed-by-contribution` | A contribution removed this key, and upstream still has the feature. | Usually, leave it out. If the removal was wrong, accept the add with a reason: it goes into a decision set. |
 | `dependent-contribution` | A contributed facade sits on this shell, and the refresh would change the shell's mesh, move it, rename it or remove it. | Nothing lifts this. Ask the facade's author to move or remove the facade with a change set of their own, or wait for amendment A2. The next refresh then changes the shell. |
-| `possible-duplicate` | A new feature, or a feature whose bounds grow, newly overlaps a contribution, or a feature that a contribution or a takedown removed, in the same layer. A feature that upstream merged into its neighbour would come back inside it. | Check that it is not the same feature coming back, under a new id or inside another one. If it is not, accept it with a reason. |
+| `possible-duplicate` | A new feature, or a feature whose bounds grow, newly overlaps a contribution or a feature that a contribution removed, in the same layer (by at least half of the smaller one's area), or touches at all a feature that a takedown removed. A feature that upstream merged into its neighbour would come back inside it. | Check that it is not the same feature coming back, under a new id or inside another one. If it is not, accept it with a reason. |
 | `removed-bounds-unknown` | A contribution or a takedown removed a feature in this tile, and that feature's bounds can no longer be read. Every add, and every replace whose bounds grow, in that layer and tile is held. | Check the change against that removal. If it is another feature, accept it with a reason. |
 
 **Held back:**
@@ -313,15 +332,15 @@ same bytes, so planning again is cheap and safe. Plan again also when:
 |---|---|---|
 | `tile-not-in-world` | The add is in a tile the world lacks. | Nothing: change sets cannot add tiles (amendment A5). |
 | `terrain-edges` | The new terrain moves vertices on the tile's open edges, which G8 fails. | Nothing, until amendment A1. Everything draped on the same height-model items waits with it (`height-coupled`). |
-| `height-coupled` | The change is draped on height-model items that a held change uses, or it is draped on the height model over a contributed terrain that stays (Q17), so it would float or sink. | Wait, or accept it with a reason if its heights do not matter. |
-| `per-tile-removal` | The change removes a tile's whole terrain, ribbons or water. | Check upstream. If the data is really gone, add an `allow_removals` entry for its group, or accept it. |
+| `height-coupled` | The change is draped on height-model items that a held change uses, or its new mesh is draped on the height model over a contributed terrain (Q17), so it would float or sink. That holds even when you accept the terrain's own change: its decision set merges last, and only if judged better, so the draped changes wait for the plan made after it. | Wait, or accept it with a reason if its heights do not matter. |
+| `per-tile-removal` | The change removes a tile's whole terrain, ribbons or water. | Check upstream. If the data is really gone, add an `allow_removals` entry for its group, or accept it. The terrain under the spawn stays held all the same (`spawn`). |
 | `mass-removal` | An ingest group loses more than max(2, 5 %) of its assets without anything replacing them. Each add, move or replace in a unit accounts for one of its removals: a rename counts 0, and ten buildings replaced by one new building count 9. | Check upstream for a truncated or vandalised answer. Then add an `allow_removals` entry, or accept. When a whole group vanishes, `plan` stops with an error until an allowance names the group. |
 | `unexplained-change` | The content changed, but the sources, their versions and the generator did not. | Find the cause: another platform, an ingest change without a `VERSION` bump, or an item republished under the same id. Ingest again on the right platform, or accept with a reason once it is explained. |
 | `manual-hold` | Your overrides file holds it. | Remove the hold to let it through. |
 | `unit-held` | Another change of its unit is held. A move, a split or a merge goes whole. | Deal with the held member. |
 | `unit-too-large` | Its unit has more than 50 changes. | Nothing: a change set holds at most 50 (amendment A3). |
 | `would-empty-tile` | The removals would leave a tile empty, which G1 fails. Sets are merged one after another, so this also holds a removal whose set empties a tile that only a later set fills again. | Nothing: change sets cannot remove tiles (amendment A5). When a later set fills the tile, plan again once this refresh is merged: the removal then goes through. |
-| `spawn` | The change would bury the spawn, or puts a collider where the player stands at the spawn: 300 mm around the feet, from 100 mm below them to 1.8 m above. A collider switched on in a manifest alone counts. | Nothing: change sets cannot move the spawn (amendment A5). |
+| `spawn` | The change would bury the spawn or take the ground from under it, or puts a collider where the player stands at the spawn: 300 mm around the feet, from 100 mm below them to 1.8 m above. The ground is measured under the feet, and meshes triangle by triangle: a building with a courtyard around the spawn is not held, one that encloses the spawn is. A collider switched on in a manifest alone counts. | Nothing: change sets cannot move the spawn (amendment A5). |
 
 **When `verify` fails:**
 - **A set fails the gate.** `verify` prints each failing check with the
@@ -355,8 +374,8 @@ that shape a refresh:
 - **The shell under a facade** (Q6) and **terrain whose edges move**
   (Q9) are held, until amendments A2 and A1.
 - **Draped assets over contributed terrain** (Q17) are held while that
-  terrain stays, whether or not upstream changes it, and an accept can
-  lift that.
+  terrain is in the world, whether or not upstream changes it and even
+  when its own change is accepted, and an accept can lift that.
 - **Takedowns** (Q18): a takedown freezes its key for good. This is
   stricter than the recommended option, which would let an accept lift a
   revert.
