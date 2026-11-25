@@ -1804,3 +1804,370 @@ June):
 - **The plain look at night** is dark, as before. A neutral fill in F2
   would make it readable, but it would be light the data does not hold.
 - **A moon disc** with its phase, if wanted.
+
+### Crowd prototype (2026-11-25, ADR-0021 C2)
+
+Branch `crowd-prototype`, throwaway. ADR-0021's order of work in M2 starts
+with "a throwaway client prototype of C2 on the pedestrian prototype's
+graph, at the benchmark route's three places, judged by the checks above".
+
+**Thresholds, set before the prototype ran** (written down here before the
+first client run; the brief that asked for the prototype gave the numbers):
+
+Each check is pass or fail per stop and time, over a 20-second camera turn
+(1,200 ticks) at eye height at each of ADR-0018's three stops (Lindenhof,
+Hirschenplatz, Rathausbrücke), on 2026-12-21 at 17:00 (a Monday) and on
+2026-06-21 at 18:00 (a Sunday). Every case runs twice, in separate
+processes, with seed 0, a drawing radius of 160 m whose last 25 m fade, and
+both kinds of avoidance on (the configuration that is drawn). Everything is
+counted at whole ticks, with the camera's angle a function of the tick, so
+two runs count the same.
+
+1. **Nobody appears or vanishes in view inside the fade distance:** 0
+   events. An event is a person drawn at a tick but not at the one before,
+   or the reverse, while inside the view frustum (70 degrees vertical, 16:9,
+   buildings not hiding anyone) and nearer than the fade's start (135 m).
+2. **Overlaps between people in view:** fewer than 10 a minute. An overlap
+   starts when two people drawn, in view and within 40 m of the camera come
+   closer than 0.4 m between centres; a minute is three turns. Counted for
+   the drawn configuration, which is judged, and for each kind of
+   avoidance alone and for none, as the ADR asks.
+3. **Nobody stands inside a building shell:** 0 people with their feet more
+   than 0.1 m inside a shell's footprint (the shell cut 0.5 m above the
+   feet), outside marked entrance or passage ranges (the edges from a lane
+   to a door or a spot, building passages, the last 3 m of paths that end
+   at a door). Everyone drawn within the radius, at every tick.
+4. **The number of people within the drawing radius stays within ±25% of the
+   profile's target:** the people the function places within 160 m, at
+   every 60th tick (21 samples), against lane length inside the radius times
+   density per lane kind times hourly shape times month factor, plus spots
+   times occupancy times mean party. Every sample within the band.
+5. **The crowd's cost: at most 1.5 ms of frame time** (CPU main update plus
+   GPU) on the RTX 3070 at 1920 x 1080, high preset, at the busiest stop and
+   time (the case with the largest target), measured without the checks:
+   the difference in the median main-update CPU time (from the start of
+   Bevy's `First` to the end of `Last`) plus the difference in the median
+   GPU time per frame, with the crowd against without it, two runs each,
+   alternated. The difference in frame time is reported beside it.
+6. **The same people at a pinned tick on two runs:** a hash of the
+   positions of everyone the function places within the radius, at ticks
+   0, 600 and 1,200, equal on both runs.
+
+**What was built** (`crates/op_client/src/crowd_proto/`; nothing runs
+unless `--proto-crowd <file>` or `--proto-crowd-bench <out.json>` is
+given, and without them the plugin adds no system):
+- **The population function** (`population.rs`): who is where is a pure
+  function of the lanes, places and profiles, the session seed, the
+  crowd's clock (date, time and ticks), the population's version
+  (`crowd-proto-0.1`) and the catalogue's size. No Bevy and no floats:
+  integer millimetres, ticks and per-mille factors, and a SplitMix64 hash
+  of the seed for randomness (a test checks that the file names no float
+  type, unordered map or clock), so it could move to `op_sim`. The camera
+  only chooses which part is worked out; a cache keeps trips already
+  worked out, and a test checks that asking other places and times first
+  changes nothing.
+  - **Trips** start only at places (doors of shops and public buildings,
+    stops, squares, the world's edge), in 2-second slots at a rate that
+    follows the profiles. Each group walks a seeded walk over the lanes for
+    150 to 700 m, then on to the nearest place ahead, where the trip ends.
+  - **Walk weights** are calibrated once at load by sampling 8 rounds of
+    8,000 trips, so that each lane gets its share of the people. Weighted
+    by density alone, the walk gave pedestrian streets half their share and
+    steps three times theirs, because flows are decided at junctions. A
+    factor per time brings the expected total to the profiles' total.
+  - **Visits:** groups walk to spots in squares and at stops, stand in a
+    ring for 1 to 10 minutes, and walk on to a place.
+  - **Groups and speeds:** singles 60%, pairs 28%, threes 8% and fours 4%
+    of the groups, so 60 to 67% of the people seen walk in groups.
+    Weidmann's 1.34 m/s (sd 0.26) per member; a group walks at its
+    members' mean less 0.06 m/s per extra member, times 0.9 from shops and
+    squares and 1.05 from stops, at half speed on steps. Abreast where the
+    lane is wide enough, staggered as it narrows.
+  - **Avoidance built in** (`lanes`): keep right, slower walkers further
+    out, and anyone closer than 0.8 m to someone of another group steps
+    sideways by half the shortfall, worked out in closed form from where
+    both are at that tick, every term continuous so that nobody jumps.
+- **Client offsets** (`offsets`): within 40 m of the camera, people step
+  aside from anyone closer than 0.8 m, as offsets from the function's path
+  that fade back to it (about a third of a second), at most 5 cm a tick
+  and 0.6 m in all, within the room beside the lane.
+- **The camera may delay drawing, never move anyone:** someone new in
+  view nearer than the fade (a trip starting at a door) is drawn once out
+  of view or beyond the fade; someone whose trip ends in view stays drawn,
+  standing where it ended, until out of view. Positions never depend on
+  the camera.
+- **Lanes** (`lanes.rs`, `walls.rs`): read from a scratch file that a
+  conversion script writes from the ingest's OSM cache, then cleared of
+  the building shells at load, as the ingest would. Shells cut 0.5 m above
+  the ground give walls; a lane point closer than 0.35 m to a wall moves
+  sideways by at most 1 m, or the lane is dropped, except the last 3 m of
+  paths that end at a door and building passages, which are marked. The
+  room beside each lane is measured every 0.5 m, and each node's clearance
+  from walls; people keep 0.3 m from walls, and turns keep within the
+  narrower lane and the node's clearance.
+- **Characters** (`figures.rs`): generated in code, no asset files: box
+  figures (legs with knees and shoes, hips, a torso or long coat, arms and
+  hands, a head with hair, sometimes a hat or a bag), 48 looks per season
+  from seeded palettes (coats and hats in winter, shorts and short sleeves
+  in summer), 1.50 to 1.98 m tall. A flipbook step cycle of 32 poses
+  within 30 m and 8 beyond, its phase following the distance walked (one
+  cycle per 1.38 m at 1.75 m, the figures' own stride) from a seeded
+  start, so planted feet stay put and nobody steps in time; standing and
+  sitting poses. 2,112 meshes, 0.83 million vertices, built in 45 ms.
+- **Drawing:** one entity per person; people move every frame within 60 m
+  and at each tick beyond; a radius of 160 m whose last 25 m fade in four
+  steps; hidden in F2's plain look.
+- **The crowd's clock:** the client's date and time plus the simulation's
+  ticks; the benchmark counts from the end of loading, and
+  `--proto-crowd-tick` pins it. People are worked out at whole ticks.
+- **The benchmark** (`bench.rs`): ADR-0018's method (1920 x 1080, vsync
+  off, high preset, a 20-second turn at eye height), with the camera's
+  angle a function of the tick and every check counted at whole ticks, for
+  all four ways of avoiding each other. `--proto-crowd-census` prints
+  people against the target by lane kind.
+
+**Inputs** (local, not in the repository; OSM data of 2026-11-23):
+- **Lanes:** 7,042 edges: 74.5 km of lanes (28.5 km of them across 34
+  squares and pedestrian areas) and 1.7 km of edges to doors and spots.
+  Against 1,387 shells, 128 lanes came closer than 0.35 m to a wall and 37
+  had points inside a shell. 24 nodes moved, 38 lanes moved sideways (at
+  most 0.98 m) and 98 lanes (2.4 km) were dropped: 31 ran into a wall, 31
+  needed a shift at an end, 22 more than 1 m, 11 ended at a node that
+  could not be cleared and 3 had walls on both sides. No lane point was
+  left inside a shell. 351 lanes end at a door; 28 pass through buildings.
+- **Places:** 470: 205 doors of shops (paths that end at the building, or
+  a door placed on the outline nearest a lane), 123 of public buildings,
+  2 stops (the only platforms in range), 35 squares and 108 points where a
+  lane leaves the district. Never a door of a building tagged as homes or
+  with no use: 67 paths to such doors were dropped. The cache has no
+  benches, terraces, entrances or tram stops (they are nodes), so nobody
+  sits.
+- **Spots:** 66 in squares, at least 1.8 m from any lane, and 4 at stops.
+- **Profiles:** hourly shapes per day type from Bahnhofstrasse (Mitte,
+  2025) for city lanes and from the Limmatquai counter (2024) for lanes
+  within 15 m of a way named as a quay or bridge, their mean for squares.
+  Month factors from the same series: Bahnhofstrasse weekdays 853 to 1,277
+  per mille (December the highest), the Limmatquai 672 to 1,325 (December
+  estimated as the mean of November and January). Densities per lane kind
+  set by hand, people per km at the weekday peak in an average month: 350
+  on pedestrian streets, 120 on living streets, 100 on platforms, 80 on
+  sidewalks, 60 on crossings, 50 on footways and on lanes without
+  sidewalks, 30 on steps; 200 people per hectare of square; 40% of square
+  spots and 50% of stop spots taken at the reference.
+
+**Results** (12 runs, each case twice; seed 0; the drawn configuration
+has both kinds of avoidance):
+
+| Check | Lindenhof, Dec | Lindenhof, Jun | Hirschenplatz, Dec | Hirschenplatz, Jun | Rathausbrücke, Dec | Rathausbrücke, Jun |
+|---|---|---|---|---|---|---|
+| 1. Appear or vanish in view (0) | pass, 0 | pass, 0 | pass, 0 | pass, 0 | pass, 0 | pass, 0 |
+| 2. Overlaps a minute (under 10), both | pass, 9.0 | pass, 3.0 | pass, 0.0 | pass, 3.0 | pass, 6.0 | pass, 3.0 |
+| 2. ... built into the function alone | fail, 93.0 | fail, 27.0 | pass, 9.0 | fail, 33.0 | fail, 63.0 | fail, 30.0 |
+| 2. ... client offsets alone | fail, 45.0 | fail, 27.0 | pass, 6.0 | fail, 21.0 | fail, 63.0 | fail, 24.0 |
+| 2. ... no avoidance | fail, 276.0 | fail, 120.0 | fail, 60.0 | fail, 54.0 | fail, 195.0 | fail, 105.0 |
+| 3. People inside shells (0) | pass, 0 | pass, 0 | pass, 0 | pass, 0 | pass, 0 | pass, 0 |
+| 4. People within 160 m against the target (±25%) | pass, 1,044 to 1,068 against 1,013 (+3 to +5%) | pass, 609 to 622 against 617 (-1 to +1%) | pass, 822 to 833 against 879 (-6 to -5%) | pass, 494 to 506 against 419 (+18 to +21%) | pass, 1,113 to 1,155 against 1,036 (+7 to +11%) | pass, 614 to 633 against 603 (+2 to +5%) |
+| 6. Same people on two runs | pass | pass | pass | pass | pass | pass |
+
+- **Check 3** gave 0 for all four ways, not only the drawn one.
+- **Check 6:** the hashes at ticks 0, 600 and 1,200 were equal on both
+  runs at every stop, for both variants of the function, and so was every
+  count of every check: the checks themselves are reproducible.
+- **Seen:** 103 to 243 people in view on average (14 to 40 within 40 m),
+  60 to 67% of them in groups. Trips starting in view and held until out
+  of view: 3 to 18 a run; trips ending in view and held standing: 4 to 8 a
+  run, about one in view at a time.
+- **Overlaps left** with both kinds of avoidance are mostly grazes on
+  squares (0.38 to 0.40 m), and twice two members of one group in a turn.
+  Lindenhof in December is the closest to the threshold (3 onsets in the
+  turn).
+- **Hirschenplatz in June** is the case furthest from its target (+21%).
+  The census tool gives +1 to +5% there with seeds 1 to 3: between seeds,
+  the count at a stop varies by about 10%.
+- **Not a check:** one person in a group of four moved more than 0.25 m
+  in a tick, in view, once, at Lindenhof in June. Two sources of such
+  jumps were found and fixed during development (a group's stagger that
+  changed abruptly when the lane narrowed by 2 cm, and closed-form steps
+  whose direction swung when two paths crossed); this one was not traced.
+
+**5. Cost** at the busiest case by target (Rathausbrücke, 21 December at
+17:00: 1,036 people expected within 160 m, about 1,135 drawn), without
+the checks, runs alternated (ms):
+
+| | Without, run 1 | With, run 1 | Without, run 2 | With, run 2 |
+|---|---|---|---|---|
+| Frame, median | 4.86 | 5.25 | 4.73 | 5.25 |
+| Frame, mean | 5.00 | 5.90 | 4.84 | 5.90 |
+| Frame, 99th percentile | 7.16 | 9.12 | 6.59 | 8.67 |
+| Main update, median | 3.66 | 3.81 | 3.57 | 3.80 |
+| Main update, mean | 3.74 | 4.59 | 3.66 | 4.59 |
+| GPU, median | 3.20 | 3.18 | 3.18 | 3.20 |
+
+- **By the measure set before the runs: pass, 0.19 ms** (0.15 - 0.02 =
+  0.12 ms for the first pair, 0.23 + 0.02 = 0.25 ms for the second).
+- **But the median hides the ticks.** The crowd's own CPU time is 0.36 ms
+  a frame at the median (drawing), 0.85 ms on average and 2.4 to 2.5 ms
+  at the 99th percentile: working out about 1,150 people at a tick takes
+  about 2 ms, and a tick falls on about one frame in three at 170 to 200
+  frames a second. The mean frame is 0.9 to 1.1 ms longer and the 99th
+  percentile frame 2.0 to 2.1 ms longer, which would fail a 1.5 ms budget
+  taken at the 99th percentile, as ADR-0018 takes its frame budget. The
+  fixes are known: spread a tick's work over frames, work out people
+  beyond 60 m every second or fourth tick, or work the function out on
+  another thread (it keeps no state).
+- **GPU:** no measurable difference at this dusk stop (no sun shadows).
+  The shadows of people in June daylight were not measured for cost.
+
+**The look** (screenshots at tick 0, facing each place's heading, kept
+outside the repository):
+- **18:00 on 21 June (a Sunday):** the streets read as alive. Lindenhof
+  is full of people crossing alone and in groups, with bags, in summer
+  colours, casting long shadows; Hirschenplatz is a quieter Sunday
+  evening, with a few groups walking away; at the Rathausbrücke a group of
+  four walks abreast into the old town and people fill the street beyond.
+- **17:00 on 21 December:** almost black. The sun is 4 degrees below the
+  horizon, where the client's exposure has not reached its night floor and
+  the night fill has only begun (ADR-0022 fades it in from 1 to 8 degrees
+  below): people show only as silhouettes against lit shop windows. This
+  is the dusk look, not the crowd, but M2's December screenshots at this
+  hour would show no one. Extra screenshots at 15:00 on 21 December show
+  winter crowds in dark coats and hats, couples and groups: a busy
+  afternoon.
+- **What looks wrong:**
+  - box figures with blank faces: placeholders until ADR-0017's models;
+  - clones: in the group of four at the Rathausbrücke two members look the
+    same (48 looks a season, drawn for each member independently), and the
+    dark winter palette makes many people look alike;
+  - lines of people: keeping right puts walkers in a column on one half of
+    a wide pedestrian street (the Rathausbrücke at 15:00 in December), and
+    on squares people follow the same straight lines from one entry point
+    to another; real crowds spread over the width;
+  - people walk through the camera: nobody gives way to the player (not
+    built), and at Lindenhof and Hirschenplatz someone passes within an
+    arm's length of the eye;
+  - not visible in stills: stepping aside and a group's changing stagger
+    move people sideways without steps (up to 5 cm a tick), and the near
+    step cycle advances 4 cm at a time; otherwise planted feet stay put,
+    since the cycle follows the distance walked;
+  - squares are not empty, but only the larger ones have standing groups,
+    nobody sits (no benches in the data), and nobody was seen inside a
+    wall.
+
+**What it means for RFC 0005** (the navigation-data RFC, a Draft in pull
+request #7):
+- **Per-lane numbers need a way to be met.** A walk from places, weighted
+  by lane density alone, gave pedestrian streets half their share and
+  steps three times theirs: flows are decided at junctions, and chains of
+  lanes take what their junction gives them. The prototype met its
+  targets only by calibrating a weight per lane at load (8 rounds of 8,000
+  sampled trips, about a second for the district). RFC 0005 stores
+  `people_per_day` per lane and `trips_per_day` per place; the two must
+  agree (the trips from places make the people on lanes), so either the
+  ingest makes them consistent, or places carry relative weights and the
+  population function derives the trips, as the prototype did. Whether the
+  calibrated weights are worked out by the function (and so belong to its
+  version) or baked by the ingest is a choice for the RFC.
+- **A centred `width_mm` is not enough.** Keeping people off walls took
+  the free room on each side of a lane, measured against the shells every
+  0.5 m (walls jut out between OSM vertices; rays every 1 to 2 m left
+  people up to 0.35 m inside shells), and each junction's clearance from
+  walls, because people turning there cut the corner. The RFC could store
+  room left and right per point (or a width and an offset), and a
+  clearance per node, both from the matching to shells, marked as
+  estimated.
+- **Areas need their own numbers.** Joining the points where lanes reach
+  a square, through a centre, made 28.5 km of `area` lanes in 34 areas, 38%
+  of all lane length, crossing each other; a density per lane would have
+  filled squares many times over. The prototype gave each area a density
+  per hectare (200 people at the reference) spread over its lanes. The
+  RFC's areas could carry that, or `people_per_day` for `area` lanes could
+  be defined from the area's.
+- **Standing places must lie off the lanes.** With spots on the lines
+  people walk, walkers passed through standing groups; spots at least
+  1.8 m from any lane fixed it, at the cost of most spots in small squares
+  (193 candidates down to 66). Anchors of `square`, `viewpoint` and
+  `fountain` places want the same rule.
+- **Ranges and matching hold up.** The prototype's marks match the RFC's
+  `entrance` and `passage` ranges. Clearing dropped 98 lanes (2.4 km of
+  77 km): 31 ran into a wall, 31 needed a shift at an end, 22 more than
+  1 m, 11 ended at a node that could not be cleared, 3 had walls on both
+  sides. RFC 0005's `blocked` range keeps such lanes in the graph instead
+  of dropping them, which is better: dropping can cut a street in two.
+  Walls must be cut at a height above the walking surface, and two walls
+  equally far away must not decide a point's side between them (the
+  prototype's first signed distance flipped sign there).
+- **Doors from the cache alone are few and estimated:** 80 paths that end
+  at a shop or public building, and 253 doors placed on outlines nearest a
+  lane; benches, terraces, stops and entrances need the RFC's node query.
+  Trips that end at a door in view were held standing there until out of
+  view (about one person in view at a time); real doors drawn there would
+  let them walk in, but walking in is a vanish in view.
+- **Heights:** the highest non-building surface (terrain or a transport
+  deck) worked for bridges and steps, as the RFC's `bridge` rule says.
+- **Not exercised:** tile cuts and joining (the prototype used one graph
+  for the district), `forward_permille`, opening hours, holidays.
+
+**What it means for C2 against the fallback (a seeded A):**
+- **C2's core holds in the district.** A pure function, keeping no state,
+  gave the same people on two runs, started and ended every trip at a
+  place, kept people on lanes and out of shells, followed the profiles
+  within 21%, and nothing appeared or vanished in view, with the camera
+  delaying both the start and the end of trips seen in view. All six
+  checks pass at all three stops on both dates, as defined.
+- **It needs both kinds of avoidance.** Built into the function alone, or
+  client offsets alone, fails check 2 in five of six cases (21 to 93
+  overlaps a minute); together they pass everywhere (0 to 9). So C2 comes
+  with a near tier in the client after all: offsets near the camera that
+  fade back to the function's path. They decide nothing about who is
+  where, but they are the part of A that C2 needs.
+- **The fallback is not needed by these checks.** What a seeded A would
+  add (any steering, people that react) is partly here already in the
+  offsets; what it would lose (the same people across machines and camera
+  paths) is shown working. Recommended: keep C2, with client offsets as
+  its near tier, and fix the per-tick cost before the route is measured.
+- **Limits of the evidence:** three stops, two times, one seed and a
+  camera that turns in place; overlaps close to the threshold at
+  Lindenhof in December; a cost that passes at the median but not at the
+  99th percentile; and people held at doors until the player looks away,
+  which a player who walks could notice.
+
+**Checks:**
+- `cargo fmt --all --check` and `cargo clippy --workspace --all-targets
+  --locked -- -D warnings`: pass.
+- `cargo test --workspace --locked`: 273 passed, 1 ignored. New in
+  `op_client`: the population function gives the same people for the same
+  inputs whatever was asked before, and other people for another seed;
+  trips start and end at places, and their legs join; counts follow the
+  profile (on a grid of streets, averaged over three seeds, within -20 to
+  +25% by day and -40 to +50% at 3 a.m., and night far below the
+  afternoon); more than half the people in groups, a mean speed of 1.1 to
+  1.4 m/s and half speed on steps; nobody moves more than 12 cm in a
+  tick, with or without
+  avoidance; people stand and sit at spots; the function's file names no
+  float type, unordered map or clock; the calendar's day types; the
+  figures' stride matches the function's; looks vary and follow the
+  season.
+- `op_replay check fixtures/replays/sample.oprep`: ok, 20 checkpoints,
+  final state `212bd353…`, unchanged: the simulation is untouched.
+
+**Where things are** (outside the repository, in the session's scratch
+folder `crowd/`): `scripts/convert.py` (the conversion from the OSM
+cache), `data/lanes.txt` (its output, 240 KB), `formal/` (the 12 check
+reports and logs, the 4 cost reports, and the screenshots), and
+`formal/extra/` (December at 15:00).
+
+**Still open:**
+- **The per-tick cost** at the 99th percentile (above).
+- **The look:** the dusk exposure at 17:00 in December; lines of people
+  on wide streets (spread walkers over the width by speed and group, not
+  only to the right); clones within a group (draw members' looks without
+  repeats); figures until ADR-0017's models.
+- **Not built:** giving way to the player and glances; stair animations;
+  sitting (the cache has no benches or terraces); trams at stops; a
+  cross-fade when the clock moves (it cuts).
+- **Not tested:** a walking camera, travel and the T key in a run; F2
+  hides the crowd in code but was not checked in a run; the function on
+  Linux and macOS, or in a debug build (the golden test ADR-0021 asks
+  for).
+- **One jump** at Lindenhof in June, not traced.
+- **RFC 0005:** the points above.
