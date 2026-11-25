@@ -277,16 +277,65 @@ run.
 
 ### 7. Baseline refreshes and takedowns
 
+*The baseline refresh rules below are a clarification proposed together
+with [ADR-0020](../docs/adr/0020-baseline-refreshes.md). They change no
+contract document and no gate check.*
+
 **Baseline refresh.** When `tools/ingest` is run with newer source data
-(a new swisstopo release, a newer OpenStreetMap snapshot), its output is a
-change set authored by `streetwide:ingest`:
-- **An asset whose current version was itself produced by the ingest**
-  (its `provenance.generator.name` is `streetwide-ingest`) is replaced
-  when its content changed. Newer upstream data counts as an
-  improvement, provided the gate passes.
-- **An asset whose current version is a contribution** is not replaced
-  automatically. The refresh lists it as a conflict for review, so a
-  better contribution is never overwritten by a newer but worse baseline.
+(a new swisstopo release, a newer OpenStreetMap snapshot), a refresh
+compares its output with the current world asset by asset, matched by
+`(layer, feature_id)`, and proposes change sets authored by
+`streetwide:ingest`. It reads the world log.
+- An asset is **made by the ingest** if its current version's
+  `provenance.generator.name` is `streetwide-ingest`, it lists no
+  `StreetWide contributions` source, and the world log shows that its
+  last change was the baseline or a refresh. Any other asset is a
+  contribution.
+- An asset's **content** is its mesh and its manifest, except
+  `parent_version_id`, `generator.version` and each source's `version`.
+  Source ids are content: a release that renames its items, as
+  swissALTI3D's yearly item ids do, changes the content of every asset
+  that lists them.
+- The refresh **replaces** an asset made by the ingest when its content
+  changed, **adds** a feature that is new upstream, and **removes** an
+  asset made by the ingest that is gone upstream. Newer upstream data
+  counts as an improvement, provided the gate passes. A feature that
+  moves to another tile is removed and added in the same change set,
+  and its lineage starts again. Removals and additions that overlap (a
+  building split, merged or re-sourced) go together.
+- It changes nothing automatically, and lists as a conflict for review:
+  - an asset whose current version is a contribution, when upstream
+    changed, gained or lost that feature since the version the
+    contribution replaced, or when that version can no longer be read;
+  - an asset whose manifest and world log disagree about who made it;
+  - an asset that a contribution depends on (a facade's shell), when the
+    refresh would change its mesh, move it, rename it or remove it;
+  - a feature that a contribution removed;
+  - a new or enlarged feature that overlaps, in its layer, a contributed
+    asset, or a feature that a contribution or a takedown removed;
+  - a new or enlarged feature in a tile where a contribution or a
+    takedown removed a feature of its layer whose bounds can no longer
+    be read.
+- It never re-adds or changes a feature whose last change was a
+  takedown. Reversing or updating it is a separate decision by a
+  maintainer.
+- It holds back, and lists, changes that the gate would refuse or that
+  would leave the world inconsistent without any check failing. Examples
+  are terrain whose open edges move, assets draped on terrain that
+  stays, the removal of a tile's whole terrain, ways or water, unusually
+  many removals, and ground rising at the spawn.
+- A maintainer may accept a listed change with a written reason, except
+  a change to an asset a contribution depends on, one that would bury
+  the spawn, or one that a takedown or the gate forbids. A change that
+  replaces or removes a contribution, or re-adds what a contribution
+  removed, is then proposed in a change set of its own and judged on its
+  own.
+- The lists are part of the refresh's report, not of the change sets.
+- A refresh is split into change sets by purpose: sets without colliders
+  first, then by layer and source dataset, with at most 50 changes each.
+  An accepted change to a contribution gets a set of its own. The sets
+  are merged one after another, each made against the world the
+  previous one produces.
 
 **Takedown.** A maintainer may remove or revert an asset immediately,
 without the "beats" rule, for:
@@ -426,3 +475,55 @@ To be built after acceptance:
 7. **Reviewers:** when the project moves from one maintainer review to
    two-reviewer approval, and how reviewer rights per layer are granted
    (GOVERNANCE.md).
+
+Questions 8 to 15 came up while designing the baseline refresh tool;
+ADR-0020 calls them amendments A1 to A8. Each would change a gate rule,
+a merge rule or the contract, so none is part of the section 7
+clarification, and none is decided.
+
+8. **Terrain edges in a refresh (A1):** G8 fails a replaced terrain
+   whose open edges move, even when its neighbours move the same way in
+   the same change set, so a new height model can practically never be
+   merged. G8 could instead require a replaced terrain to meet the
+   candidate world's neighbouring terrain bit for bit; see
+   [ADR-0020](../docs/adr/0020-baseline-refreshes.md#amendments-flagged-for-rfc-0002).
+9. **Shells under contributions (A2):** G8 checks a facade against its
+   shell only when the facade itself changes, so a refresh that changes
+   the shell is never checked against the facade on it. G8 could
+   re-check contributed dependents when their shell changes, with
+   `review` for a refresh and `fail` for a contribution; see
+   [ADR-0020](../docs/adr/0020-baseline-refreshes.md#amendments-flagged-for-rfc-0002).
+10. **The 50-change cap for refreshes (A3):** a refresh of every
+    building in the Zurich district would need 28 change sets, each
+    reviewed on its own. The cap could be lifted for change sets
+    authored by `streetwide:ingest`, as RFC 0004 recommends before M3;
+    see
+    [ADR-0020](../docs/adr/0020-baseline-refreshes.md#amendments-flagged-for-rfc-0002).
+11. **Buildings over mapped ways (A4):** a refreshed building can stand
+    over a way that OpenStreetMap still maps, and G9 then fails. G9
+    could give `review` instead of `fail` when the blocking asset was
+    made by the ingest; see
+    [ADR-0020](../docs/adr/0020-baseline-refreshes.md#amendments-flagged-for-rfc-0002).
+12. **The spawn and the tile set (A5):** a change set cannot move the
+    spawn, add a tile or remove one, although the ingest places the
+    spawn 1 m above the height model and coverage can change upstream.
+    Change sets could be allowed to make these changes; see
+    [ADR-0020](../docs/adr/0020-baseline-refreshes.md#amendments-flagged-for-rfc-0002).
+13. **Licence and provenance checks on refreshes (A6):** the gate skips
+    G4 and G5 for change sets authored by `streetwide:ingest`, but the
+    G4 and G5 rows of section 4 do not say so. Both could run on
+    refreshes too, as ADR-0017 proposes; see
+    [ADR-0020](../docs/adr/0020-baseline-refreshes.md#amendments-flagged-for-rfc-0002).
+14. **Refresh change sets and their base world (A7):** section 2 lets a
+    change set whose parents are still current merge on a newer world,
+    so a facade merged between two sets of one refresh can end up on a
+    shell that the next set replaces, and nothing re-checks it. A change
+    set authored by `streetwide:ingest` could be merged only on the
+    world named in its `base_world_id`; see
+    [ADR-0020](../docs/adr/0020-baseline-refreshes.md#amendments-flagged-for-rfc-0002).
+15. **Holes in the ground (A8):** removals skip G7 and G8, and G9's
+    probe casts no ray downward, so neither G8 nor G9 notices a missing
+    terrain tile. G8 could give `review` for every terrain removal, and
+    G9 could flag a probe point that had ground below it in the base
+    world and has none in the candidate; see
+    [ADR-0020](../docs/adr/0020-baseline-refreshes.md#amendments-flagged-for-rfc-0002).
