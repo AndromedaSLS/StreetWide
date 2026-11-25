@@ -16,6 +16,9 @@ pull request.
   world meets the ODbL (ADR-0019) and the licence allowlist (ADR-0017).
   Work that needs no decision goes on: the client's inspect mode, which
   marks improvable buildings and gives the facade command, is on `main`.
+- **Baseline refreshes** (M1) work locally on branch `refresh`: the
+  planner, its `verify` through the gate, and `op_replay merge`. Their
+  rules wait for the maintainer in ADR-0020 (Proposed).
 - **M2** has started with water for the Limmat: RFC 0003 (a water layer,
   Draft) and ADR-0014 (water areas from OpenStreetMap, Proposed) are
   implemented on `main` while they are open for comment, as RFC 0001 and
@@ -282,6 +285,10 @@ drafts (section 8).
   authored by `streetwide:ingest`, so new data never overwrites
   contributions. A migration tool carries contributed assets to a new
   world-format version with their authors and lineage.
+  *Status:* `python -m tools.ingest.changes` (plan and verify) and the
+  merge tooling work locally on branch `refresh`, with their rules
+  proposed in [ADR-0020](adr/0020-baseline-refreshes.md). The migration
+  tool is not started.
 - **Reviewers:** a GOVERNANCE.md change that adds a reviewer role with merge
   rights per layer, and a trainee path (RFC 0002, question 7).
 - **Newcomers:**

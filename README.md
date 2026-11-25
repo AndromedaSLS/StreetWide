@@ -39,7 +39,7 @@ better.
 | `schemas/` | JSON Schemas for the world format ([RFC 0001](rfcs/0001-world-format.md)) |
 | `fixtures/` | Small committed test data: golden fixtures for the world format and contributions, one real tile, a replay ([fixtures/README.md](fixtures/README.md)) |
 | `worlds/` | World definitions for the ingest (area, spawn point) |
-| `tools/ingest` | Python ingest: builds a world from swisstopo and OpenStreetMap data ([ADR-0006](docs/adr/0006-ingest-pipeline-and-data-sources.md)) |
+| `tools/ingest` | Python ingest: builds a world from swisstopo and OpenStreetMap data ([ADR-0006](docs/adr/0006-ingest-pipeline-and-data-sources.md)). `tools.ingest.changes` turns a newer build into baseline refresh change sets for the canonical world, and checks them through the gate ([guide](docs/contributing/baseline-refresh.md)) |
 | `tools/worldfmt` | Python implementation of the world format, byte-compatible with `op_world` |
 | `tools/contrib` | Contribution tools: export a building to model on, turn a model into a contribution ([guide](docs/contributing/facades.md)) |
 | `tools/ci` | CI helpers: dependency-direction, DCO and glTF checks |
@@ -179,6 +179,18 @@ cargo run --release -p op_client -- --replay replays/<file>.oprep
 path and the final state hash
 ([ADR-0007](docs/adr/0007-replay-file-format.md)).
 
+For contributions and baseline refreshes, `op_replay` also has:
+- `check-change`: the full contribution gate, G1 to G10;
+- `merge`: `op_world merge` with the full gate, for change sets that
+  touch colliders. It takes the same options plus `--replay`;
+- `rerecord`: plays a replay's inputs again in a new version of its
+  world;
+- `compare-worlds`: compares two versions of a world for walkability and
+  replay drift, for review.
+
+See the [facade guide](docs/contributing/facades.md) and the
+[baseline refresh guide](docs/contributing/baseline-refresh.md).
+
 ### Other areas
 
 Any area inside one z12 map region in Switzerland works:
@@ -190,7 +202,11 @@ cargo run --release -p op_client -- --world data/world/<my-area>
 
 `python -m tools.ingest --help` lists the options:
 - `--offline` uses only cached data;
-- `--refresh` re-queries the data catalogues;
+- `--refresh` re-queries the data catalogues. It still builds a whole new
+  world. It does not update a world that has contributions: that is a
+  baseline refresh, planned from such a build with
+  `python -m tools.ingest.changes`
+  ([guide](docs/contributing/baseline-refresh.md));
 - the `STREETWIDE_CACHE` environment variable moves the cache.
 
 ### Development checks

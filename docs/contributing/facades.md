@@ -166,6 +166,13 @@ as the author of its facade, with its licence and credits.
 The review you give yourself here only lets the local merge through. In
 the shared world, reviewers decide.
 
+`op_world merge` runs the checks G1 to G8. A facade is visual only, so
+G9 and G10 do not apply to it, and these checks are the whole gate. A
+change to a shell or to terrain, a removal included, touches colliders.
+Merge such a change with `cargo run -p op_replay -- merge` instead. It
+takes the same options, plus `--replay <file>`, and runs the full gate,
+G9 and G10 included.
+
 ## 7. Submit
 
 Submission opens when the canonical world repository exists
@@ -174,3 +181,25 @@ open a pull request with your bundle, and the gate will run on it
 automatically.
 
 Questions and early facades are welcome in the issue tracker.
+
+## When the building changes upstream
+
+swisstopo publishes new releases of its building data. A **baseline
+refresh** brings them into the world
+([guide for maintainers](baseline-refresh.md)). It never replaces or
+removes your facade.
+
+- **Your building's shell is held.** The checks look at a facade only
+  when the facade itself changes. So when a refresh would change the
+  shell under your facade (its walls and roof, its tile or its id), or
+  remove it, the refresh holds that change back and lists it for a
+  maintainer.
+- **You may be asked to move or remove your facade**, with a change set
+  of your own. The next refresh then changes the shell, and you can
+  model a facade for the new one.
+- **Credits and source ids still update.** A change to the shell's
+  manifest alone, with the same walls and roof, goes through: your
+  facade still fits.
+
+These are the rules proposed in
+[ADR-0020](../adr/0020-baseline-refreshes.md), not decided yet.

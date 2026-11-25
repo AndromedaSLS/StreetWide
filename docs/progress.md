@@ -956,3 +956,145 @@ PowerShell and Git Bash.
 - **A manifest that is both** (generator `streetwide-ingest` and a
   contributions source) shows as a contribution. The gate does not refuse
   it; the baseline refresh design treats it as a conflict.
+
+### Baseline refresh tool (2026-11-24, branch refresh, ADR-0020 Proposed)
+
+Roadmap M1's baseline refresh: newer open data can now enter the
+canonical world as change sets authored by `streetwide:ingest`, planned
+from a fresh ingest and checked through the real gate
+([RFC 0002 section 7](../rfcs/0002-contributions-and-merge-rules.md#7-baseline-refreshes-and-takedowns)).
+[ADR-0020](adr/0020-baseline-refreshes.md) (*Proposed*) records every
+choice with its options. **Nothing is decided:** where a choice is open,
+the tools apply the ADR's recommended option as a default. Maintainers
+follow [docs/contributing/baseline-refresh.md](contributing/baseline-refresh.md).
+
+- **Drafts:** ADR-0020; the refresh rules of RFC 0002 section 7, as a
+  clarification proposed with the ADR (the RFC stays a Draft); RFC 0002's
+  unresolved questions 8 to 15, which are amendments A1 to A8; and a
+  note in ADR-0010 (*Proposed*) on the local log layout, with `<hex>`
+  paths and `worlds/`.
+- **`tools/worldfmt`:** `changes.py`, the change-set rules and `apply()`,
+  which builds the world a change set produces, byte for byte as the
+  gate does; `log.py`, the world log and its rules; a strict reader for
+  the glb profile.
+- **Rust:** `op_world::merge::merge_with` takes the gate as a parameter.
+  `op_replay` gains `merge` (the full gate, so that sets touching
+  colliders can be merged), `rerecord` and `compare-worlds`. Both merge
+  commands gain `--log <dir>`, which keeps the log complete, and an
+  opt-in `--require-base`. `op_world baseline` gains `--log`.
+- **`python -m tools.ingest.changes plan`:** compares a fresh ingest
+  with the canonical store and its log. It writes change sets of at most
+  50 changes, ordered for merging, and a refresh report in canonical
+  JSON (with its own schema) and Markdown, with the commands for each
+  set and an overrides template. The hold rules H1 to H14 list every
+  conflict and held-back change with all of its reasons. An overrides
+  file gives holds, scoped accepts and removal allowances, each with a
+  reason. An accepted change to a contribution goes into a decision set
+  of its own.
+- **`verify`:** runs every set through `op_replay check-change`, in
+  order, on a work store of hard links. It checks each gate report
+  (base world, predicted world, passed, G3 `review`, G4 and G5
+  `not_applicable`), applies the set, re-records the replays, and checks
+  every id. At the end it runs `op_world validate` and compares the
+  world before the refresh with the final one, for review. `--replan`
+  plans again and compares every file; `--report` writes a summary in
+  canonical JSON.
+- **CI:** the determinism matrix checks the pinned ids of the fixture
+  plan and of the pre-water fixture world on Linux, Windows and macOS.
+  The `tests` job runs the gate tests with `STREETWIDE_GATE=1`, with the
+  opt-in comparisons of `tools/worldfmt` against `op_world`.
+- **Docs:** the maintainer guide, a section in the facade guide ("When
+  the building changes upstream"), and notes in the README,
+  CONTRIBUTING.md and `tools/ingest`'s docstring.
+
+**Defaults the tools apply until the maintainer decides** (ADR-0020,
+sections 1 to 9): rule C for what changed (Q1); the generator, the
+contributions source and the log together for who made an asset (Q2);
+adds and removals with their holds (Q3, Q4); the log for removed keys
+(Q5); the shell under a facade held, with no override (Q6); a move as a
+removal and an add in one set (Q7); overlapping changes as one unit
+(Q8); terrain whose edges move held (Q9); conflicts only when upstream
+changed (Q10), listed in the report (Q11); draped assets over
+contributed terrain held (Q17); per-set judging plus the whole-refresh
+comparison (Q19); and the planner approving while there is one
+maintainer (Q22). For Q18 the tools apply (a), stricter than the
+recommended (b): nothing lifts a takedown.
+
+**Pending:** ADR-0020 itself and the section 7 clarification; the
+amendments A1 to A8 (RFC 0002 unresolved questions 8 to 15), including
+A7, which would make `--require-base` mandatory for refreshes; the
+ADR-0010 note; the two rules ADR-0020 proposes for the ingest (bump its
+`VERSION` when its output changes; refresh on the platform of the last
+baseline); and the ingest options Q20, Q21 and refreshing one source at
+a time.
+
+| Check | Result |
+|---|---|
+| `cargo fmt --all --check`, `cargo clippy --workspace --all-targets --locked -- -D warnings` | pass |
+| `cargo test --workspace --locked` | 179 passed, 1 ignored (24 new: the log and its locks, `--require-base`, `op_replay merge`, `rerecord` and `compare-worlds`) |
+| `python -m pytest` | 435 passed, 66 skipped (the opt-in tests below, and one that needs a fresh district ingest) |
+| `STREETWIDE_GATE=1 python -m pytest tools/ingest/tests/test_changes_gate.py` | 24 passed, about 25 s |
+| `STREETWIDE_GATE=1`, `tools/worldfmt` tests and the fixture plan | 284 passed: the Python change-set, manifest and log rules and the terrain-edge count give op_world's verdicts and messages |
+| Fixture water refresh, pinned | change `49650252…`, report `08f8cb7d…`; from the pre-water world `6af9f186…` (rebuilt from `fixtures/world`, as committed at `c16572a`) to `fd6446c2…`, which is `fixtures/world`; `verify` passes, `--replan` byte-identical |
+| Synthetic refresh over two tiles | a ribbon, a shell replace, a move to the other tile, a 1-to-2 split and a removal give 2 sets; both pass the full gate (G9 with 3 probe points, G10 with a recorded walk; the whole-refresh comparison probes 22) and every id matches; two runs give the same summary bytes |
+| Terrain-edge mirror | a held terrain change forced into a bundle fails G8 with 3 edge vertices, as the planner counted |
+| A contribution's removal | after the far-building removal of `full_gate.rs` is merged with `op_replay merge --log`, planning gives a `removed-by-contribution` conflict, not an add |
+| District, water added and lost (local data) | 1 set of 8 adds, ending at the district's own id `4689c972…`, passes `op_world`'s gate; the reverse stops with an error, and with an allowance gives 8 removals: `verify` passes (3,012 objects linked, final `30c4e880…`, 30 tiles, 1,483 assets, 0 errors; 14 s with `--replan`) |
+| District, fresh OpenStreetMap snapshot | nothing to refresh: 0 changes, 76 provenance-only differences kept |
+| The guide's commands, on the fixture | baseline with `--log`, plan, verify, check, merge with `--require-base --log`, re-record in place; planning again gives "nothing to refresh", and merging the old set again is refused |
+| `op_replay check fixtures/replays/sample.oprep` | 20/20 checkpoints, final `212bd353…`, unchanged |
+| `python tools/ci/check_deps.py` | pass |
+
+**Found on the way:**
+- **Adding back the far building fails G9.** Removing it passes the full
+  gate, but an accepted add of the same building fails: 3 of 22 probe
+  points of a mapped way are newly blocked. This is amendment A4's case,
+  a building over a way that OpenStreetMap still maps. A test now
+  records it.
+- **Windows paths.** A plan's object paths are about 100 characters
+  long, and Windows refuses paths over 260 characters unless long paths
+  are enabled. The guide says to keep plan and scratch directories
+  short.
+
+**After three reviews** (2026-11-25), fixed with a test each:
+- **A tile emptied between sets.** Sets are merged one after another, so
+  `would-empty-tile` now also looks at each set in merge order. Before,
+  a set that removed a tile's last asset, with the new one coming in a
+  later set, stopped the planner with an internal error.
+- **Who dates the ingest.** Only assets made by the ingest (manifest and
+  log agree) set the version a new store must reach. A contribution that
+  names the ingest's generator no longer stops every refresh, and a
+  version with a digit that is not ASCII no longer crashes.
+- **Draped changes over a contributed terrain that stays** are held
+  (Q17), also when upstream leaves that terrain as it was.
+- **One merge at a time.** Both merge commands hold `merge.lock` in the
+  store, and with `--log` `log.lock` in the log. A merge reads the
+  store's world again before it writes, and refuses if it moved.
+  `WorldLog::open` checks every change set, as the planner does.
+  `op_replay merge` refuses a replay recorded in another world, which
+  G10 would skip.
+- **Rules made stricter:** `possible-duplicate` also holds a replace that
+  grows over a removed or contributed feature; `spawn` looks at the
+  player's whole capsule, and at a collider switched on in a manifest
+  alone; `mass-removal` counts the removals that a unit's adds, moves and
+  replaces do not account for, so 49 buildings replaced by one count 48.
+- **Robustness:** manifests are read with op_world's rules beyond the
+  schema, and a new mesh must match its manifest's size and bounds; the
+  overrides file is identified by its document in canonical JSON, so
+  line endings do not change a plan; numbers above 2^53 - 1 are refused
+  as input errors; a plan that cannot be written leaves nothing behind;
+  output that the console cannot encode is escaped; `verify --report`
+  never writes through a hard link; an `op` of the wrong JSON type is
+  reported instead of crashing; the baseline hint names `--log`.
+- **Docs:** the guide asks for a `CANONICAL` marker in the store; RFC
+  0002 section 7 says how a refresh is split and lists every conflict;
+  code and CI cite ADR-0020 instead of the design notes outside the
+  repository.
+
+**Out of scope:** no gate rule, `GATE_VERSION`, schema,
+contract version or merge rule changed, and A1 to A8 are only drafted;
+`--require-base` stays opt-in. The 50-change cap stays. No ingest change
+(Q20, Q21, refreshing one source at a time), and no edit to an accepted
+ADR: ADR-0006 is unchanged. Hosting, submissions and the merge bot
+(ADR-0010), scheduled refreshes (M3) and the migration tool to a new
+world-format version are not started.

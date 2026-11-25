@@ -71,12 +71,22 @@ jobs:
           BUNDLE="$RUNNER_TEMP/ci-facade"
           python -m tools.contrib facade --world fixtures/world --building "$FEATURE" --model "$MODEL" --author github:ci --title "CI facade" --rationale "Tool-to-gate check in CI." --derived-from-shell --out "$BUNDLE"
           cargo run -p op_replay --locked -- check-change fixtures/world "$BUNDLE" --replay fixtures/replays/sample.oprep
+      - name: Refresh plans pass the gate with the predicted ids
+        # Baseline refreshes (ADR-0020): refresh change sets through
+        # op_replay's full gate and `tools.ingest.changes verify`, with
+        # every predicted id checked. The opt-in tests of the format
+        # helpers and of the fixture plan compare their Python mirrors
+        # with op_world the same way.
+        run: |
+          python -m pip install -r tools/requirements.txt
+          STREETWIDE_GATE=1 python -m pytest tools/ingest/tests/test_changes_gate.py tools/ingest/tests/test_changes_fixture.py tools/worldfmt/tests/test_changes.py tools/worldfmt/tests/test_log.py tools/worldfmt/tests/test_glb_reader.py
 
   determinism:
     # Cross-platform determinism: the Rapier canary (golden digest), the
-    # world-format golden ids and the fixture replay's hash trail must be
-    # identical on every OS (x86_64 Linux and Windows, arm64 macOS). Never
-    # weaken or skip this job to get CI green (CLAUDE.md); find the cause.
+    # world-format golden ids, the fixture replay's hash trail and the
+    # refresh planner's ids must be identical on every OS (x86_64 Linux
+    # and Windows, arm64 macOS). Never weaken or skip this job to get CI
+    # green (CLAUDE.md); find the cause.
     name: determinism (${{ matrix.os }})
     strategy:
       fail-fast: false
@@ -111,6 +121,18 @@ jobs:
         run: cargo run -p op_replay --locked -- check fixtures/replays/sample.oprep
       - name: Replay check (release)
         run: cargo run -p op_replay --locked --release -- check fixtures/replays/sample.oprep
+      - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7.1.0
+        with:
+          python-version: "3.13"
+      - name: Refresh plan of the fixture world (pinned ids)
+        # Baseline refreshes (ADR-0020): the planner's change id and report
+        # id, and the world ids it predicts, must be the same bytes on
+        # every OS. It needs only blake3, jsonschema and pytest, at the
+        # versions pinned in tools/requirements.txt.
+        shell: bash
+        run: |
+          python -m pip install $(grep -E '^(blake3|jsonschema|pytest)==' tools/requirements.txt)
+          python -m pytest tools/worldfmt/tests/test_changes.py tools/ingest/tests/test_changes_fixture.py
 
   client:
     # The desktop client on the other platforms the README supports. Linux

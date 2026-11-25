@@ -168,6 +168,20 @@ an open licence compatible with the above, and you must credit it in
 Interiors must be fictional: do not use floor plans, photos or descriptions
 of real private homes.
 
+Newer open data (a swisstopo release, an OpenStreetMap snapshot) enters
+the world as a **baseline refresh**. A refresh never replaces or removes
+a contribution on its own. It lists the contribution in its report, and
+only a maintainer's written decision, in a change set of its own that is
+reviewed separately, can replace or remove it. If the building under
+your facade changes upstream, see
+[When the building changes upstream](docs/contributing/facades.md#when-the-building-changes-upstream).
+Maintainers run refreshes as described in
+[docs/contributing/baseline-refresh.md](docs/contributing/baseline-refresh.md).
+The rules are proposed in [ADR-0020](docs/adr/0020-baseline-refreshes.md)
+and in
+[RFC 0002 section 7](rfcs/0002-contributions-and-merge-rules.md#7-baseline-refreshes-and-takedowns),
+and are not decided yet.
+
 ## Licensing of code
 
 Code is dual-licensed under MIT OR Apache-2.0. Unless you explicitly state
