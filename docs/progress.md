@@ -1635,3 +1635,85 @@ takedown reverted (maintainer decision)". The report schema lists the
 new code, and the maintainer guide and ADR-0020's code table describe
 it. The fixture plan's pinned ids are unchanged; `tools/ingest` and
 `tools/worldfmt` tests: 691 passed, 98 skipped.
+
+### Navigation-data RFC drafted (2026-11-25)
+
+[RFC 0005](../rfcs/0005-navigation-data.md) drafts the world layer for
+walking that [ADR-0021](adr/0021-pedestrians.md) asks for under "What
+this means for other decisions": read by the client in M2, and shaped
+to become simulation input later without a format change. **Nothing is
+decided;** comments run until at least 2026-12-09, then the maintainer
+decides. Drafting it now departs from ADR-0021's order of work, which
+puts the client prototype first; the RFC is to be revised after the
+prototype.
+
+| Choice | Options | Recommended |
+|---|---|---|
+| The content | a graph document per tile; a navigation mesh; glb meshes; the ribbons; one asset per lane; no world data | **a canonical-JSON graph document per tile and source** |
+| How lanes are stored | L1 one graph per tile, cut at tile edges; L2 lanes owned by one tile, uncut; L3 polylines without topology | **L1**, with nodes shared at the cuts and `world` nodes where the world ends |
+| Where the profiles live (ADR-0021) | P1 in the navigation document; P2 curves in an asset of their own; P3 a `population` layer; P4 curves in the client | **P1**: one asset per tile, so the refresh planner, which splits layers into separate sets, never leaves numbers naming missing lanes |
+| Matching lanes to shells (ADR-0021, open question 6) | K1 move lanes and snap doors by at most 1 m, narrow, choose connectors, mark the rest; K2 mark only; K3 none in the data; K4 offsets in an asset of their own; K5 doors on swisstopo walls at any distance | **K1**, with an amendment of RFC 0001 section 2; never against contributed shells |
+| Where the lane check lives | a new G11; inside G9 | **G11**, so G9 and G10 stay as ADR-0021 says |
+| The lane check during a refresh | (a) strict per set; (b) collider sets first; (c) a tile's shells and lanes in one unit; (d) `review` per set and the absolute check on the final world; (e) `review` through an A4-style rule | **(d)**: ADR-0020's accepted order stays; (b) and (c) would need their own decision |
+| Passages | nobody walks them in M2; fade at the mouths; walk through the wall; the client opens the wall | **nobody walks them in M2**, a narrowing of ADR-0021; the client opens walls once ADR-0019's question 5 is answered |
+| Smaller choices | kinds, area kinds, places, entrances, benches, rule ids, spacing, months, holidays, asset ids, trees and poles | `road`, `area` and `connector` kinds; `square` and `street` areas; places joined by a node; estimated doors; OSM benches in M2; a rule id per estimated value |
+
+- **The data model:** one `navigation` document per tile and source,
+  `collider: none`:
+  - nodes, and lanes between them as polylines in integer millimetres
+    (vertices at most 1.5 m apart, heights on the terrain mesh or a
+    deck's top) with a kind, a width, `moved_mm` and ranges marked
+    `entrance`, `passage` or `blocked`;
+  - areas (`square` or `street`); places (entrances, stops, squares,
+    benches, terraces, viewpoints, fountains) joined to a node, with
+    opening hours; `bridge` flags on lanes, areas and places;
+  - the population: curves per day type (a share, 24 hourly shares and
+    12 monthly factors), a week, a holiday list and a time zone; people
+    per day on every lane, trips or occupancy at every place;
+  - every estimated value names its rule; ids come from OSM ids and are
+    unique across the world; the layer is closed to contributions.
+- **The gate:** a new G11 keeps any change from newly blocking a lane;
+  G1, G3, G7 and G8 gain rules; G9 and G10 stay. The gate takes the next
+  free version (`GATE_VERSION` is 0.1.2 today; 0.1.4 only if RFC 0004's
+  0.1.3 lands first). The world format version joins the choice for RFC
+  0003 and RFC 0004; the contribution contract is amended in place or
+  bumped, a choice.
+- **Evidence:** ADR-0021's data and prototype, and its research notes,
+  which stay outside the repository: about 46 km of walkable OSM ways
+  in the district; 208 entrances, 353 benches, 13 stops; 269 of 1,120
+  prototype edges overlapping shells in 4 tiles. Counted in the cache
+  for this RFC: 39 ways tagged `tunnel=building_passage`, and
+  Bahnhofstrasse mapped as six pedestrian areas, not a line. Sizes
+  (about 2.5 to 3 MB for the district) are estimates. Why most lanes
+  overlap shells was not examined, so the 1 m bound is a starting
+  value.
+- **Review:** an adversarial review of the draft was applied the same
+  day. Among the changes: the population moved into the navigation
+  document (P3 to P1); the lane check became G11; ADR-0020's order of
+  sets is kept, with a final-world check; doors are snapped onto walls
+  within K1's 1 m; heights follow the terrain mesh; areas gained a
+  `street` kind and places and areas a `bridge` flag.
+- **Also changed:** the RFC index, the roadmap's "Now", the water and
+  navigation rows of section 8, and a link to RFC 0005 in RFC 0004.
+- **No code, schema, fixture or replay changes.**
+
+**Waiting for the maintainer:**
+1. The client prototype that ADR-0021 puts first; the RFC is revised
+   after it and accepted only then.
+2. ADR-0021's open question 6, settled with this RFC and ADR-0019: K1
+   (an RFC 0001 amendment covering lanes, doors, terraces and
+   connectors), and counts inside ODbL navigation assets. The answer is
+   recorded in ADR-0021.
+3. The lane check during a refresh: option (d) keeps ADR-0020's
+   accepted order. Options (b) and (c) would need an ADR superseding a
+   row of ADR-0020 section 5, or an amendment beside A1 to A8.
+4. A new hold in the refresh planner for refreshed lanes that a
+   contributed shell blocks, with ADR-0020's holds.
+5. One world-format version choice for RFC 0003, RFC 0004 and RFC 0005,
+   recommended after 2026-12-09; and whether the contribution contract
+   is amended in place or bumped.
+6. Passages: nobody walks them in M2, a narrowing of ADR-0021.
+7. hystreet's licence version (ADR-0021, open question 2), before its
+   counts shape a curve, and a reviewed source for the holiday list.
+8. The navigation ingest's ADR, to be drafted: tags, the new query,
+   the matching, and the rules for estimated values.

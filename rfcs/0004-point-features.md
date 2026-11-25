@@ -34,7 +34,8 @@ sources, [ADR-0017](../docs/adr/0017-licence-allowlist.md) and
 licences, [ADR-0018](../docs/adr/0018-performance-tier.md) for the
 client's budget. Two follow-ups:
 - **Navigation data,** which the [roadmap](../docs/roadmap.md) groups
-  with this RFC, gets its own RFC, not drafted yet, after the pedestrian ADR
+  with this RFC, gets its own RFC, [RFC 0005](0005-navigation-data.md),
+  after the pedestrian ADR
   ([ADR-0021](../docs/adr/0021-pedestrians.md)): if pedestrians
   enter `op_sim`, it is simulation input, not a visual layer.
 - **How the client draws trees, lamps and lit windows** needs its own ADR
