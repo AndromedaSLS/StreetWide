@@ -26,6 +26,12 @@
 //! - [`MergeArgs`] is what `op_world merge` and `op_replay merge` share: the
 //!   same options, checks and outputs, with a different gate.
 //!
+//! A change set authored by [`INGEST_AUTHOR`], a baseline refresh, merges
+//! only on the world named in its `base_world_id` (RFC 0002 sections 2
+//! and 7, question 15): every merge refuses it on another world, with or
+//! without `--require-base`, which applies the same rule to any change set
+//! ([`require_base`]). It is a merge rule, not a gate check.
+//!
 //! Bundles, previous records and world logs may come from elsewhere, so
 //! every file is read with [`read_file`]: a regular file of at most
 //! [`MAX_FILE_BYTES`], never a link, a FIFO or a device. A world log holds
@@ -37,8 +43,8 @@ use std::io::{self, Write as _};
 use std::path::{Path, PathBuf};
 
 use crate::contrib::{
-    CONTRIBUTION_CONTRACT_VERSION, ChangeSet, CheckReport, Decision, MergeRecord, Outcome, Review,
-    Verdict, verify_log,
+    CONTRIBUTION_CONTRACT_VERSION, ChangeSet, CheckReport, Decision, INGEST_AUTHOR, MergeRecord,
+    Outcome, Review, Verdict, verify_log,
 };
 use crate::gate;
 use crate::id::ContentId;
@@ -162,6 +168,8 @@ pub struct Merged {
 /// - A merge needs the gate to pass and the reviews of RFC 0002 section 5
 ///   (at least one `better`, no `blocked`). A takedown needs only the
 ///   format and lineage checks (G1, G2) to pass.
+/// - A change set authored by [`INGEST_AUTHOR`] must have been planned on
+///   the store's world, its `base_world_id` (RFC 0002 section 7).
 /// - `scratch_dir` must not exist; the gate's candidate world is built
 ///   there.
 pub fn merge(
@@ -199,6 +207,13 @@ pub fn merge(
 /// if it is not the change set the gate checked, and it refuses a
 /// candidate world in `candidate_dir` that is not the one the gate's report
 /// names: nothing is written then.
+///
+/// A change set authored by [`INGEST_AUTHOR`] whose `base_world_id` is not
+/// the store's world is refused before the gate runs, and the change set
+/// the gate checked is held to the same rule before anything is written,
+/// in case `change.json` changed in between (RFC 0002 section 7). A
+/// `change.json` that cannot be read as a change set is left to the gate,
+/// which reports it.
 #[allow(
     clippy::too_many_arguments,
     reason = "the arguments of merge() plus the gate"
@@ -260,6 +275,14 @@ fn merge_locked(
             previous.world_after
         )));
     }
+    // A baseline refresh planned on another world is refused before the
+    // gate runs. The change set the gate checks is held to the rule below.
+    if let Some(change) = read_file(&bundle_dir.join("change.json"), MAX_FILE_BYTES)
+        .ok()
+        .and_then(|bytes| ChangeSet::from_bytes(&bytes).ok())
+    {
+        check_base(world_id, &change, false)?;
+    }
 
     let candidate_dir = scratch_dir.join("candidate");
     let report = gate(world_dir, bundle_dir, &candidate_dir)?;
@@ -314,6 +337,7 @@ fn merge_locked(
         )));
     }
     let change = ChangeSet::from_bytes(&change_bytes)?;
+    check_base(world_id, &change, false)?;
     // The candidate world as the gate left it in `candidate_dir`: it must
     // be the one the gate's report names, or something changed it since.
     let candidate = Store::layered(
@@ -385,14 +409,24 @@ fn failing(report: &CheckReport) -> String {
 /// a newer world. A baseline refresh is planned as several change sets,
 /// each on the world the previous one produces, so a merge in between makes
 /// the rest of the plan stale: nothing would re-check a facade merged onto a
-/// shell that a later set replaces. The check is opt-in. Making it
-/// mandatory for refreshes is amendment A7, which is not adopted.
+/// shell that a later set replaces. So a change set authored by
+/// [`INGEST_AUTHOR`] merges only on its base world, and every merge holds
+/// it to that rule without the flag (RFC 0002 sections 2 and 7, question
+/// 15, amendment A7). The flag applies the rule to any change set.
 pub fn require_base(world_dir: &Path, bundle_dir: &Path) -> Result<()> {
     let (world_id, _) = Store::new(world_dir).read_world()?;
     let bytes = read_file(&bundle_dir.join("change.json"), MAX_FILE_BYTES)
         .map_err(|e| Error::Io(format!("change.json: {e}")))?;
     let change = ChangeSet::from_bytes(&bytes)?;
-    if change.base_world_id != world_id {
+    check_base(world_id, &change, true)
+}
+
+/// The base-world rule: refuses `change` if the store's world, `world_id`,
+/// is not its `base_world_id`, when the change set is a baseline refresh
+/// (authored by [`INGEST_AUTHOR`], RFC 0002 section 7) or when `required`
+/// (`--require-base`).
+fn check_base(world_id: ContentId, change: &ChangeSet, required: bool) -> Result<()> {
+    if (required || change.author == INGEST_AUTHOR) && change.base_world_id != world_id {
         return Err(Error::Invalid(format!(
             "the store holds world {world_id}, but this change set was planned on {}; plan the refresh again",
             change.base_world_id
@@ -927,7 +961,8 @@ pub struct MergeArgs {
     pub decision: Decision,
     pub reviews: Vec<Review>,
     pub reasons: String,
-    /// `--require-base`: see [`require_base`].
+    /// `--require-base`: see [`require_base`]. A change set authored by
+    /// [`INGEST_AUTHOR`] is held to that rule without it.
     pub require_base: bool,
 }
 
@@ -1053,9 +1088,10 @@ impl MergeArgs {
     /// Runs the merge with `gate` (see [`merge_with`]) and writes its
     /// outputs. Before the gate runs, it checks the world log (with
     /// `--log`), that the store holds the world the previous record ends
-    /// at, and the base world (with `--require-base`). With `--log`, it
-    /// also checks that the log can take the record before it writes the
-    /// store ([`WorldLog::check_append`]).
+    /// at, and the base world: with `--require-base` for any change set,
+    /// and without it for one authored by [`INGEST_AUTHOR`]. With `--log`,
+    /// it also checks that the log can take the record before it writes
+    /// the store ([`WorldLog::check_append`]).
     ///
     /// The merge takes the log's lock ([`LOG_LOCK`], with `--log`) and the
     /// store's ([`STORE_LOCK`]) before it reads either, and keeps them until

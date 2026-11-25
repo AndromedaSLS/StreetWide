@@ -20,7 +20,8 @@ store or to its log. You merge the sets yourself, one at a time.
 > **Status:** the tools work locally, and the rules they apply are those
 > of [ADR-0020](../adr/0020-baseline-refreshes.md), accepted on
 > 2026-11-25 with its recommended options. RFC 0002's amendments A1 to
-> A8 were decided the same day; until each is implemented, the tools
+> A8 were decided the same day. A7 is built: a refresh set merges only
+> on its base world. Until each of the others is implemented, the tools
 > keep the holds described here. See
 > [Decisions and what is still to build](#decisions-and-what-is-still-to-build).
 
@@ -125,8 +126,8 @@ at the canonical world.
   colliders, each group by layer and source dataset. Decision sets come
   last (section 6). Merge them in this order.
 - **Base worlds.** Each set names the world it was planned on, its
-  `base_world_id`. The report lists each set's base and the world it
-  produces.
+  `base_world_id`, and merges only on that world (section 8). The report
+  lists each set's base and the world it produces.
 - **Nothing to do.** When nothing changed, `plan` prints `nothing to
   refresh` and writes only the report.
 - **Exit codes.** 0 when the plan is written, conflicts included; 2 for a
@@ -257,11 +258,13 @@ cargo run -p op_replay -- rerecord <suite> --world <canonical> --out <suite>
   merge command that accepts a set that touches a collider. Sets without
   colliders also pass `op_world merge`, but `op_replay merge` takes them
   all.
-- **Always pass `--require-base`.** It refuses a set whose
-  `base_world_id` is not the world in the store: "the store holds world
-  ..., but this change set was planned on ...; plan the refresh again".
-  The flag is opt-in. Amendment A7 would make the check mandatory for
-  refreshes; it is not adopted.
+- **A set merges only on its base world.** Both merge commands refuse a
+  change set authored by `streetwide:ingest` whose `base_world_id` is
+  not the world in the store: "the store holds world ..., but this
+  change set was planned on ...; plan the refresh again". They do so
+  with or without `--require-base` (RFC 0002 section 7, amendment A7).
+  The flag applies the same rule to any change set, and the printed
+  commands still pass it, as ADR-0020's workflow does.
 - **`--log <log>`** appends the merge record, the change set, the gate's
   report and the new world to the log. The merge checks that the log can
   take them before it writes the store: a log that cannot (a link inside
@@ -300,9 +303,9 @@ cargo run -p op_replay -- rerecord <suite> --world <canonical> --out <suite>
 
 ## 9. The refresh window, and planning again
 
-No other merge happens between the sets of one refresh (ADR-0020,
-proposed). If one does, the canonical world no longer matches the next
-set's base, and `--require-base` refuses that set.
+No other merge happens between the sets of one refresh (ADR-0020). If
+one does, the canonical world no longer matches the next set's base, and
+the merge commands refuse that set, with or without `--require-base`.
 
 Then plan again, from the same new store and the same overrides, against
 the canonical world as it is now and its log. The same inputs give the
@@ -385,9 +388,11 @@ the same day). The decisions that shape a refresh:
   one maintainer.
 
 The amendments A1 to A8 (RFC 0002, questions 9 to 16) were decided on
-2026-11-25 with their recommendations, and are not built yet: until each
-is, the tools keep the holds above, the gate is unchanged and the
-50-change cap stays. A7 comes first (refresh sets merge only on their
-base world); A1 and A8 before the first height-model refresh; A3 before
+2026-11-25 with their recommendations. A7 is built: the merge commands
+refuse a refresh set on any world but its base, with or without
+`--require-base` (section 8). It is a merge rule, so the gate and its
+version are unchanged. The others are not built yet: until each is, the
+tools keep the holds above, the gate is unchanged and the 50-change cap
+stays. A1 and A8 come before the first height-model refresh, A3 before
 M3. The ingest options Q20 and Q21, and refreshing one source at a time,
 were decided too (ADR-0020, section 10) and are still to be built.

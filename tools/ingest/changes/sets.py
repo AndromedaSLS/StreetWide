@@ -314,9 +314,9 @@ def _rationale(ctx: Context, s: PlannedSet, accepted: dict[int, dict]) -> str:
     text = (
         f"Made by {COMMAND} {TOOL_VERSION} under RFC 0002 section 7 from a new ingest (world "
         f"{ctx.new_world_id}) of world {ctx.current_world_id}. This set: {', '.join(ops)} in layer {layer}, "
-        f"collider {collider}, {origin}; it was planned on world {s.base_world_id}, and its predicted ids hold "
-        f"only there (merge it with --require-base). Assets made by the ingest are replaced only when their "
-        f"content changed; contributions are never replaced without a maintainer's decision; "
+        f"collider {collider}, {origin}; it was planned on world {s.base_world_id}, its predicted ids hold "
+        f"only there, and it merges only there (RFC 0002 section 7). Assets made by the ingest are replaced "
+        f"only when their content changed; contributions are never replaced without a maintainer's decision; "
         f"{counted(ctx.conflicts, 'conflict')} and {counted(ctx.held, 'held-back change')} are listed in the "
         f"refresh report."
     )

@@ -417,9 +417,10 @@ def markdown(report: dict, report_id: str) -> bytes:
             "Run these from the repository root, one set at a time and in order. Replace `<canonical>` with "
             "the canonical store, `<plan>` with this plan's directory, `<log>` with the world log and "
             "`<suite>` with each registered replay (repeat `--replay`, or leave it out if the world has none). "
-            "Each set was planned on the world named in its `base_world_id`; `--require-base` refuses it on any "
-            "other world, and then the refresh is planned again. Under the proposed refresh window (ADR-0020, "
-            "Proposed), no other merge happens between the sets of one refresh.",
+            "Each set was planned on the world named in its `base_world_id`, and the merge commands refuse it "
+            "on any other world, with or without `--require-base` (RFC 0002 section 7): then the refresh is "
+            "planned again. The commands below pass the flag all the same, as ADR-0020's workflow does. Under "
+            "the refresh window (ADR-0020), no other merge happens between the sets of one refresh.",
             "",
             "The gate reports G3 as `review` for every change of a refresh, and a merge needs a review judging "
             "the set `better`. Until Q22 is decided, the proposed default lets the maintainer who planned the "

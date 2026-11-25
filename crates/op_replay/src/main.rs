@@ -29,9 +29,11 @@
 //! Without `--world`, the world is looked up by id in `fixtures/world` and
 //! `data/world/<world name>`. Exit codes: 0 ok, 1 the replay diverged or
 //! the change set does not pass the gate, 2 usage or input error. Like
-//! `op_world merge`, `merge` exits 2 when it refuses a change set. It also
-//! refuses a `--replay` recorded in another world than the store's, which
-//! G10 would ignore.
+//! `op_world merge`, `merge` exits 2 when it refuses a change set, such as
+//! a baseline refresh set (author `streetwide:ingest`) planned on another
+//! world than the store's, with or without `--require-base` (RFC 0002
+//! section 7). It also refuses a `--replay` recorded in another world than
+//! the store's, which G10 would ignore.
 //! `compare-worlds` exits 0 when it finds something: its findings are for
 //! review.
 
