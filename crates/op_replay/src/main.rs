@@ -11,25 +11,52 @@
 //! op_replay check-change <world-dir> <bundle-dir> [--replay <file>]... [--report <file>]
 //!                                          the full contribution gate, G1-G10
 //!                                          (RFC 0002, ADR-0009)
+//! op_replay merge <world-dir> <bundle-dir> (--previous <record> --record <file>
+//!     --report <file> | --log <dir>) --reason <text>
+//!     --review <handle>=<verdict>[:<notes>]... [--takedown] [--require-base]
+//!     [--replay <file>]...
+//!                                          op_world merge with the full gate,
+//!                                          so change sets that touch colliders
+//!                                          can be merged
+//! op_replay rerecord <file> --world <dir> --out <file>
+//!                                          play a replay's inputs again in a
+//!                                          new version of its world
+//! op_replay compare-worlds <before-dir> <after-dir> [--replay <file>]... [--report <file>]
+//!                                          G9's and G10's measurements between
+//!                                          two versions of a world, for review
 //! ```
 //!
 //! Without `--world`, the world is looked up by id in `fixtures/world` and
-//! `data/world/<world name>`. Exit codes: 0 ok, 1 the replay diverged,
-//! 2 usage or input error.
+//! `data/world/<world name>`. Exit codes: 0 ok, 1 the replay diverged or
+//! the change set does not pass the gate, 2 usage or input error. Like
+//! `op_world merge`, `merge` exits 2 when it refuses a change set. It also
+//! refuses a `--replay` recorded in another world than the store's, which
+//! G10 would ignore.
+//! `compare-worlds` exits 0 when it finds something: its findings are for
+//! review.
 
 use std::path::{Path, PathBuf};
 use std::process::ExitCode;
 
 use op_replay::synth::{self, Meter};
 use op_replay::{Recorder, Replay, Verdict, check, find_world, open_world, play};
+use op_world::merge::MergeArgs;
 
-const USAGE: &str = "usage:
+fn usage() -> String {
+    format!(
+        "usage:
   op_replay check <file> [--world <dir>]
   op_replay run   <file> [--world <dir>]
   op_replay info  <file>
   op_replay trace <file> [--world <dir>] [--every <ticks>]
   op_replay synth [--world <dir>] [--out <file>]
-  op_replay check-change <world-dir> <bundle-dir> [--replay <file>]... [--report <file>]";
+  op_replay check-change <world-dir> <bundle-dir> [--replay <file>]... [--report <file>]
+  op_replay merge {} [--replay <file>]...
+  op_replay rerecord <file> --world <dir> --out <file>
+  op_replay compare-worlds <before-dir> <after-dir> [--replay <file>]... [--report <file>]",
+        MergeArgs::USAGE
+    )
+}
 
 struct Args {
     positional: Vec<String>,
@@ -76,13 +103,20 @@ fn load(path: &str) -> Result<Replay, String> {
     Replay::from_bytes(&bytes).map_err(|e| format!("{path}: {e}"))
 }
 
+fn load_all(paths: &[PathBuf]) -> Result<Vec<Replay>, String> {
+    paths.iter().map(|p| load(&p.to_string_lossy())).collect()
+}
+
 fn main() -> ExitCode {
     let argv: Vec<String> = std::env::args().skip(1).collect();
     let Some((command, rest)) = argv.split_first() else {
-        eprintln!("{USAGE}");
+        eprintln!("{}", usage());
         return ExitCode::from(2);
     };
-    let result =
+    let result = if command == "merge" {
+        // `op_world merge`'s options, plus `--replay`.
+        cmd_merge(rest)
+    } else {
         parse(rest).and_then(
             |args| match (command.as_str(), args.positional.as_slice()) {
                 ("check", [file]) => cmd_check(file, args.world.as_deref()),
@@ -93,9 +127,16 @@ fn main() -> ExitCode {
                 ("check-change", [world, bundle]) => {
                     cmd_check_change(world, bundle, &args.replays, args.report.as_deref())
                 }
-                _ => Err(USAGE.to_string()),
+                ("rerecord", [file]) => {
+                    cmd_rerecord(file, args.world.as_deref(), args.out.as_deref())
+                }
+                ("compare-worlds", [before, after]) => {
+                    cmd_compare_worlds(before, after, &args.replays, args.report.as_deref())
+                }
+                _ => Err(usage()),
             },
-        );
+        )
+    };
     match result {
         Ok(code) => code,
         Err(e) => {
@@ -233,10 +274,7 @@ fn cmd_check_change(
     replays: &[PathBuf],
     report: Option<&Path>,
 ) -> Result<ExitCode, String> {
-    let replays = replays
-        .iter()
-        .map(|p| load(&p.to_string_lossy()))
-        .collect::<Result<Vec<_>, _>>()?;
+    let replays = load_all(replays)?;
     let candidate =
         std::env::temp_dir().join(format!("streetwide-full-gate-{}", std::process::id()));
     let result =
@@ -275,4 +313,114 @@ fn cmd_check_change(
     } else {
         ExitCode::from(1)
     })
+}
+
+/// `op_world merge` with the complete gate. The options are `op_world
+/// merge`'s, so they are parsed by the same code, after the `--replay`
+/// files are taken out.
+fn cmd_merge(args: &[String]) -> Result<ExitCode, String> {
+    let (mut rest, mut replays) = (Vec::new(), Vec::new());
+    let mut it = args.iter();
+    while let Some(arg) = it.next() {
+        if arg == "--replay" {
+            replays.push(PathBuf::from(
+                it.next().ok_or(format!("{arg} needs a value"))?,
+            ));
+        } else {
+            rest.push(arg.clone());
+        }
+    }
+    if rest.len() < 2 || rest[..2].iter().any(|a| a.starts_with("--")) {
+        return Err(usage());
+    }
+    let merge = MergeArgs::parse(&rest)?;
+    let paths = replays;
+    let replays = load_all(&paths)?;
+    // G10 ignores replays recorded in another world, so a merge with such a
+    // replay would skip G10 without a word. After a merge the suite must be
+    // re-recorded (op_replay rerecord) before the next one.
+    if let Ok((world_id, _)) = op_world::Store::new(&merge.world_dir).read_world()
+        && let Some((path, r)) = paths
+            .iter()
+            .zip(&replays)
+            .find(|(_, r)| r.header.world_id != world_id)
+    {
+        return Err(format!(
+            "--replay {}: {} was recorded in world {}, not in the store's world {world_id}, so G10 would ignore it; move it to this world with op_replay rerecord, or leave it out",
+            path.display(),
+            op_replay::gate::replay_name(r),
+            r.header.world_id
+        ));
+    }
+    let scratch =
+        std::env::temp_dir().join(format!("streetwide-full-merge-{}", std::process::id()));
+    let line = merge
+        .run(&scratch, op_replay::gate::full_gate(&replays))
+        .map_err(|e| e.to_string())?;
+    println!("{line}");
+    Ok(ExitCode::SUCCESS)
+}
+
+/// Writes through a temporary file next to `path`, so that rewriting a
+/// replay in place never leaves half a file.
+fn write_atomically(path: &Path, bytes: &[u8]) -> Result<(), String> {
+    let shown = || path.display().to_string();
+    if let Some(parent) = path.parent().filter(|p| !p.as_os_str().is_empty()) {
+        std::fs::create_dir_all(parent).map_err(|e| format!("{}: {e}", shown()))?;
+    }
+    let mut tmp = path.as_os_str().to_owned();
+    tmp.push(".tmp");
+    std::fs::write(&tmp, bytes).map_err(|e| format!("{}: {e}", shown()))?;
+    std::fs::rename(&tmp, path).map_err(|e| format!("{}: {e}", shown()))
+}
+
+fn cmd_rerecord(file: &str, world: Option<&Path>, out: Option<&Path>) -> Result<ExitCode, String> {
+    let world = world.ok_or("--world <dir> is required")?;
+    let out = out.ok_or("--out <file> is required")?;
+    let replay = load(file)?;
+    let moved = op_replay::rerecord(&replay, world).map_err(|e| e.to_string())?;
+    let bytes = moved.to_bytes().map_err(|e| e.to_string())?;
+    write_atomically(out, &bytes)?;
+    let kept = replay
+        .checkpoints
+        .iter()
+        .zip(&moved.checkpoints)
+        .filter(|(a, b)| a == b)
+        .count();
+    println!(
+        "rerecorded in world {} (recorded in {}): {kept} of {} checkpoints unchanged, final state {}",
+        moved.header.world_id,
+        replay.header.world_id,
+        moved.checkpoints.len(),
+        moved
+            .checkpoints
+            .last()
+            .map(|c| c.hash.hex())
+            .unwrap_or_default()
+    );
+    Ok(ExitCode::SUCCESS)
+}
+
+fn cmd_compare_worlds(
+    before: &str,
+    after: &str,
+    replays: &[PathBuf],
+    report: Option<&Path>,
+) -> Result<ExitCode, String> {
+    let replays = load_all(replays)?;
+    let comparison =
+        op_replay::compare::compare_worlds(Path::new(before), Path::new(after), &replays)
+            .map_err(|e| e.to_string())?;
+    let bytes = comparison.to_bytes().map_err(|e| e.to_string())?;
+    if let Some(path) = report {
+        std::fs::write(path, &bytes).map_err(|e| format!("{}: {e}", path.display()))?;
+    }
+    let mut lines = comparison.lines();
+    if let Some(last) = lines.last_mut() {
+        last.push_str(&format!(" (report {})", op_world::ContentId::of(&bytes)));
+    }
+    for line in lines {
+        println!("{line}");
+    }
+    Ok(ExitCode::SUCCESS)
 }

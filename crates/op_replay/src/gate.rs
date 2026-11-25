@@ -9,6 +9,11 @@
 //!
 //! Like `op_world`'s gate, everything here is deterministic and the report
 //! names tiles and positions, never local paths.
+//!
+//! [`probe_public_ways`] and [`replay_waypoints`] are the measurements
+//! behind G9 and G10. `op_replay compare-worlds` ([`crate::compare`]) uses
+//! them to compare any two versions of a world, and [`full_gate`] passes
+//! the complete gate to `op_world::merge::merge_with` for `op_replay merge`.
 
 use std::path::Path;
 use std::sync::Arc;
@@ -19,7 +24,7 @@ use op_sim::probe::ProbeWorld;
 use op_stream::{StoreSource, WorldIndex, collider_mesh};
 use op_world::contrib::{ChangeSet, CheckReport, CheckResult, Outcome};
 use op_world::glb::f32_to_mm;
-use op_world::{BoundsMm, Collider, Layer, Store};
+use op_world::{BoundsMm, Collider, ContentId, Layer, Store, TileKey};
 
 use crate::{Error, Replay, play};
 
@@ -100,6 +105,19 @@ pub fn check_change(
     Ok(report)
 }
 
+/// The complete gate ([`check_change`] with `replays`) in the form
+/// `op_world::merge::merge_with` takes, so that `op_replay merge` can merge
+/// change sets that touch colliders. The merge record's `check_report_id`
+/// then names the full G1 to G10 report.
+pub fn full_gate(
+    replays: &[Replay],
+) -> impl FnOnce(&Path, &Path, &Path) -> op_world::Result<CheckReport> + '_ {
+    move |world_dir: &Path, bundle_dir: &Path, candidate_dir: &Path| {
+        check_change(world_dir, bundle_dir, candidate_dir, replays)
+            .map_err(|e| op_world::Error::Invalid(e.to_string()))
+    }
+}
+
 fn union(a: Option<BoundsMm>, b: BoundsMm) -> Option<BoundsMm> {
     Some(a.map_or(b, |a| a.union(&b)))
 }
@@ -167,15 +185,34 @@ fn colliders(
     Ok(out)
 }
 
-/// G9: probe points on the transport ribbons near the change, free in the
-/// base world, must stay free in the candidate world.
-fn walkability(
+/// A probe point on a public way: where the player capsule's feet go.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub struct Probe {
+    pub tile: TileKey,
+    /// Region frame (mm).
+    pub feet_mm: [i64; 3],
+}
+
+/// Probe points on the public ways near a region, tested in two worlds.
+#[derive(Clone, PartialEq, Eq, Debug, Default)]
+pub struct Walkability {
+    /// Every probe point, in tile, asset and triangle order.
+    pub probes: Vec<Probe>,
+    /// The probe points that are free in the base world and blocked in the
+    /// candidate world, in the same order.
+    pub newly_blocked: Vec<Probe>,
+}
+
+/// G9's measurement: one probe point per triangle of the base world's
+/// public ways (transport ribbons) within [`PROBE_MARGIN_MM`] of `region`,
+/// tested for the player capsule in both worlds.
+pub fn probe_public_ways(
     base: &WorldIndex,
     candidate: &WorldIndex,
     region: BoundsMm,
-) -> Result<CheckResult, Error> {
+) -> Result<Walkability, Error> {
     let origin = [region.min[0], 0, region.min[2]];
-    let mut probes: Vec<([i64; 3], String)> = Vec::new();
+    let mut probes: Vec<Probe> = Vec::new();
     for t in base.tiles() {
         for a in t
             .assets
@@ -208,13 +245,61 @@ fn walkability(
                             && feet[k] <= region.max[k] + PROBE_MARGIN_MM
                     });
                     if inside {
-                        probes.push((feet, t.key.to_string()));
+                        probes.push(Probe {
+                            tile: t.key,
+                            feet_mm: feet,
+                        });
                     }
                 }
             }
         }
     }
     if probes.is_empty() {
+        return Ok(Walkability::default());
+    }
+    let mut area = region;
+    for p in &probes {
+        area = area.union(&BoundsMm {
+            min: p.feet_mm,
+            max: p.feet_mm,
+        });
+    }
+    let base_world = ProbeWorld::new(&colliders(base, &area, origin)?).map_err(err)?;
+    let candidate_world = ProbeWorld::new(&colliders(candidate, &area, origin)?).map_err(err)?;
+    let newly_blocked = probes
+        .iter()
+        .filter(|p| {
+            let local = [0, 1, 2].map(|k| p.feet_mm[k] - origin[k]);
+            !base_world.blocked(local) && candidate_world.blocked(local)
+        })
+        .copied()
+        .collect();
+    Ok(Walkability {
+        probes,
+        newly_blocked,
+    })
+}
+
+/// How G9 reports a newly blocked probe point.
+pub fn blocked_detail(p: &Probe) -> String {
+    format!(
+        "tile {}: a public way is newly blocked at ({:.1}, {:.1}, {:.1}) m in the region frame",
+        p.tile,
+        p.feet_mm[0] as f64 / 1000.0,
+        p.feet_mm[1] as f64 / 1000.0,
+        p.feet_mm[2] as f64 / 1000.0
+    )
+}
+
+/// G9: probe points on the transport ribbons near the change, free in the
+/// base world, must stay free in the candidate world.
+fn walkability(
+    base: &WorldIndex,
+    candidate: &WorldIndex,
+    region: BoundsMm,
+) -> Result<CheckResult, Error> {
+    let w = probe_public_ways(base, candidate, region)?;
+    if w.probes.is_empty() {
         return Ok(check(
             "G9",
             "walkability",
@@ -222,43 +307,22 @@ fn walkability(
             vec!["no public way within 2 m of the change".into()],
         ));
     }
-    let mut area = region;
-    for (feet, _) in &probes {
-        area = area.union(&BoundsMm {
-            min: *feet,
-            max: *feet,
-        });
-    }
-    let base_world = ProbeWorld::new(&colliders(base, &area, origin)?).map_err(err)?;
-    let candidate_world = ProbeWorld::new(&colliders(candidate, &area, origin)?).map_err(err)?;
-    let mut blocked = Vec::new();
-    for (feet, tile) in &probes {
-        let local = [0, 1, 2].map(|k| feet[k] - origin[k]);
-        if !base_world.blocked(local) && candidate_world.blocked(local) {
-            blocked.push(format!(
-                "tile {tile}: a public way is newly blocked at ({:.1}, {:.1}, {:.1}) m in the region frame",
-                feet[0] as f64 / 1000.0,
-                feet[1] as f64 / 1000.0,
-                feet[2] as f64 / 1000.0
-            ));
-        }
-    }
-    if blocked.is_empty() {
+    if w.newly_blocked.is_empty() {
         Ok(check(
             "G9",
             "walkability",
             Outcome::Pass,
             vec![format!(
                 "{} probe points on public ways stay free",
-                probes.len()
+                w.probes.len()
             )],
         ))
     } else {
-        let n = blocked.len();
-        let mut details: Vec<String> = blocked.into_iter().take(5).collect();
+        let n = w.newly_blocked.len();
+        let mut details: Vec<String> = w.newly_blocked.iter().take(5).map(blocked_detail).collect();
         details.push(format!(
             "{n} of {} probe points newly blocked",
-            probes.len()
+            w.probes.len()
         ));
         Ok(check("G9", "walkability", Outcome::Fail, details))
     }
@@ -280,52 +344,105 @@ fn waypoints(replay: &Replay, source: &mut StoreSource) -> Result<Vec<(u64, [i64
     Ok(out)
 }
 
+/// One waypoint of a replay played in two worlds.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub struct Waypoint {
+    pub tick: u64,
+    /// The player's feet in the base world, region frame (mm).
+    pub base_mm: [i64; 3],
+    /// The player's feet in the candidate world at the same tick.
+    pub candidate_mm: [i64; 3],
+}
+
+impl Waypoint {
+    /// How far apart the two positions are (m), as G10 measures it.
+    pub fn off_m(&self) -> f64 {
+        (0..3)
+            .map(|k| {
+                let m = (self.base_mm[k] - self.candidate_mm[k]) as f64 / 1000.0;
+                m * m
+            })
+            .sum::<f64>()
+            .sqrt()
+    }
+
+    /// The candidate misses this waypoint: it is more than
+    /// [`WAYPOINT_TOLERANCE_M`] off (G10).
+    pub fn missed(&self) -> bool {
+        self.off_m() > WAYPOINT_TOLERANCE_M
+    }
+}
+
+/// The name G10 gives a replay: the start of its final state hash.
+pub fn replay_name(replay: &Replay) -> String {
+    format!(
+        "replay {}",
+        replay
+            .checkpoints
+            .last()
+            .map_or("?".into(), |c| c.hash.hex()[..16].to_string())
+    )
+}
+
+/// G10's measurement: plays `replay` in the base world and, if its path
+/// comes within [`REPLAY_REACH_MM`] of `region`, in the candidate world as
+/// well, and pairs the waypoints taken every [`WAYPOINT_EVERY`] ticks.
+/// `None` if the path stays farther away: such a replay cannot show the
+/// change.
+pub fn replay_waypoints(
+    base: &Store,
+    candidate: &Store,
+    region: BoundsMm,
+    replay: &Replay,
+) -> Result<Option<Vec<Waypoint>>, Error> {
+    let origin = sim_origin_mm(replay.header.spawn.position_mm);
+    let mut base_source = StoreSource::from_store(base.clone(), origin).map_err(err)?;
+    let path = waypoints(replay, &mut base_source)?;
+    let close = path.iter().any(|(_, p)| {
+        [0, 2].iter().all(|&k| {
+            region.min[k] - REPLAY_REACH_MM <= p[k] && p[k] <= region.max[k] + REPLAY_REACH_MM
+        })
+    });
+    if !close {
+        return Ok(None);
+    }
+    let mut candidate_source = StoreSource::from_store(candidate.clone(), origin).map_err(err)?;
+    let moved = waypoints(replay, &mut candidate_source)?;
+    Ok(Some(
+        path.iter()
+            .zip(&moved)
+            .map(|((tick, a), (_, b))| Waypoint {
+                tick: *tick,
+                base_mm: *a,
+                candidate_mm: *b,
+            })
+            .collect(),
+    ))
+}
+
 /// G10: replays passing near the change must still reach their waypoints.
 fn replay_paths(
     world_dir: &Path,
     candidate_store: &Store,
-    world_id: op_world::ContentId,
+    world_id: ContentId,
     region: BoundsMm,
     replays: &[Replay],
 ) -> Result<CheckResult, Error> {
+    let base_store = Store::new(world_dir);
     let (mut details, mut failed, mut ran) = (Vec::new(), false, 0);
     for r in replays.iter().filter(|r| r.header.world_id == world_id) {
-        let name = format!(
-            "replay {}",
-            r.checkpoints
-                .last()
-                .map_or("?".into(), |c| c.hash.hex()[..16].to_string())
-        );
-        let origin = sim_origin_mm(r.header.spawn.position_mm);
-        let mut base_source = StoreSource::open(world_dir, origin).map_err(err)?;
-        let path = waypoints(r, &mut base_source)?;
-        let close = path.iter().any(|(_, p)| {
-            [0, 2].iter().all(|&k| {
-                region.min[k] - REPLAY_REACH_MM <= p[k] && p[k] <= region.max[k] + REPLAY_REACH_MM
-            })
-        });
-        if !close {
+        let name = replay_name(r);
+        let Some(path) = replay_waypoints(&base_store, candidate_store, region, r)? else {
             continue;
-        }
+        };
         ran += 1;
-        let mut candidate_source =
-            StoreSource::from_store(candidate_store.clone(), origin).map_err(err)?;
-        let moved = waypoints(r, &mut candidate_source)?;
-        let off = path.iter().zip(&moved).find_map(|((tick, a), (_, b))| {
-            let d = (0..3)
-                .map(|k| {
-                    let m = (a[k] - b[k]) as f64 / 1000.0;
-                    m * m
-                })
-                .sum::<f64>()
-                .sqrt();
-            (d > WAYPOINT_TOLERANCE_M).then_some((*tick, d))
-        });
-        match off {
-            Some((tick, d)) => {
+        match path.iter().find(|w| w.missed()) {
+            Some(w) => {
                 failed = true;
                 details.push(format!(
-                    "{name}: at tick {tick} the player is {d:.1} m off the recorded path"
+                    "{name}: at tick {} the player is {:.1} m off the recorded path",
+                    w.tick,
+                    w.off_m()
                 ));
             }
             None => details.push(format!("{name}: all {} waypoints reached", path.len())),

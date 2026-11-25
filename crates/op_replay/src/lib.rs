@@ -6,7 +6,12 @@
 //! Playing it back in the same world must reproduce every hash bit for
 //! bit, on every platform. `op_replay check` does exactly that, and CI runs
 //! it on Linux, Windows and macOS.
+//!
+//! [`rerecord`] moves a replay to a new version of its world. [`gate`] runs
+//! the simulation checks of the contribution gate, and [`compare`] uses
+//! them to compare two versions of a world.
 
+pub mod compare;
 pub mod format;
 pub mod gate;
 pub mod synth;
@@ -208,6 +213,17 @@ pub fn record(
         checkpoint_interval: format::CHECKPOINT_INTERVAL,
         recorder,
     };
+    record_header(dir, header, inputs, on_tick)
+}
+
+/// Plays `inputs` in the world at `dir`, which must be `header.world_id`,
+/// and returns the replay with its hash trail.
+fn record_header(
+    dir: &Path,
+    header: ReplayHeader,
+    inputs: Vec<PlayerInput>,
+    on_tick: impl FnMut(&Sim),
+) -> Result<Replay, Error> {
     let mut source = open_world(&header, dir)?;
     let checkpoints = play(&header, &inputs, &mut source, on_tick)?;
     let replay = Replay {
@@ -217,4 +233,22 @@ pub fn record(
     };
     replay.check()?;
     Ok(replay)
+}
+
+/// Records `replay` again in the world at `dir`: the same inputs, seed,
+/// spawn (the header's, not the new world's), recorder and checkpoint
+/// interval. Only the world named in the header and the hash trail can
+/// differ. RFC 0002 moves the replay suite to each new canonical world this
+/// way, by re-recording, never by editing hashes. The simulation contract
+/// must be this build's, as for any playback.
+pub fn rerecord(replay: &Replay, dir: &Path) -> Result<Replay, Error> {
+    let (world_id, world) = Store::new(dir)
+        .read_world()
+        .map_err(|e| Error::World(format!("{}: {e}", dir.display())))?;
+    let header = ReplayHeader {
+        world_id,
+        world_name: world.name,
+        ..replay.header.clone()
+    };
+    record_header(dir, header, replay.inputs.clone(), |_| {})
 }
