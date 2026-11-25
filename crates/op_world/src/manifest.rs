@@ -5,7 +5,10 @@ use serde::{Deserialize, Serialize};
 use crate::id::ContentId;
 use crate::keys::TileKey;
 use crate::limits::Document;
-use crate::rules::{is_feature_id, is_https_url, is_license, is_sorted_unique, is_text};
+use crate::rules::{
+    is_feature_id, is_https_url, is_license, is_sorted_unique, is_text, per_tile_source,
+};
+use crate::store::ObjectKind;
 use crate::{CONTRACT_VERSION, Error, Result, cjson};
 
 /// World layers. Variants are declared in byte order of their names, so the
@@ -18,21 +21,50 @@ pub enum Layer {
     Interactivity,
     Interior,
     Shell,
+    /// Objects in public space recorded as points: light points in 0.1
+    /// (RFC 0004). Its content is a points document.
+    #[serde(rename = "street_objects")]
+    StreetObjects,
     Terrain,
     Transport,
+    /// Single trees (RFC 0004). Its content is a points document.
+    Vegetation,
     /// Water surfaces (RFC 0003).
     Water,
 }
 
+/// What an asset's content is (RFC 0004 section 6). The layer decides it,
+/// so a manifest has no key for it.
+#[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Debug)]
+pub enum ContentKind {
+    /// A glb mesh in the StreetWide glb profile (RFC 0001 section 6).
+    Mesh,
+    /// A points document (RFC 0004 section 3), canonical JSON.
+    Points,
+}
+
+impl ContentKind {
+    /// How the store keeps content of this kind: `.glb` for meshes, `.json`
+    /// for points documents.
+    pub fn object_kind(self) -> ObjectKind {
+        match self {
+            ContentKind::Mesh => ObjectKind::Glb,
+            ContentKind::Points => ObjectKind::Json,
+        }
+    }
+}
+
 impl Layer {
-    pub const ALL: [Layer; 8] = [
+    pub const ALL: [Layer; 10] = [
         Layer::Facade,
         Layer::Furniture,
         Layer::Interactivity,
         Layer::Interior,
         Layer::Shell,
+        Layer::StreetObjects,
         Layer::Terrain,
         Layer::Transport,
+        Layer::Vegetation,
         Layer::Water,
     ];
 
@@ -43,10 +75,29 @@ impl Layer {
             Layer::Interactivity => "interactivity",
             Layer::Interior => "interior",
             Layer::Shell => "shell",
+            Layer::StreetObjects => "street_objects",
             Layer::Terrain => "terrain",
             Layer::Transport => "transport",
+            Layer::Vegetation => "vegetation",
             Layer::Water => "water",
         }
+    }
+
+    /// The asset's content in this layer (RFC 0004 section 1): a points
+    /// document in `vegetation` and `street_objects`, a glb mesh in all
+    /// others.
+    pub fn content(self) -> ContentKind {
+        if self.has_points() {
+            ContentKind::Points
+        } else {
+            ContentKind::Mesh
+        }
+    }
+
+    /// The layers whose assets are points documents (RFC 0004): one asset
+    /// per tile and source, with a feature id `tile:17/{x}/{y}/{source}`.
+    pub fn has_points(self) -> bool {
+        matches!(self, Layer::StreetObjects | Layer::Vegetation)
     }
 
     /// Private by design: these layers must always be fictional.
@@ -54,11 +105,14 @@ impl Layer {
         matches!(self, Layer::Interior | Layer::Furniture)
     }
 
-    /// Visual only (RFC 0003): these layers must have `collider: none`, so
-    /// the simulation never sees them and the terrain stays the surface
-    /// players stand on.
+    /// Visual only (RFC 0003 for water, RFC 0004 for the point layers):
+    /// these layers must have `collider: none`, so the simulation never sees
+    /// them and the terrain stays the surface players stand on.
     pub fn must_not_collide(self) -> bool {
-        matches!(self, Layer::Water)
+        matches!(
+            self,
+            Layer::Water | Layer::StreetObjects | Layer::Vegetation
+        )
     }
 }
 
@@ -136,7 +190,11 @@ pub struct Provenance {
     pub generator: Generator,
 }
 
-/// One asset: a glb mesh in one layer, with lineage and provenance.
+/// One asset in one layer: its content, with lineage and provenance. The
+/// content is a glb mesh, or in `vegetation` and `street_objects` a points
+/// document (RFC 0004 section 6); `content_id`, `size_bytes` and
+/// `bounds_mm` describe it (for points, `bounds_mm` are the exact bounds of
+/// the anchors).
 #[derive(Clone, PartialEq, Eq, Debug, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct AssetManifest {
@@ -154,7 +212,7 @@ pub struct AssetManifest {
     pub provenance: Provenance,
 }
 
-/// Largest allowed glb, in bytes.
+/// Largest allowed content (a glb or a points document), in bytes.
 pub const MAX_ASSET_BYTES: u64 = 64 * 1024 * 1024;
 
 impl AssetManifest {
@@ -220,6 +278,10 @@ impl AssetManifest {
         }
         if !is_feature_id(&self.feature_id) {
             p.push(format!("feature_id {:?} is not valid", self.feature_id));
+        } else if let Some(problem) =
+            point_feature_id_problem(self.layer, &self.feature_id, self.tile)
+        {
+            p.push(problem);
         }
         if !self.bounds_mm.is_valid() {
             p.push("bounds_mm min must not exceed max".into());
@@ -239,6 +301,23 @@ impl AssetManifest {
         p.extend(self.provenance.problems());
         p
     }
+}
+
+/// Why `feature_id`, a valid feature id of an asset in `layer` and `tile`,
+/// breaks RFC 0004's rule for point assets: their feature id is
+/// `tile:17/{x}/{y}/{source}`, with the asset's own tile. `None` if it does
+/// not, or if the layer holds no points.
+pub(crate) fn point_feature_id_problem(
+    layer: Layer,
+    feature_id: &str,
+    tile: TileKey,
+) -> Option<String> {
+    (layer.has_points() && per_tile_source(feature_id, tile).is_none()).then(|| {
+        format!(
+            "{} feature_id {feature_id:?} must be tile:{tile}/<source> (RFC 0004)",
+            layer.as_str()
+        )
+    })
 }
 
 impl Provenance {
@@ -294,13 +373,25 @@ mod tests {
     #[test]
     fn layers_are_declared_in_byte_order_of_their_names() {
         // Tile indexes sort by layer name; the derived order must agree, so
-        // a new layer goes where its name sorts (water after transport).
+        // a new layer goes where its name sorts (water after transport,
+        // street_objects between shell and terrain).
         let mut by_name = Layer::ALL;
         by_name.sort_by_key(|l| l.as_str().as_bytes());
         assert_eq!(by_name, Layer::ALL);
         assert!(Layer::ALL.windows(2).all(|w| w[0] < w[1]));
         for l in Layer::ALL {
             assert_eq!(serde_json::to_value(l).unwrap(), l.as_str());
+            let back: Layer = serde_json::from_value(l.as_str().into()).unwrap();
+            assert_eq!(back, l);
         }
+        // RFC 0004: explicit serde names; the lowercase rule would write
+        // `streetobjects`.
+        assert_eq!(
+            serde_json::to_value(Layer::StreetObjects).unwrap(),
+            "street_objects"
+        );
+        let points: Vec<Layer> = Layer::ALL.into_iter().filter(|l| l.has_points()).collect();
+        assert_eq!(points, [Layer::StreetObjects, Layer::Vegetation]);
+        assert!(points.iter().all(|l| l.must_not_collide()));
     }
 }

@@ -1,6 +1,6 @@
 //! Whole-world validation: canonical form, hashes, references, bounds and
 //! licence rules across the world manifest, tile indexes, manifests and
-//! meshes (RFC 0001).
+//! their content, meshes and points documents (RFC 0001, RFC 0004).
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::rc::Rc;
@@ -8,7 +8,8 @@ use std::rc::Rc;
 use crate::glb;
 use crate::id::ContentId;
 use crate::limits::Document;
-use crate::manifest::{AssetManifest, BoundsMm, Layer};
+use crate::manifest::{AssetManifest, BoundsMm, ContentKind, Layer};
+use crate::points::{PointsDocument, Summary};
 use crate::store::{ObjectKind, Store};
 use crate::tile::TileIndex;
 
@@ -19,6 +20,9 @@ pub struct Report {
     pub tiles: usize,
     pub assets: usize,
     pub triangles: usize,
+    /// Points in the world's points documents (RFC 0004), counted once per
+    /// listing.
+    pub points: usize,
     pub errors: Vec<String>,
 }
 
@@ -38,6 +42,10 @@ type MeshFacts = (
     usize,
     std::result::Result<(usize, Option<BoundsMm>), String>,
 );
+
+/// A points document's length, and its summary and point ids (or why it is
+/// not a valid points document).
+type PointsFacts = (usize, std::result::Result<(Summary, Vec<String>), String>);
 
 /// Outcomes of objects listed more than once. A world may list one object
 /// many times (validly a shared mesh, or a crafted world listing a 64 MiB
@@ -93,6 +101,12 @@ pub fn validate_store(store: &Store) -> Report {
     let mut tiles: Seen<TileIndex> = Seen::new();
     let mut manifests: Seen<AssetManifest> = Seen::new();
     let mut meshes: Seen<MeshFacts> = Seen::new();
+    let mut documents: Seen<PointsFacts> = Seen::new();
+    // Point ids are unique per layer across the world (RFC 0004 section 2).
+    // A document listed twice in one layer repeats all of its ids: that is
+    // reported once per listing, without going through its points again.
+    let mut point_ids: BTreeSet<(Layer, String)> = BTreeSet::new();
+    let mut listed_documents: BTreeSet<(Layer, ContentId)> = BTreeSet::new();
 
     for wt in &world.tiles {
         let ctx = format!("tile {}", wt.tile);
@@ -168,6 +182,72 @@ pub fn validate_store(store: &Store) -> Report {
                 }
             }
 
+            if manifest.layer.content() == ContentKind::Points {
+                let (facts, _) = documents.get(manifest.content_id, || {
+                    let bytes = store
+                        .read_document(&manifest.content_id, Document::Points)
+                        .map_err(|e| e.to_string())?;
+                    let facts = PointsDocument::from_bytes(&bytes)
+                        .map(|doc| {
+                            let summary = doc.summary();
+                            (summary, doc.points.into_iter().map(|p| p.id).collect())
+                        })
+                        .map_err(|e| e.to_string());
+                    Ok((bytes.len(), facts))
+                });
+                let (len, facts) = match &*facts {
+                    Ok(f) => f,
+                    Err(e) => {
+                        report.errors.push(format!("{actx}: points document: {e}"));
+                        continue;
+                    }
+                };
+                if *len as u64 != manifest.size_bytes {
+                    report.errors.push(format!(
+                        "{actx}: size_bytes does not match the points document"
+                    ));
+                }
+                let (summary, ids) = match facts {
+                    Ok(f) => f,
+                    Err(e) => {
+                        report.errors.push(format!("{actx}: {e}"));
+                        continue;
+                    }
+                };
+                report.points += summary.count;
+                for problem in summary.asset_problems(
+                    manifest.layer,
+                    &manifest.feature_id,
+                    manifest.tile,
+                    &manifest.bounds_mm,
+                ) {
+                    report.errors.push(format!("{actx}: {problem}"));
+                }
+                let layer = manifest.layer;
+                if !listed_documents.insert((layer, manifest.content_id)) {
+                    report.errors.push(format!(
+                        "{actx}: another {} asset lists the same points; point ids are unique per layer",
+                        layer.as_str()
+                    ));
+                    continue;
+                }
+                let mut repeated = ids
+                    .iter()
+                    .filter(|id| !point_ids.insert((layer, (*id).clone())));
+                if let Some(first) = repeated.next() {
+                    let more = repeated.count();
+                    let others = if more > 0 {
+                        format!(" and {more} more")
+                    } else {
+                        String::new()
+                    };
+                    report.errors.push(format!(
+                        "{actx}: point {first:?}{others} already listed in the {} layer; point ids are unique per layer",
+                        layer.as_str()
+                    ));
+                }
+                continue;
+            }
             let (mesh, _) = meshes.get(manifest.content_id, || {
                 let bytes = store
                     .read_object(&manifest.content_id, ObjectKind::Glb)

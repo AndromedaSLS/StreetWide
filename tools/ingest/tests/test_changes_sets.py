@@ -3,6 +3,7 @@ refresh planner (ADR-0020, section 5)."""
 
 from __future__ import annotations
 
+import dataclasses
 import os
 import shutil
 import subprocess
@@ -14,14 +15,14 @@ import pytest
 from tools.ingest.changes import checks, plan as plan_module
 from tools.ingest.changes.__main__ import main
 from tools.ingest.changes.classify import classify
-from tools.ingest.changes.common import InternalError
+from tools.ingest.changes.common import InternalError, PlanError
 from tools.ingest.changes.holds import apply_holds
 from tools.ingest.changes.overrides import NONE
 from tools.ingest.changes.sets import CHANGE_JSON_RESERVE
 from tools.ingest.changes.stores import read_store
 from tools.ingest.tests.refresh_worlds import (
-    A, B, C, D, GROUND_MM, OSM_V2, Scenario, World, box_mesh, contributed, entry_replace, grid_mesh, moved_box,
-    osm_shell, ribbon, swiss, swiss_shell, terrain,
+    A, B, C, D, GROUND_MM, OSM_V2, Scenario, World, box_mesh, contributed, entry_replace, grid_mesh, held,
+    moved_box, osm_shell, ribbon, swiss, swiss_shell, terrain, trees,
 )
 from tools.worldfmt import cjson
 from tools.worldfmt.changes import MAX_CHANGES, MAX_TEXT_CHARS, Objects, apply, parse, problems
@@ -74,6 +75,49 @@ def test_split_cap_purpose_and_order(tmp_path: Path) -> None:
     assert plan.sets[3].change["title"] == ("Baseline refresh refresh-test: shell from swissBUILDINGS3D 3.0 Beta, "
                                             "with colliders (set 4 of 5)")
     assert [s["touches_colliders"] for s in plan.report["sets"]] == [False, True, True, True, True]
+
+
+def test_points_assets_are_planned_as_assets_of_their_layers(tmp_path: Path) -> None:
+    # RFC 0004: a points asset is one asset per tile and source, in its
+    # layer, with a points document as content; the planner adds, replaces
+    # and removes it like any other per-tile asset.
+    current = World.of(terrain(A), terrain(B), terrain(C), trees(A), trees(C, first=201))
+    sc = Scenario.start(tmp_path, current)
+    # A new version of the register: the replaced trees say why they changed.
+    new = World.of(terrain(A), terrain(B), terrain(C), trees(A, genus="Acer", version="2026-11-29"),
+                   trees(B, first=101, version="2026-11-29"))
+    plan = sc.plan(new)
+    # Removing a tile's trees is held like a tile's terrain or water.
+    assert held(plan) == {("vegetation", f"tile:{C}/stadt-zuerich:baumkataster"): ["per-tile-removal"]}
+    (s,) = plan.sets
+    assert [(e["op"], e["tile"], e["layer"]) for e in s.entries] == [("replace", A, "vegetation"),
+                                                                     ("add", B, "vegetation")]
+    assert plan.report["sets"][0]["purpose"] == {"collider": "none", "layer": "vegetation", "dataset": "Baumkataster"}
+    assert not s.touches_colliders
+    # The bundle holds both points documents as .json content, and the
+    # chain of world ids is the one `apply` gives.
+    for asset in (new[("vegetation", f"tile:{A}/stadt-zuerich:baumkataster")],
+                  new[("vegetation", f"tile:{B}/stadt-zuerich:baumkataster")]):
+        h = asset.content_id[7:]
+        assert plan.files[f"{s.path}/objects/{h[:2]}/{h}.json"] == asset.mesh.data
+        assert f"{s.path}/objects/{h[:2]}/{h}.glb" not in plan.files
+    store = Store(sc.current)
+    world_id, world = store.read_world()
+    objects = Objects(store)
+    objects.push(s.manifests)
+    assert problems(s.change) == []
+    assert apply(world, s.change, objects).world_id == s.world_after
+    assert s.base_world_id == world_id
+
+
+def test_a_points_document_must_agree_with_its_manifest(tmp_path: Path) -> None:
+    sc = Scenario.start(tmp_path, World.of(terrain(A)))
+    good = trees(A)
+    # A manifest whose bounds are not its anchors': the gate could not read
+    # it, so the plan stops.
+    wrong = good.but(mesh=dataclasses.replace(good.mesh, bounds={"max": [1, 1, 1], "min": [0, 0, 0]}))
+    with pytest.raises(PlanError, match="bounds_mm are not the exact bounds of the anchors"):
+        sc.plan(World.of(terrain(A), wrong))
 
 
 def test_split_byte_limit(tmp_path: Path) -> None:

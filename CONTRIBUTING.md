@@ -102,15 +102,16 @@ of untrusted files:
 
 - **Rust** (`crates/op_world/tests/fuzz_readers.rs`,
   `crates/op_replay/tests/fuzz_replay.rs`): canonical JSON and every
-  document type, glb meshes, ids and tile keys, store reads, validation of
-  a whole world, the gate on contribution bundles, the world log and
-  replays; and for baseline refreshes, world-log directories
-  (`WorldLog::open`), merges with `--log` on crafted logs, `--require-base`
-  on crafted bundles and the merge commands' arguments.
+  document type, points documents (RFC 0004) against their rules and
+  their asset's, glb meshes, ids and tile keys, store reads, validation of
+  a whole world, the gate on contribution bundles and on refreshes with
+  points, the world log and replays; and for baseline refreshes, world-log
+  directories (`WorldLog::open`), merges with `--log` on crafted logs,
+  `--require-base` on crafted bundles and the merge commands' arguments.
 - **Python** (`tools/*/tests/test_fuzz_*.py`): canonical JSON, schemas,
-  store reads, the glTF importer and the facade tool, Overpass answers for
-  roads and water, STAC searches, GeoTIFF terrain, CityGML sheets and the
-  derived building cache; and for baseline refreshes, the strict glb
+  points documents (`points.parse`), store reads, the glTF importer and
+  the facade tool, Overpass answers for roads and water, STAC searches,
+  GeoTIFF terrain, CityGML sheets and the derived building cache; and for baseline refreshes, the strict glb
   reader (`glb.read`), change sets, world-log directories (`read_log`),
   objects read from a directory, `apply`, and the planner's overrides
   files, written plans, stores and the gate's reports as `verify` reads

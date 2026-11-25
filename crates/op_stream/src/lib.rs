@@ -1,7 +1,9 @@
 //! StreetWide tile store and streaming.
 //!
 //! - [`WorldIndex`]: a world store opened for reading (RFC 0001): the world
-//!   manifest and every tile index, and mesh decoding.
+//!   manifest and every tile index, mesh decoding, and the points documents
+//!   of the point layers (RFC 0004), which are never colliders and which
+//!   nothing draws yet.
 //! - [`StoreSource`]: synchronous collision geometry for the simulation;
 //!   never `Pending`. Replay checks use it.
 //! - [`Streamer`]: background loading for the client. A pool of loader
@@ -18,7 +20,7 @@
 
 mod streamer;
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::fmt;
 use std::path::Path;
 use std::sync::Arc;
@@ -29,7 +31,8 @@ use op_kernel::{
 use op_world::glb::{self, GlbMesh, f32_to_mm};
 use op_world::limits::Document;
 use op_world::{
-    Collider, ContentId, ObjectKind, Store, TileAsset, TileIndex, TileKey, WorldManifest,
+    Collider, ContentId, ObjectKind, PointsDocument, Store, TileAsset, TileIndex, TileKey,
+    WorldManifest,
 };
 
 pub use streamer::{StreamSource, Streamer};
@@ -74,6 +77,9 @@ pub struct WorldIndex {
     world_id: ContentId,
     world: WorldManifest,
     tiles: Vec<Tile>,
+    /// The content ids of the point assets (RFC 0004): points documents,
+    /// which [`WorldIndex::load_mesh`] refuses with a clear message.
+    points: BTreeSet<ContentId>,
 }
 
 impl WorldIndex {
@@ -88,9 +94,17 @@ impl WorldIndex {
     pub fn from_store(store: Store) -> Result<Self, StreamError> {
         let (world_id, world) = store.read_world()?;
         let mut tiles = Vec::with_capacity(world.tiles.len());
+        let mut points = BTreeSet::new();
         for wt in &world.tiles {
             let index =
                 TileIndex::from_bytes(&store.read_document(&wt.tile_id, Document::TileIndex)?)?;
+            points.extend(
+                index
+                    .assets
+                    .iter()
+                    .filter(|a| a.layer.has_points())
+                    .map(|a| a.content_id),
+            );
             tiles.push(Tile {
                 key: wt.tile,
                 origin_mm: wt.origin_mm,
@@ -102,6 +116,7 @@ impl WorldIndex {
             world_id,
             world,
             tiles,
+            points,
         })
     }
 
@@ -147,9 +162,25 @@ impl WorldIndex {
         out
     }
 
-    /// Reads, verifies and decodes one mesh.
+    /// Reads, verifies and decodes one mesh. The content of a point asset
+    /// is a points document, not a mesh: asking for it is an error, which
+    /// the streamer keeps like any failed load, so a client that requests
+    /// every asset near the camera draws nothing for it.
     pub fn load_mesh(&self, id: &ContentId) -> Result<GlbMesh, StreamError> {
+        if self.points.contains(id) {
+            return Err(StreamError(format!(
+                "content {id} is a points document (RFC 0004), not a mesh"
+            )));
+        }
         Ok(glb::read(&self.store.read_object(id, ObjectKind::Glb)?)?)
+    }
+
+    /// Reads, verifies and parses the points document of a point asset
+    /// (RFC 0004), for a client that draws trees and lights.
+    pub fn load_points(&self, id: &ContentId) -> Result<PointsDocument, StreamError> {
+        Ok(PointsDocument::from_bytes(
+            &self.store.read_document(id, Document::Points)?,
+        )?)
     }
 }
 

@@ -14,9 +14,10 @@ margin, and every reader checks it before parsing:
     world manifests    64 MiB, the limit of every file (store.MAX_FILE_BYTES):
                        they have no limit of their own, as they grow with
                        the world
+    points documents   64 MiB, the limit of every file (RFC 0004)
 
-Points documents (RFC 0004) and navigation documents (RFC 0005) keep the
-64 MiB limit of every file until a limit of their own is set the same way.
+Points documents keep the 64 MiB limit of every file until a limit of their
+own is set the same way, and navigation documents (RFC 0005) too.
 
 Writers check the limits too (`changes.to_bytes`, the tile indexes of
 `changes.apply`), so nothing is written that a reader would refuse.
@@ -57,8 +58,9 @@ WORLD_MANIFEST = Kind("streetwide.world", "a world manifest", MAX_FILE_BYTES)
 CHANGE_SET = Kind("streetwide.change", "a change set", 8 * MIB)
 CHECK_REPORT = Kind("streetwide.check", "a check report", 16 * MIB)
 MERGE_RECORD = Kind("streetwide.merge", "a merge record", MIB)
+POINTS = Kind("streetwide.points", "a points document", MAX_FILE_BYTES)
 
-KINDS = (ASSET_MANIFEST, TILE_INDEX, WORLD_MANIFEST, CHANGE_SET, CHECK_REPORT, MERGE_RECORD)
+KINDS = (ASSET_MANIFEST, TILE_INDEX, WORLD_MANIFEST, CHANGE_SET, CHECK_REPORT, MERGE_RECORD, POINTS)
 """Every kind, in the order of `Document::ALL`."""
 
 BY_FORMAT = {kind.format: kind for kind in KINDS}

@@ -145,3 +145,20 @@ def test_a_tile_index_over_its_limit_is_refused_unparsed(tmp_path):
         World(tmp_path)
     assert str(e.value) == f"tile {world['tiles'][0]['tile']} is {TILE_INDEX.too_large()}"
     store.object_path(world["tiles"][0]["tile_id"], "json").unlink()
+
+
+def test_a_world_with_points_works_as_any_other(tmp_path):
+    # The format fixture's tile has point assets (RFC 0004): the tool reads
+    # its tile indexes, finds the house among them, exports its shell and
+    # builds a facade for it.
+    fmt_world = REPO / "fixtures" / "format" / "world"
+    world = World(fmt_world)
+    layers = [a["layer"] for _, index in world.tiles for a in index["assets"]]
+    assert {"street_objects", "vegetation"} <= set(layers)
+    path = export_reference(fmt_world, "streetwide:sample-house", tmp_path / "ref")
+    assert path.read_bytes()[:4] == b"glTF"
+    model = editor_glb([0, 0, 0], [0, 0, 0, 1], [1, 1, 1])
+    make_bundle(fmt_world, "streetwide:sample-house", model, tmp_path / "bundle", author="github:tester",
+                title="Test", rationale="Test.")
+    change = cjson.loads((tmp_path / "bundle" / "change.json").read_bytes())
+    assert schemas.errors(change) == [] and change["changes"][0]["layer"] == "facade"

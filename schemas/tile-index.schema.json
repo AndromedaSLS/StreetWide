@@ -38,6 +38,22 @@
             "then": {
               "properties": { "collider": { "const": "none" } }
             }
+          },
+          {
+            "description": "Point layers (RFC 0004): visual only, as for water, and a feature id tile:17/{x}/{y}/{source}. op_world also checks that x and y are the index's tile.",
+            "if": {
+              "required": ["layer"],
+              "properties": { "layer": { "enum": ["street_objects", "vegetation"] } }
+            },
+            "then": {
+              "properties": {
+                "collider": { "const": "none" },
+                "feature_id": {
+                  "$ref": "urn:streetwide:schema:common:0.1#/$defs/perTileId",
+                  "pattern": "^tile:17/[0-9]+/[0-9]+/"
+                }
+              }
+            }
           }
         ]
       }

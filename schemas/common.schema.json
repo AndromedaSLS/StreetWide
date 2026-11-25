@@ -42,8 +42,17 @@
       "maxLength": 256,
       "pattern": "^[a-z][a-z0-9_-]*:[!-~]+$"
     },
+    "perTileId": {
+      "description": "Feature id of a per-tile asset (RFC 0004 section 2): tile:17/{x}/{y}, with an optional /{source}, the prefix of the ids of the points the asset holds. Point assets always carry the source, with x and y those of the asset's own tile, which op_world checks.",
+      "type": "string",
+      "maxLength": 256,
+      "pattern": "^tile:17/(0|[1-9][0-9]{0,5})/(0|[1-9][0-9]{0,5})(/[a-z][a-z0-9_-]*(:[a-z0-9][a-z0-9_-]*)*)?$"
+    },
     "layer": {
-      "enum": ["shell", "facade", "interior", "furniture", "interactivity", "terrain", "transport", "water"]
+      "enum": [
+        "shell", "facade", "interior", "furniture", "interactivity", "terrain", "transport", "water", "vegetation",
+        "street_objects"
+      ]
     },
     "collider": {
       "enum": ["trimesh", "none"]

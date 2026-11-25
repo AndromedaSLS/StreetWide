@@ -21,6 +21,7 @@ _BY_FORMAT = {
     "streetwide.change": "change-set.schema.json",
     "streetwide.check": "check-report.schema.json",
     "streetwide.merge": "merge-record.schema.json",
+    "streetwide.points": "points.schema.json",
 }
 
 

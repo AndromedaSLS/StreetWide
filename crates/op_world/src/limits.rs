@@ -26,14 +26,16 @@
 //! | check report | 16 MiB | one detail of at most 4,096 characters per finding |
 //! | tile index | 16 MiB | 59,148 bytes in the Zurich district |
 //! | world manifest | 64 MiB, the limit of every file | about 230 KB for the 1,024 tiles of a region |
+//! | points document | 64 MiB, the limit of every file | about 22 MB for the most points a document holds, 65,536 trees of about 330 bytes (RFC 0004 section 3) |
 //!
 //! World manifests have no limit of their own: they grow with the world.
-//! Points documents (RFC 0004) and navigation documents (RFC 0005) keep the
-//! 64 MiB limit of every file until a limit of their own is set the same
-//! way.
+//! Points documents (RFC 0004) keep the 64 MiB limit of every file until a
+//! limit of their own is set the same way, and navigation documents (RFC
+//! 0005) too.
 
 use crate::contrib::{ChangeSet, CheckReport, MergeRecord};
 use crate::manifest::AssetManifest;
+use crate::points::PointsDocument;
 use crate::store::MAX_FILE_BYTES;
 use crate::tile::TileIndex;
 use crate::world::WorldManifest;
@@ -54,6 +56,10 @@ pub const MAX_TILE_INDEX_BYTES: u64 = 16 * MIB;
 /// Largest world manifest, in bytes: the limit of every file (64 MiB), as
 /// world manifests have no limit of their own.
 pub const MAX_WORLD_MANIFEST_BYTES: u64 = MAX_FILE_BYTES;
+/// Largest points document (RFC 0004), in bytes: the limit of every file
+/// (64 MiB), until points documents get a limit of their own (RFC 0001
+/// section 7).
+pub const MAX_POINTS_BYTES: u64 = MAX_FILE_BYTES;
 
 /// A kind of JSON document, with its size limit.
 #[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Debug)]
@@ -64,16 +70,19 @@ pub enum Document {
     ChangeSet,
     CheckReport,
     MergeRecord,
+    /// A points document (RFC 0004), the content of a point asset.
+    Points,
 }
 
 impl Document {
-    pub const ALL: [Document; 6] = [
+    pub const ALL: [Document; 7] = [
         Document::AssetManifest,
         Document::TileIndex,
         Document::WorldManifest,
         Document::ChangeSet,
         Document::CheckReport,
         Document::MergeRecord,
+        Document::Points,
     ];
 
     /// The largest document of this kind, in bytes.
@@ -85,6 +94,7 @@ impl Document {
             Document::ChangeSet => MAX_CHANGE_SET_BYTES,
             Document::CheckReport => MAX_CHECK_REPORT_BYTES,
             Document::MergeRecord => MAX_MERGE_RECORD_BYTES,
+            Document::Points => MAX_POINTS_BYTES,
         }
     }
 
@@ -97,6 +107,7 @@ impl Document {
             Document::ChangeSet => ChangeSet::FORMAT,
             Document::CheckReport => CheckReport::FORMAT,
             Document::MergeRecord => MergeRecord::FORMAT,
+            Document::Points => PointsDocument::FORMAT,
         }
     }
 
@@ -109,6 +120,7 @@ impl Document {
             Document::ChangeSet => "a change set",
             Document::CheckReport => "a check report",
             Document::MergeRecord => "a merge record",
+            Document::Points => "a points document",
         }
     }
 
@@ -158,6 +170,7 @@ mod tests {
                 ("streetwide.change", 8 << 20),
                 ("streetwide.check", 16 << 20),
                 ("streetwide.merge", 1 << 20),
+                ("streetwide.points", 64 << 20),
             ]
         );
         // Each fits in a file a store read takes.

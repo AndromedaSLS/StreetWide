@@ -1,4 +1,8 @@
 {
-  "comment": "Pinned ids of the world-format golden fixture. Rust (crates/op_world/tests) and Python (tools/worldfmt/tests) must both reproduce them on every platform. Regenerate only on purpose: cargo run -p op_world --example make_format_fixtures -- fixtures/format",
-  "world_id": "blake3:f2d6f86933f9a8820ec057888b0c3b9642795b026bcd0312c824d25cb496bda1"
+  "comment": "Pinned ids of the world-format golden fixture. Rust (crates/op_world/tests) and Python (tools/worldfmt/tests) must both reproduce them on every platform. `points` gives the content id of the canonical points document (RFC 0004) of each point layer, written from points.json. Regenerate only on purpose: cargo run -p op_world --example make_format_fixtures -- fixtures/format",
+  "world_id": "blake3:fdac2cbe9ae53d9442055996ad4f88202538f2c85ab1ac680129c540f9eff2ea",
+  "points": {
+    "street_objects": "blake3:4851ade91ae2859e77af347f0d8ab0bedc4cc4e940e8f551c7cb63ffdaf9e9ee",
+    "vegetation": "blake3:47307b057eeeee8d523cad19c52610ad566bb462841334a4669c700d82eb874c"
+  }
 }

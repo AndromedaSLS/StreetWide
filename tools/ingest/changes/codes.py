@@ -75,8 +75,8 @@ CODES = (
          "over a contributed terrain that stays (Q17), so it would float or sink. Accept it with a reason to let it "
          "through on its own."),
     Code("per-tile-removal", "H10a", "held", None,
-         "This removes a tile's whole terrain, ribbons or water. If upstream really lost it, add an "
-         "allow_removals entry for its ingest group, or accept it."),
+         "This removes a tile's whole terrain, ribbons or water, or its points of one source (RFC 0004). If "
+         "upstream really lost it, add an allow_removals entry for its ingest group, or accept it."),
     Code("mass-removal", "H10b", "held", None,
          "Unusually many removals in one ingest group that no add, move or replace of their unit accounts for. "
          "Check upstream; then add an allow_removals entry for the group, or accept them."),

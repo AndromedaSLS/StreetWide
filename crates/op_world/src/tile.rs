@@ -5,7 +5,7 @@ use serde::{Deserialize, Serialize};
 use crate::id::ContentId;
 use crate::keys::{RegionKey, TileKey};
 use crate::limits::Document;
-use crate::manifest::{BoundsMm, Collider, Layer};
+use crate::manifest::{BoundsMm, Collider, Layer, point_feature_id_problem};
 use crate::rules::{is_feature_id, is_license};
 use crate::{CONTRACT_VERSION, Error, Result, cjson};
 
@@ -122,6 +122,10 @@ impl TileIndex {
         for a in &self.assets {
             if !is_feature_id(&a.feature_id) {
                 p.push(format!("feature_id {:?} is not valid", a.feature_id));
+            } else if let Some(problem) =
+                point_feature_id_problem(a.layer, &a.feature_id, self.tile)
+            {
+                p.push(problem);
             }
             if !is_license(&a.license) {
                 p.push(format!(
