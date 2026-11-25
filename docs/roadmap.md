@@ -31,11 +31,13 @@ pull request.
   client, drawn from a shared seed outside the simulation's state, so
   trunks and poles stay visual in M2. How the client draws trees, lamps
   and lit windows is accepted in
-  [ADR-0022](adr/0022-drawing-trees-lamps-and-windows.md). Still waiting
-  for the maintainer: RFC 0004 (trees and street lights in the world
-  format), ADR-0015 (their Zurich sources), ADR-0016 (measured heights)
-  and ADR-0018 (performance tier). Lit windows and the night's look need
-  none of them and come first.
+  [ADR-0022](adr/0022-drawing-trees-lamps-and-windows.md). The
+  navigation data that the people walk on is drafted in
+  [RFC 0005](../rfcs/0005-navigation-data.md) (Draft, comments until at
+  least 2026-12-09). Still waiting for the maintainer: RFC 0004 (trees
+  and street lights in the world format), ADR-0015 (their Zurich
+  sources), ADR-0016 (measured heights) and ADR-0018 (performance tier).
+  Lit windows and the night's look need none of them and come first.
 
 *Last reviewed: 2026-11-25.*
 
@@ -573,12 +575,12 @@ arrives) and servers per area for larger groups.
 | Refresh amendments A1 to A8 (terrain edges, shells under facades, the cap, ways under buildings, spawn and tiles, G4 and G5, base world, holes) | [RFC 0002](../rfcs/0002-contributions-and-merge-rules.md#unresolved-questions), questions 9 to 16; [ADR-0020](adr/0020-baseline-refreshes.md#amendments-flagged-for-rfc-0002) | open; ADR-0020 itself is accepted | the first real refresh (M1), M3 |
 | How the published world meets the ODbL; the OSM fallback buildings | [ADR-0019](adr/0019-odbl-and-the-published-world.md), building on ADR-0001 | Proposed | publishing (M1) |
 | Licence allowlist | [ADR-0017](adr/0017-licence-allowlist.md), amending ADR-0001 | Proposed; its gate and validation rules need an RFC | M1, new sources in M2 |
-| Water layer and water source | [RFC 0003](../rfcs/0003-water-layer.md), [ADR-0014](adr/0014-water-areas-from-openstreetmap.md) | Draft and Proposed, implemented; comments until at least 2026-12-01; the contract version is chosen with RFC 0004 | M2 |
+| Water layer and water source | [RFC 0003](../rfcs/0003-water-layer.md), [ADR-0014](adr/0014-water-areas-from-openstreetmap.md) | Draft and Proposed, implemented; comments until at least 2026-12-01; the contract version is chosen with RFC 0004, and with RFC 0005 if the maintainer takes it into that choice | M2 |
 | Trees and street lights in the world format | [RFC 0004](../rfcs/0004-point-features.md) | Draft; comments until at least 2026-12-01 | M2 |
 | Trees and lights from Zurich's open data; measured heights | [ADR-0015](adr/0015-zurich-trees-and-lights.md), [ADR-0016](adr/0016-swisssurface3d-heights.md) | Proposed | M2 |
 | Performance tier | [ADR-0018](adr/0018-performance-tier.md) | Proposed | M2 |
 | Pedestrians | [ADR-0021](adr/0021-pedestrians.md) | Accepted (2026-11-25): C2, people drawn by the client | M2 |
-| Navigation data; how the client draws trees, lamps and lit windows | an RFC after the pedestrian ADR; [ADR-0022](adr/0022-drawing-trees-lamps-and-windows.md), extending ADR-0012 | the RFC to be drafted; ADR-0022 accepted (2026-11-25) | M2 |
+| Navigation data; how the client draws trees, lamps and lit windows | [RFC 0005](../rfcs/0005-navigation-data.md), after the pedestrian ADR; [ADR-0022](adr/0022-drawing-trees-lamps-and-windows.md), extending ADR-0012 | RFC 0005 Draft, comments until at least 2026-12-09; ADR-0022 accepted (2026-11-25) | M2 |
 | Code of Conduct contact, branch protection, filing the issue drafts, announcing | tasks, see M1 | open | announcing (M1) |
 | Who owns costs and receives donations | with ADR-0010 | to be drafted | M1 |
 | Whether there is an in-game economy | none yet | not drafted | later |

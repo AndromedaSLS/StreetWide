@@ -21,3 +21,4 @@ Process (see [GOVERNANCE.md](../GOVERNANCE.md)):
 | [0002](0002-contributions-and-merge-rules.md) | Contributions and merge rules | Draft |
 | [0003](0003-water-layer.md) | A water layer | Draft |
 | [0004](0004-point-features.md) | Point features: vegetation and street objects | Draft |
+| [0005](0005-navigation-data.md) | Navigation data: lanes, places and population profiles | Draft |
