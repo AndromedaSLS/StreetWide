@@ -90,6 +90,18 @@ Until then, the canonical world exists only on disk.
 `op_world check-change` and `op_world merge` operate on local
 directories, so tooling does not depend on this decision.
 
+**A local log** (a note proposed with
+[ADR-0020](0020-baseline-refreshes.md), not decided). A world log kept
+in a local directory uses option A's layout, with two differences:
+- **`<hex>` in paths:** `changes/<hex>/change.json` and
+  `reports/<hex>.json`, where `<hex>` is the content id without
+  `blake3:`. A `:` is not allowed in Windows paths, so
+  `changes/<change-id>/` cannot be written there. A clone of option A's
+  log repository on Windows would meet the same limit.
+- **`worlds/<hex>.json`:** the world manifest after each record. A
+  local store keeps only its current `world.json`, and the baseline
+  refresh tool reads earlier ones to find where a removed asset was.
+
 ## Consequences
 
 - **Accounts:** a bucket, a public URL and a CI secret for the merge bot.

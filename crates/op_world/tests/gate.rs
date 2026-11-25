@@ -25,7 +25,7 @@ fn sample_bundle() -> PathBuf {
 }
 
 fn gate_run(bundle: &Path, name: &str) -> CheckReport {
-    let candidate = common::temp_dir(&format!("candidate-{name}")).join("candidate");
+    let candidate = common::temp_path(&format!("candidate-{name}"), "candidate");
     gate::run(&world(), bundle, &candidate).expect("the gate runs")
 }
 
@@ -367,7 +367,7 @@ fn split_at_centroids(p: &Primitive) -> Primitive {
 /// `fixtures/world`, copied to a directory of its own, with the shell of
 /// the sample's building changed by `edit` (its manifest, tile index and
 /// world manifest follow). Returns the directory and the new shell.
-fn world_with_shell(name: &str, edit: impl FnOnce(&mut GlbMesh)) -> (PathBuf, GlbMesh) {
+fn world_with_shell(name: &str, edit: impl FnOnce(&mut GlbMesh)) -> (common::TempDir, GlbMesh) {
     let dir = common::temp_dir(&format!("world-{name}"));
     for f in common::files_under(&world()) {
         let to = dir.join(&f);
@@ -509,7 +509,7 @@ fn g8_measures_a_dense_facade_on_a_finely_divided_roof() {
         size <= gate::FACADE_MAX_BYTES && size > gate::FACADE_MAX_BYTES / 100 * 99,
         "{size} bytes"
     );
-    let candidate = common::temp_dir("candidate-dense-roof").join("candidate");
+    let candidate = common::temp_path("candidate-dense-roof", "candidate");
     let r = gate::run(&dense, &bundle, &candidate).expect("the gate runs");
     assert!(r.passed, "{r:#?}");
     for id in ["G1", "G7", "G8"] {
@@ -533,7 +533,7 @@ fn g8_measures_against_a_canonical_shell_over_the_shell_budget() {
         }
     });
     assert_eq!(shell.triangle_count(), 149_760);
-    let candidate = common::temp_dir("candidate-big-shell").join("candidate");
+    let candidate = common::temp_path("candidate-big-shell", "candidate");
     let r = gate::run(&big, &sample_bundle(), &candidate).expect("the gate runs");
     assert!(r.passed, "{r:#?}");
     for id in ["G1", "G7", "G8"] {
@@ -572,7 +572,7 @@ fn g8_refuses_a_facade_too_complex_to_measure() {
     }];
     let bundle = common::temp_dir("bundle-g8-crafted");
     write_bundle(&mut draft, &bundle).unwrap();
-    let candidate = common::temp_dir("candidate-g8-crafted").join("candidate");
+    let candidate = common::temp_path("candidate-g8-crafted", "candidate");
     let r = gate::run(&crafted, &bundle, &candidate).expect("the gate runs");
     assert_eq!(outcome(&r, "G7"), Outcome::Pass, "{r:#?}");
     assert_fails(&r, "G8");

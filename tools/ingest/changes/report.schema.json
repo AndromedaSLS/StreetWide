@@ -1,0 +1,340 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "urn:streetwide:tool:refresh-report:0.1",
+  "title": "StreetWide refresh report 0.1 (tools.ingest.changes)",
+  "description": "The report of `python -m tools.ingest.changes plan`: the tool's own format, not a contract document. op_world and the gate never read it, and it never goes into a bundle. Written as canonical JSON so that merge records can cite its content id. See docs/adr/0020-baseline-refreshes.md.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "accepted", "allowances_used", "conflicts", "content_rule", "contributions", "counts", "current_world_id",
+    "final_world_id", "generators", "height_components", "held_back", "log", "max_set_bytes", "new_world_id",
+    "overrides_id", "report", "report_version", "residual", "sets", "sources", "stale_overrides", "tool",
+    "units", "world", "world_level"
+  ],
+  "properties": {
+    "report": { "const": "streetwide refresh plan" },
+    "report_version": { "const": "0.1.0" },
+    "tool": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["command", "version"],
+      "properties": {
+        "command": { "const": "tools.ingest.changes" },
+        "version": { "$ref": "#/$defs/text" }
+      }
+    },
+    "world": { "$ref": "#/$defs/text" },
+    "current_world_id": { "$ref": "#/$defs/id" },
+    "new_world_id": { "$ref": "#/$defs/id" },
+    "log": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["head_record_id", "records", "warnings"],
+      "properties": {
+        "records": { "type": "integer", "minimum": 1 },
+        "head_record_id": { "$ref": "#/$defs/id" },
+        "warnings": { "type": "array", "items": { "$ref": "#/$defs/text" } }
+      }
+    },
+    "overrides_id": { "$ref": "#/$defs/optionalId" },
+    "max_set_bytes": { "oneOf": [{ "type": "integer", "minimum": 1 }, { "type": "null" }] },
+    "content_rule": { "$ref": "#/$defs/text" },
+    "generators": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["current", "new"],
+      "properties": {
+        "current": { "$ref": "#/$defs/texts" },
+        "new": { "$ref": "#/$defs/texts" }
+      }
+    },
+    "sources": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["current", "new"],
+      "properties": {
+        "current": { "$ref": "#/$defs/sourceVersions" },
+        "new": { "$ref": "#/$defs/sourceVersions" }
+      }
+    },
+    "counts": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "add", "conflicts", "contributions", "held", "layer", "manifest_only", "move", "provenance_only",
+          "remove", "replace", "unchanged"
+        ],
+        "properties": {
+          "layer": { "$ref": "#/$defs/text" },
+          "add": { "$ref": "#/$defs/count" },
+          "replace": { "$ref": "#/$defs/count" },
+          "remove": { "$ref": "#/$defs/count" },
+          "move": { "$ref": "#/$defs/count" },
+          "manifest_only": { "$ref": "#/$defs/count" },
+          "unchanged": { "$ref": "#/$defs/count" },
+          "provenance_only": { "$ref": "#/$defs/count" },
+          "contributions": { "$ref": "#/$defs/count" },
+          "conflicts": { "$ref": "#/$defs/count" },
+          "held": { "$ref": "#/$defs/count" }
+        }
+      }
+    },
+    "sets": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "base_world_id", "bytes", "change_id", "changes", "kind", "path", "purpose", "touches_colliders",
+          "warnings", "world_after"
+        ],
+        "properties": {
+          "path": { "type": "string", "pattern": "^sets/[0-9]{3,}$" },
+          "change_id": { "$ref": "#/$defs/id" },
+          "kind": { "enum": ["refresh", "decision"] },
+          "purpose": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["collider", "dataset", "layer"],
+            "properties": {
+              "collider": { "enum": ["none", "trimesh"] },
+              "layer": { "$ref": "#/$defs/text" },
+              "dataset": { "$ref": "#/$defs/text" }
+            }
+          },
+          "changes": { "type": "integer", "minimum": 1, "maximum": 50 },
+          "bytes": { "type": "integer", "minimum": 1 },
+          "base_world_id": { "$ref": "#/$defs/id" },
+          "world_after": { "$ref": "#/$defs/id" },
+          "touches_colliders": { "type": "boolean" },
+          "warnings": { "$ref": "#/$defs/texts" }
+        }
+      }
+    },
+    "final_world_id": { "$ref": "#/$defs/id" },
+    "conflicts": { "type": "array", "items": { "$ref": "#/$defs/entry" } },
+    "held_back": { "type": "array", "items": { "$ref": "#/$defs/entry" } },
+    "accepted": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["feature_id", "layer", "lifted", "lifts", "reason", "set"],
+        "properties": {
+          "layer": { "$ref": "#/$defs/text" },
+          "feature_id": { "$ref": "#/$defs/text" },
+          "lifts": { "type": "array", "minItems": 1, "items": { "$ref": "#/$defs/code" } },
+          "lifted": { "type": "array", "minItems": 1, "items": { "$ref": "#/$defs/code" } },
+          "reason": { "$ref": "#/$defs/text" },
+          "set": { "oneOf": [{ "type": "string", "pattern": "^sets/[0-9]{3,}$" }, { "type": "null" }] }
+        }
+      }
+    },
+    "allowances_used": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["at_most", "dataset", "layer", "reason", "removals"],
+        "properties": {
+          "layer": { "$ref": "#/$defs/text" },
+          "dataset": { "$ref": "#/$defs/text" },
+          "removals": { "$ref": "#/$defs/count" },
+          "at_most": { "$ref": "#/$defs/count" },
+          "reason": { "$ref": "#/$defs/text" }
+        }
+      }
+    },
+    "stale_overrides": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["dataset", "entry", "feature_id", "layer", "why"],
+        "properties": {
+          "entry": { "enum": ["hold", "accept", "allow_removals"] },
+          "layer": { "$ref": "#/$defs/text" },
+          "feature_id": { "oneOf": [{ "$ref": "#/$defs/text" }, { "type": "null" }] },
+          "dataset": { "oneOf": [{ "$ref": "#/$defs/text" }, { "type": "null" }] },
+          "why": { "$ref": "#/$defs/text" }
+        }
+      }
+    },
+    "units": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["members", "set", "status"],
+        "properties": {
+          "status": { "enum": ["emitted", "held"] },
+          "set": { "oneOf": [{ "type": "string", "pattern": "^sets/[0-9]{3,}$" }, { "type": "null" }] },
+          "members": {
+            "type": "array",
+            "minItems": 2,
+            "items": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": ["feature_id", "layer", "op", "tile"],
+              "properties": {
+                "op": { "enum": ["add", "replace", "remove"] },
+                "tile": { "$ref": "#/$defs/text" },
+                "layer": { "$ref": "#/$defs/text" },
+                "feature_id": { "$ref": "#/$defs/text" }
+              }
+            }
+          }
+        }
+      }
+    },
+    "height_components": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["changes", "dem_source_ids", "status", "terrain_changes"],
+        "properties": {
+          "dem_source_ids": { "$ref": "#/$defs/texts" },
+          "changes": { "type": "integer", "minimum": 1 },
+          "terrain_changes": { "$ref": "#/$defs/count" },
+          "status": { "enum": ["emitted", "held", "partly held"] }
+        }
+      }
+    },
+    "contributions": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["authors", "depends_on", "feature_id", "layer", "manifest_id", "origin", "tile", "upstream", "would_be"],
+        "properties": {
+          "layer": { "$ref": "#/$defs/text" },
+          "feature_id": { "$ref": "#/$defs/text" },
+          "tile": { "$ref": "#/$defs/text" },
+          "manifest_id": { "$ref": "#/$defs/id" },
+          "authors": { "$ref": "#/$defs/texts" },
+          "origin": { "enum": ["contribution", "unclear"] },
+          "upstream": { "enum": ["changed", "unchanged", "gone", "new", "none", "unknown"] },
+          "would_be": { "oneOf": [{ "$ref": "#/$defs/op" }, { "type": "null" }] },
+          "depends_on": {
+            "oneOf": [
+              {
+                "type": "object",
+                "additionalProperties": false,
+                "required": ["layer", "status"],
+                "properties": {
+                  "layer": { "$ref": "#/$defs/text" },
+                  "status": { "enum": ["unchanged", "manifest-only", "changed", "held", "missing"] }
+                }
+              },
+              { "type": "null" }
+            ]
+          }
+        }
+      }
+    },
+    "world_level": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "attribution_final", "attribution_new", "spawn", "spawn_ground_gap_mm", "spawn_new", "spawn_new_yaw",
+        "spawn_yaw", "tiles_only_current", "tiles_only_new"
+      ],
+      "properties": {
+        "spawn": { "$ref": "#/$defs/vec3" },
+        "spawn_yaw": { "$ref": "#/$defs/count" },
+        "spawn_new": { "$ref": "#/$defs/vec3" },
+        "spawn_new_yaw": { "$ref": "#/$defs/count" },
+        "spawn_ground_gap_mm": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["current", "new"],
+          "properties": {
+            "current": { "oneOf": [{ "type": "integer" }, { "type": "null" }] },
+            "new": { "oneOf": [{ "type": "integer" }, { "type": "null" }] }
+          }
+        },
+        "tiles_only_current": { "$ref": "#/$defs/texts" },
+        "tiles_only_new": { "$ref": "#/$defs/texts" },
+        "attribution_final": { "$ref": "#/$defs/texts" },
+        "attribution_new": { "$ref": "#/$defs/texts" }
+      }
+    },
+    "residual": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["attribution_differs", "conflicts", "contributions", "held", "provenance_only", "spawn_differs"],
+      "properties": {
+        "provenance_only": { "$ref": "#/$defs/count" },
+        "conflicts": { "$ref": "#/$defs/count" },
+        "held": { "$ref": "#/$defs/count" },
+        "contributions": { "$ref": "#/$defs/count" },
+        "spawn_differs": { "type": "boolean" },
+        "attribution_differs": { "type": "boolean" }
+      }
+    }
+  },
+  "$defs": {
+    "text": { "type": "string", "minLength": 1 },
+    "texts": { "type": "array", "items": { "$ref": "#/$defs/text" } },
+    "id": { "type": "string", "pattern": "^blake3:[0-9a-f]{64}$" },
+    "optionalId": { "oneOf": [{ "$ref": "#/$defs/id" }, { "type": "null" }] },
+    "count": { "type": "integer", "minimum": 0 },
+    "vec3": { "type": "array", "items": { "type": "integer" }, "minItems": 3, "maxItems": 3 },
+    "op": { "enum": ["add", "replace", "remove", "move"] },
+    "code": {
+      "enum": [
+        "takedown", "contribution", "origin-unclear", "removed-by-contribution", "dependent-contribution",
+        "possible-duplicate", "removed-bounds-unknown", "tile-not-in-world", "terrain-edges", "height-coupled",
+        "per-tile-removal", "mass-removal", "unexplained-change", "manual-hold", "unit-held", "unit-too-large",
+        "would-empty-tile", "spawn"
+      ]
+    },
+    "sourceVersions": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["dataset", "versions"],
+        "properties": {
+          "dataset": { "$ref": "#/$defs/text" },
+          "versions": { "$ref": "#/$defs/texts" }
+        }
+      }
+    },
+    "entry": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "current_manifest_id", "feature_id", "layer", "new_content_key", "new_manifest_id", "new_tile", "reasons",
+        "tile", "would_be"
+      ],
+      "properties": {
+        "layer": { "$ref": "#/$defs/text" },
+        "feature_id": { "$ref": "#/$defs/text" },
+        "tile": { "$ref": "#/$defs/text" },
+        "new_tile": { "oneOf": [{ "$ref": "#/$defs/text" }, { "type": "null" }] },
+        "would_be": { "$ref": "#/$defs/op" },
+        "current_manifest_id": { "$ref": "#/$defs/optionalId" },
+        "new_manifest_id": { "$ref": "#/$defs/optionalId" },
+        "new_content_key": { "$ref": "#/$defs/optionalId" },
+        "reasons": {
+          "type": "array",
+          "minItems": 1,
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["code", "details", "rule"],
+            "properties": {
+              "rule": { "type": "string", "pattern": "^H[0-9]+[ab]?$" },
+              "code": { "$ref": "#/$defs/code" },
+              "details": { "$ref": "#/$defs/text" }
+            }
+          }
+        }
+      }
+    }
+  }
+}

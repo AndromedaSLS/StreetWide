@@ -1,7 +1,9 @@
 //! Fuzzing of the world-format readers (roadmap M1, "Before announcing"):
 //! canonical JSON and every document type with its rules, the glb reader,
 //! the contribution documents and the world log, content ids, cell keys,
-//! store paths and reads, and whole-store validation.
+//! store paths and reads, whole-store validation, world log directories
+//! (`WorldLog::open` and `--log` merges), `--require-base` on bundles, and
+//! the merge commands' arguments.
 //!
 //! Every reader of untrusted bytes must return an error, never panic, hang,
 //! overflow or allocate without bound; what a reader accepts must re-encode
@@ -13,20 +15,21 @@
 mod common;
 mod fuzzing;
 
-use std::collections::BTreeMap;
-use std::path::{Component, Path};
+use std::collections::{BTreeMap, BTreeSet};
+use std::path::{Component, Path, PathBuf};
 use std::sync::OnceLock;
 use std::sync::atomic::{AtomicU64, Ordering};
 
 use fuzzing::{Rng, Target};
 use op_world::cjson;
 use op_world::contrib::{
-    CONTRIBUTION_CONTRACT_VERSION, ChangeSet, CheckReport, Decision, MergeRecord, Review, Verdict,
-    verify_log,
+    CONTRIBUTION_CONTRACT_VERSION, Change, ChangeSet, CheckReport, Decision, MergeRecord, Op,
+    Review, Verdict, verify_log,
 };
 use op_world::gate;
 use op_world::glb::{self, GlbMesh, Material, Node, Primitive, mm_to_f32};
 use op_world::keys::{RegionKey, TileKey};
+use op_world::merge::{LOG_LOCK, MergeArgs, MergeOutput, WorldLog, baseline, require_base};
 use op_world::rules;
 use op_world::sample::parse_mesh_specs;
 use op_world::validate::{Report, validate_store};
@@ -581,7 +584,7 @@ fn store_reads() {
                 assert_eq!(id, ContentId::of(bytes));
                 assert!(store.has_object(&id, kind));
                 assert!(store.read_object(&id, kind).expect("read back") == bytes);
-                let layered = Store::layered(&empty_root, vec![dir.clone()]);
+                let layered = Store::layered(&empty_root, vec![dir.to_path_buf()]);
                 assert!(layered.read_object(&id, kind).expect("found in a fallback") == bytes);
                 // Under any other id, a hash mismatch.
                 let other = ContentId::of(&[bytes, b"~".as_slice()].concat());
@@ -1185,9 +1188,1471 @@ fn world_log() {
     );
 }
 
+// ------------------------------------------------- world log directories --
+//
+// A world log may come from elsewhere (a clone of the canonical log), so
+// `WorldLog::open` and a `--log` merge read and write crafted directories:
+// files mutated, truncated, grown, renamed, removed or added, and on Unix
+// links and FIFOs where files and directories should be. Inputs are
+// directory trees: a control byte, then the entries in the order they are
+// made, each a part of its own for shrinking.
+
+/// What a crafted directory holds at one path.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+enum Kind {
+    File,
+    Dir,
+    /// A link. The entry's bytes name its target: a path in the same tree,
+    /// or `/dev/zero`.
+    Link,
+    /// A FIFO (Unix only): a reader that opens one waits forever.
+    Fifo,
+}
+
+const KINDS: [Kind; 4] = [Kind::File, Kind::Dir, Kind::Link, Kind::Fifo];
+
+/// One entry of a crafted tree: its path (`/`-separated) and what is there.
+#[derive(Clone, Debug)]
+struct Entry {
+    kind: Kind,
+    path: String,
+    bytes: Vec<u8>,
+}
+
+impl Entry {
+    fn file(path: &str, bytes: &[u8]) -> Entry {
+        Entry {
+            kind: Kind::File,
+            path: path.into(),
+            bytes: bytes.to_vec(),
+        }
+    }
+}
+
+/// Length-prefixed parts as one input.
+fn parts_join(parts: &[Vec<u8>]) -> Vec<u8> {
+    let mut out = Vec::new();
+    for p in parts {
+        out.extend_from_slice(&(p.len() as u32).to_le_bytes());
+        out.extend_from_slice(p);
+    }
+    out
+}
+
+fn parts_split(mut input: &[u8]) -> Option<Vec<Vec<u8>>> {
+    let mut parts = Vec::new();
+    while !input.is_empty() {
+        let len = u32::from_le_bytes(input.get(..4)?.try_into().ok()?) as usize;
+        parts.push(input.get(4..4usize.checked_add(len)?)?.to_vec());
+        input = &input[4 + len..];
+    }
+    Some(parts)
+}
+
+/// A tree as one input: the control byte `flags`, then each entry as its
+/// kind, its path, a zero byte and its bytes.
+fn tree_encode(flags: u8, entries: &[Entry]) -> Vec<u8> {
+    let mut parts = vec![vec![flags]];
+    for e in entries {
+        let mut part = vec![e.kind as u8];
+        part.extend_from_slice(e.path.as_bytes());
+        part.push(0);
+        part.extend_from_slice(&e.bytes);
+        parts.push(part);
+    }
+    parts_join(&parts)
+}
+
+/// The flags and entries of an encoded tree. Entries whose kind or path
+/// is unusable (a shrunk input can have them) are left out.
+fn tree_decode(input: &[u8]) -> Option<(u8, Vec<Entry>)> {
+    let parts = parts_split(input)?;
+    let (control, rest) = parts.split_first()?;
+    let entries = rest
+        .iter()
+        .filter_map(|part| {
+            let (&kind, rest) = part.split_first()?;
+            let end = rest.iter().position(|&b| b == 0).unwrap_or(rest.len());
+            let path = std::str::from_utf8(&rest[..end])
+                .ok()
+                .filter(|p| safe_path(p))?;
+            Some(Entry {
+                kind: *KINDS.get(usize::from(kind))?,
+                path: path.into(),
+                bytes: rest.get(end + 1..).unwrap_or_default().to_vec(),
+            })
+        })
+        .collect();
+    Some((control.first().copied().unwrap_or(0), entries))
+}
+
+/// A relative path that stays in its tree and means the same file on every
+/// platform: at most 6 parts of ASCII letters, digits, `.`, `_` and `-`,
+/// none ending in a dot (so none is `.` or `..`) or naming a Windows device
+/// such as `nul` (a few harmless names like `com` are refused too).
+fn safe_path(path: &str) -> bool {
+    const DEVICES: &[&str] = &["con", "prn", "aux", "nul", "com", "lpt"];
+    let parts: Vec<&str> = path.split('/').collect();
+    parts.len() <= 6
+        && parts.iter().all(|p| {
+            let stem = p.split('.').next().unwrap_or("").to_ascii_lowercase();
+            let device = DEVICES
+                .iter()
+                .any(|d| stem == *d || (stem.len() == 4 && stem.starts_with(d)));
+            !p.is_empty()
+                && p.len() <= 100
+                && !p.ends_with('.')
+                && !device
+                && p.bytes()
+                    .all(|b| b.is_ascii_alphanumeric() || b"._-".contains(&b))
+        })
+}
+
+/// `root` joined with a `/`-separated path.
+fn tree_path(root: &Path, path: &str) -> PathBuf {
+    path.split('/')
+        .fold(root.to_path_buf(), |p, part| p.join(part))
+}
+
+/// Where a link entry points: `/dev/zero`, or a path in the tree at `root`
+/// (which may not exist).
+fn link_target(root: &Path, spec: &[u8]) -> PathBuf {
+    if spec == b"/dev/zero" {
+        return PathBuf::from("/dev/zero");
+    }
+    match std::str::from_utf8(spec).ok().filter(|p| safe_path(p)) {
+        Some(p) => tree_path(root, p),
+        None => root.join("missing"),
+    }
+}
+
+/// A FIFO in `dir` for crafted trees to link to, made with `mkfifo` as the
+/// store regression test does; every FIFO in a tree is a hard link to it.
+#[cfg(unix)]
+fn fifo_in(dir: &Path) -> Option<PathBuf> {
+    let fifo = dir.join("fifo");
+    let made = std::process::Command::new("mkfifo")
+        .arg(&fifo)
+        .status()
+        .expect("run mkfifo");
+    assert!(made.success(), "mkfifo failed");
+    Some(fifo)
+}
+
+#[cfg(not(unix))]
+fn fifo_in(_: &Path) -> Option<PathBuf> {
+    None
+}
+
+/// Makes the tree under `root`, entry by entry. An entry whose path is
+/// taken, or whose parent cannot be made a directory, is left out, and so is
+/// one this platform cannot make: a FIFO off Unix, a link where making one
+/// needs a right the test does not have (Windows). The checks look at the
+/// tree as it was made, never at the entries.
+fn make_tree(root: &Path, entries: &[Entry], fifo: Option<&Path>) {
+    std::fs::create_dir_all(root).expect("tree root");
+    for e in entries {
+        let path = tree_path(root, &e.path);
+        if std::fs::symlink_metadata(&path).is_ok()
+            || path
+                .parent()
+                .is_some_and(|p| std::fs::create_dir_all(p).is_err())
+        {
+            continue;
+        }
+        let _ = match e.kind {
+            Kind::File => std::fs::write(&path, &e.bytes),
+            Kind::Dir => std::fs::create_dir(&path),
+            Kind::Link => symlink_file(&link_target(root, &e.bytes), &path),
+            Kind::Fifo => fifo.map_or(Ok(()), |f| std::fs::hard_link(f, &path)),
+        };
+    }
+}
+
+/// Everything under `root` as it is, links not followed: each path with
+/// its kind and, for a regular file, its bytes (for a link, its target).
+fn snapshot(root: &Path) -> Vec<(String, &'static str, Vec<u8>)> {
+    fn walk(root: &Path, dir: &Path, out: &mut Vec<(String, &'static str, Vec<u8>)>) {
+        let Ok(entries) = std::fs::read_dir(dir) else {
+            return;
+        };
+        for entry in entries.flatten() {
+            let path = entry.path();
+            let rel = path
+                .strip_prefix(root)
+                .expect("under the root")
+                .to_string_lossy()
+                .replace('\\', "/");
+            let Ok(meta) = std::fs::symlink_metadata(&path) else {
+                continue;
+            };
+            if meta.is_dir() {
+                out.push((rel, "dir", Vec::new()));
+                walk(root, &path, out);
+            } else if meta.is_file() {
+                out.push((rel, "file", std::fs::read(&path).unwrap_or_default()));
+            } else if meta.file_type().is_symlink() {
+                let target = std::fs::read_link(&path).unwrap_or_default();
+                out.push((rel, "link", target.to_string_lossy().as_bytes().to_vec()));
+            } else {
+                out.push((rel, "other", Vec::new()));
+            }
+        }
+    }
+    let mut out = Vec::new();
+    walk(root, root, &mut out);
+    out.sort();
+    out
+}
+
+/// The bytes of the file `parts` under `root`, if every part on the way is
+/// a directory itself and the last a regular file: no links followed, no
+/// FIFO opened.
+fn regular_file(root: &Path, parts: &[&str]) -> Option<Vec<u8>> {
+    let mut path = root.to_path_buf();
+    for (k, part) in parts.iter().enumerate() {
+        path.push(part);
+        let meta = std::fs::symlink_metadata(&path).ok()?;
+        let wanted = if k + 1 == parts.len() {
+            meta.is_file()
+        } else {
+            meta.is_dir()
+        };
+        if !wanted {
+            return None;
+        }
+    }
+    std::fs::read(&path).ok()
+}
+
+/// What `WorldLog::open` must find in the log at `root`, worked out from
+/// the directory as it is (RFC 0002 section 6 and the layout of
+/// `WorldLog`): each record's id, record and bytes, or `None` if the log
+/// must be refused.
+fn expected_log(root: &Path) -> Option<Vec<(ContentId, MergeRecord, Vec<u8>)>> {
+    let mut names = Vec::new();
+    if !std::fs::symlink_metadata(root.join("log")).ok()?.is_dir() {
+        return None;
+    }
+    for entry in std::fs::read_dir(root.join("log")).ok()? {
+        names.push(entry.ok()?.file_name().into_string().ok()?);
+    }
+    names.sort();
+    if names.is_empty() {
+        return None;
+    }
+    let mut records = Vec::new();
+    for (i, name) in names.iter().enumerate() {
+        if *name != format!("{i:08}.json") {
+            return None;
+        }
+        let bytes = regular_file(root, &["log", name])?;
+        let record = MergeRecord::from_bytes(&bytes).ok()?;
+        records.push((ContentId::of(&bytes), record, bytes));
+    }
+    let chain: Vec<(ContentId, MergeRecord)> =
+        records.iter().map(|(id, r, _)| (*id, r.clone())).collect();
+    expected_log_result(&chain)?;
+    for (_, r, _) in &records {
+        if let Some(id) = r.change_id {
+            let bytes = regular_file(root, &["changes", &id.hex(), "change.json"])?;
+            if ContentId::of(&bytes) != id || ChangeSet::from_bytes(&bytes).is_err() {
+                return None;
+            }
+        }
+    }
+    Some(records)
+}
+
+/// A world log made with the library calls behind `op_world baseline --log`
+/// and `op_world merge --log`: the fixture world's baseline, the sample
+/// facade merged, and the facade taken down again, back to the baseline's
+/// world. Also what merging the facade once more takes, for the `--log`
+/// merge target, which merges it with a stand-in for the gate.
+struct LogCorpus {
+    /// The log's files, by path.
+    files: Vec<(String, Vec<u8>)>,
+    /// `world.json` of the fixture world (w0), where the log ends.
+    world: Vec<u8>,
+    /// The world manifest after the facade (w1).
+    world_after: Vec<u8>,
+    /// The candidate world the gate built for the facade on w0, by path.
+    candidate: Vec<(String, Vec<u8>)>,
+    /// The gate's report on the facade on w0.
+    report: Vec<u8>,
+    /// The facade's `change.json`.
+    change: Vec<u8>,
+    /// Where merging the facade writes in the log: its change set, its
+    /// report and the world after it.
+    next: [String; 3],
+}
+
+fn facade_bundle() -> PathBuf {
+    fuzzing::repo_root().join("fixtures/changes/facade-sample")
+}
+
+fn copy_tree(from: &Path, to: &Path) {
+    for f in common::files_under(from) {
+        let dst = to.join(&f);
+        std::fs::create_dir_all(dst.parent().expect("parent")).expect("mkdir");
+        std::fs::copy(from.join(&f), dst).expect("copy");
+    }
+}
+
+fn read_tree(dir: &Path) -> Vec<(String, Vec<u8>)> {
+    common::files_under(dir)
+        .into_iter()
+        .map(|f| {
+            let bytes = std::fs::read(dir.join(&f)).expect("read");
+            (f, bytes)
+        })
+        .collect()
+}
+
+fn reviewer() -> Review {
+    Review {
+        reviewer: "github:reviewer".into(),
+        verdict: Verdict::Better,
+        notes: "Checked.".into(),
+    }
+}
+
+/// The arguments of `op_world merge <world> <bundle> --log <log>
+/// --require-base`; `MergeArgs::run` takes the gate.
+fn merge_args(world: &Path, bundle: &Path, log: &Path, decision: Decision) -> MergeArgs {
+    MergeArgs {
+        world_dir: world.into(),
+        bundle_dir: bundle.into(),
+        output: MergeOutput::Log(log.into()),
+        decision,
+        reviews: if decision == Decision::Merged {
+            vec![reviewer()]
+        } else {
+            Vec::new()
+        },
+        reasons: "Fuzz.".into(),
+        require_base: true,
+    }
+}
+
+fn log_corpus() -> &'static LogCorpus {
+    static CORPUS: OnceLock<LogCorpus> = OnceLock::new();
+    CORPUS.get_or_init(|| {
+        let dir = common::temp_dir("fuzz-log-corpus");
+        let (world, log, kept) = (dir.join("world"), dir.join("log"), dir.join("candidate"));
+        copy_tree(&fuzzing::repo_root().join("fixtures/world"), &world);
+        let w0 = std::fs::read(world.join("world.json")).expect("world.json");
+        let record = baseline(&world, "The ingest fixture.").expect("baseline");
+        WorldLog::start(&log, &record, &w0).expect("start the log");
+        merge_args(&world, &facade_bundle(), &log, Decision::Merged)
+            .run(&dir.join("scratch"), |w, b, c| {
+                let report = gate::run(w, b, c)?;
+                copy_tree(c, &kept);
+                Ok(report)
+            })
+            .expect("merge the facade");
+        let w1 = std::fs::read(world.join("world.json")).expect("world.json");
+        // The facade taken down by a change set planned on w1.
+        let change = std::fs::read(facade_bundle().join("change.json")).expect("change.json");
+        let added = ChangeSet::from_bytes(&change).expect("the facade").changes[0].clone();
+        let takedown = ChangeSet {
+            format: ChangeSet::FORMAT.into(),
+            contract_version: CONTRIBUTION_CONTRACT_VERSION.into(),
+            base_world_id: ContentId::of(&w1),
+            title: "Remove the sample facade (fuzz corpus)".into(),
+            author: "github:maintainer".into(),
+            rationale: "Owner request (test).".into(),
+            changes: vec![Change {
+                op: Op::Remove,
+                parent_version_id: added.manifest_id,
+                manifest_id: None,
+                ..added
+            }],
+        };
+        let bundle = dir.join("takedown");
+        std::fs::create_dir_all(&bundle).expect("bundle");
+        std::fs::write(
+            bundle.join("change.json"),
+            takedown.to_bytes().expect("valid"),
+        )
+        .expect("write change.json");
+        merge_args(&world, &bundle, &log, Decision::Takedown)
+            .run(&dir.join("scratch"), gate::run)
+            .expect("take the facade down");
+        assert!(std::fs::read(world.join("world.json")).expect("world.json") == w0);
+        let report = std::fs::read(facade_bundle().join("report.json")).expect("report.json");
+        let next = [
+            format!("changes/{}/change.json", ContentId::of(&change).hex()),
+            format!("reports/{}.json", ContentId::of(&report).hex()),
+            format!("worlds/{}.json", ContentId::of(&w1).hex()),
+        ];
+        let files = read_tree(&log);
+        assert_eq!(
+            files.len(),
+            9,
+            "3 records, 2 change sets, 2 reports, 2 worlds"
+        );
+        for path in &next {
+            assert!(files.iter().any(|(p, _)| p == path), "{path} is in the log");
+        }
+        let candidate = read_tree(&kept);
+        std::fs::remove_dir_all(&dir).ok();
+        LogCorpus {
+            files,
+            world: w0,
+            world_after: w1,
+            candidate,
+            report,
+            change,
+            next,
+        }
+    })
+}
+
+/// Stands in for the gate when the facade is merged once more: builds the
+/// candidate world the gate built for the corpus and returns its report,
+/// so the `--log` merge target spends its time on the log.
+fn stand_in_gate(
+    c: &LogCorpus,
+) -> impl FnOnce(&Path, &Path, &Path) -> op_world::Result<CheckReport> + '_ {
+    move |_, _, candidate| {
+        for (path, bytes) in &c.candidate {
+            let to = tree_path(candidate, path);
+            std::fs::create_dir_all(to.parent().expect("parent")).expect("candidate");
+            std::fs::write(to, bytes).expect("candidate file");
+        }
+        CheckReport::from_bytes(&c.report)
+    }
+}
+
+fn encode_value(v: &Value) -> Vec<u8> {
+    cjson::to_vec(v).unwrap_or_else(|_| serde_json::to_vec(v).expect("a JSON value serialises"))
+}
+
+fn change_id_of(record: &[u8]) -> Option<ContentId> {
+    let v: Value = serde_json::from_slice(record).ok()?;
+    ContentId::parse(v.get("change_id")?.as_str()?).ok()
+}
+
+/// Makes each record name the one before it and start from its world, as
+/// far as the records are JSON objects, so the checks behind the chain run.
+fn relink(records: &mut [Vec<u8>]) {
+    for i in 1..records.len() {
+        let previous_id = ContentId::of(&records[i - 1]).to_string();
+        let previous_world = serde_json::from_slice::<Value>(&records[i - 1])
+            .ok()
+            .and_then(|v| v.get("world_after").cloned());
+        let Ok(mut v) = serde_json::from_slice::<Value>(&records[i]) else {
+            continue;
+        };
+        let Some(record) = v.as_object_mut() else {
+            continue;
+        };
+        if record.get("decision").and_then(Value::as_str) == Some("baseline") {
+            continue;
+        }
+        record.insert("previous_record_id".into(), Value::String(previous_id));
+        if let Some(world) = previous_world {
+            record.insert("world_before".into(), world);
+        }
+        records[i] = encode_value(&v);
+    }
+}
+
+/// Edits a change set a record names and stores it under its new id, which
+/// every record that named it now names.
+fn readdress_change(rng: &mut Rng, records: &mut [Vec<u8>], others: &mut [Entry]) {
+    let named: Vec<ContentId> = records.iter().filter_map(|r| change_id_of(r)).collect();
+    if named.is_empty() {
+        return;
+    }
+    let id = *rng.pick(&named);
+    let path = format!("changes/{}/change.json", id.hex());
+    let Some(k) = others.iter().position(|e| e.path == path) else {
+        return;
+    };
+    let old = others[k].bytes.clone();
+    let value = serde_json::from_slice::<Value>(&old).ok();
+    let new = fuzzing::mutate_json(rng, &old, value.as_ref(), &old, value.as_ref());
+    let new_id = ContentId::of(&new);
+    others[k] = Entry::file(&format!("changes/{}/change.json", new_id.hex()), &new);
+    for r in records.iter_mut() {
+        if change_id_of(r) == Some(id)
+            && let Ok(mut v) = serde_json::from_slice::<Value>(r)
+            && let Some(record) = v.as_object_mut()
+        {
+            record.insert("change_id".into(), Value::String(new_id.to_string()));
+            *r = encode_value(&v);
+        }
+    }
+}
+
+/// Edits the records as documents: a field, the order, a duplicate, or a
+/// change set re-addressed. Usually the chain is linked again afterwards,
+/// so the checks after `verify_log` run.
+fn edit_records(rng: &mut Rng, records: &mut Vec<Vec<u8>>, others: &mut [Entry]) {
+    if records.is_empty() {
+        return;
+    }
+    let i = rng.below(records.len());
+    match rng.below(6) {
+        0 | 1 => {
+            let donor = serde_json::from_slice::<Value>(rng.pick(records)).ok();
+            if let Ok(mut v) = serde_json::from_slice::<Value>(&records[i]) {
+                fuzzing::edit_value(rng, &mut v, donor.as_ref());
+                records[i] = encode_value(&v);
+            }
+        }
+        2 => {
+            records.remove(i);
+        }
+        3 => {
+            let copy = records[i].clone();
+            let at = rng.below(records.len() + 1);
+            records.insert(at, copy);
+        }
+        4 => {
+            let j = rng.below(records.len());
+            records.swap(i, j);
+        }
+        _ => readdress_change(rng, records, others),
+    }
+    if rng.chance(70) {
+        relink(records);
+    }
+}
+
+fn random_hex(rng: &mut Rng) -> String {
+    ContentId::of(&rng.next_u64().to_le_bytes()).hex()
+}
+
+/// Another name for `path`: a near miss of a record's name, a temporary
+/// file's name, another directory or another content id.
+fn renamed(rng: &mut Rng, path: &str) -> String {
+    let (dir, name) = path.rsplit_once('/').unwrap_or(("", path));
+    let stem = name.strip_suffix(".json").unwrap_or(name);
+    let name = match rng.below(10) {
+        0 | 1 => format!("{:08}.json", rng.below(5)),
+        2 => format!("{:07}.json", rng.below(5)),
+        3 => format!("{:09}.json", rng.below(5)),
+        4 => format!("{name}.tmp"),
+        5 => format!("{stem}.JSON"),
+        6 => stem.to_string(),
+        7 => format!("{name}~"),
+        8 => format!("_{name}"),
+        _ => format!("{}.json", random_hex(rng)),
+    };
+    let dir = match rng.below(8) {
+        0 => "log".to_string(),
+        1 => format!("{dir}/sub").trim_start_matches('/').to_string(),
+        2 => "worlds".into(),
+        3 => format!("changes/{}", random_hex(rng)),
+        _ => dir.to_string(),
+    };
+    if dir.is_empty() {
+        name
+    } else {
+        format!("{dir}/{name}")
+    }
+}
+
+/// A link's target: a file or directory of the tree, a path that does not
+/// exist, or `/dev/zero`.
+fn link_spec(rng: &mut Rng, entries: &[Entry]) -> Vec<u8> {
+    match rng.below(6) {
+        0 => b"/dev/zero".to_vec(),
+        1 => b"missing/x".to_vec(),
+        2 => rng
+            .pick(&["log", "changes", "reports", "worlds"])
+            .as_bytes()
+            .to_vec(),
+        _ if entries.is_empty() => b"missing".to_vec(),
+        _ => entries[rng.below(entries.len())].path.as_bytes().to_vec(),
+    }
+}
+
+/// Something added to the tree: in `log/`, the lock, where the next merge
+/// writes or at its temporary paths, another change set or world.
+fn added_entry(rng: &mut Rng, entries: &[Entry], next: &[String; 3]) -> Entry {
+    let kind = if rng.chance(60) {
+        Kind::File
+    } else {
+        *rng.pick(&KINDS)
+    };
+    let path = match rng.below(8) {
+        0 => format!("log/{:08}.json", rng.below(5)),
+        1 => format!(
+            "log/{}",
+            rng.pick(&[
+                "00000003.json.tmp",
+                ".DS_Store",
+                "README.md",
+                "00000001.json~",
+                "x"
+            ])
+        ),
+        2 => LOG_LOCK.to_string(),
+        3 => rng.pick(next).clone(),
+        4 => format!("{}.tmp", rng.pick(next)),
+        5 => format!("changes/{}/change.json", random_hex(rng)),
+        6 => format!("worlds/{}.json", random_hex(rng)),
+        _ => format!("{}.json", random_hex(rng)),
+    };
+    let bytes = match kind {
+        Kind::Link => link_spec(rng, entries),
+        Kind::File if !entries.is_empty() && rng.chance(60) => {
+            entries[rng.below(entries.len())].bytes.clone()
+        }
+        Kind::File => b"{}".to_vec(),
+        _ => Vec::new(),
+    };
+    Entry { kind, path, bytes }
+}
+
+/// Replaces a directory of the tree by a link to a copy of it under
+/// `alt<n>/`: a reader that follows links would take the log as valid.
+fn link_a_directory(rng: &mut Rng, entries: &mut Vec<Entry>) {
+    let dirs: Vec<String> = entries
+        .iter()
+        .filter_map(|e| e.path.rsplit_once('/').map(|(d, _)| d.to_string()))
+        .collect::<BTreeSet<_>>()
+        .into_iter()
+        .collect();
+    if dirs.is_empty() {
+        return;
+    }
+    let dir = rng.pick(&dirs).clone();
+    let alt = format!("alt{}", rng.below(4));
+    let prefix = format!("{dir}/");
+    let mut moved = Vec::new();
+    entries.retain(|e| match e.path.strip_prefix(&prefix) {
+        Some(rest) => {
+            moved.push(Entry {
+                path: format!("{alt}/{rest}"),
+                ..e.clone()
+            });
+            false
+        }
+        None => true,
+    });
+    entries.push(Entry {
+        kind: Kind::Link,
+        path: dir,
+        bytes: alt.into_bytes(),
+    });
+    entries.extend(moved);
+}
+
+/// One edit of a tree's entries: bytes, length, name, presence or kind.
+fn edit_entries(rng: &mut Rng, entries: &mut Vec<Entry>, next: &[String; 3]) {
+    if entries.is_empty() {
+        let added = added_entry(rng, entries, next);
+        entries.push(added);
+        return;
+    }
+    let i = rng.below(entries.len());
+    match rng.below(12) {
+        0 | 1 => {
+            let donor = entries[rng.below(entries.len())].bytes.clone();
+            fuzzing::mutate_bytes(rng, &mut entries[i].bytes, &donor);
+        }
+        2 => {
+            let len = entries[i].bytes.len();
+            entries[i].bytes.truncate(rng.below(len + 1));
+        }
+        3 => {
+            // Grown: copies of itself, or padding, up to about 256 KiB.
+            let bytes = &mut entries[i].bytes;
+            if !bytes.is_empty() && rng.chance(50) {
+                let times = rng.range(2, (262_144 / bytes.len()).clamp(2, 64));
+                *bytes = bytes.repeat(times);
+            } else {
+                let n = *rng.pick(&[1, 4096, 65_536, 262_144]);
+                let pad = *rng.pick(&[b' ', b'\n', 0, b'a']);
+                bytes.extend(std::iter::repeat_n(pad, n));
+            }
+        }
+        4 => entries[i].path = renamed(rng, &entries[i].path),
+        5 => {
+            // Removed, or with everything beside it.
+            let path = entries.remove(i).path;
+            if rng.chance(30)
+                && let Some((dir, _)) = path.rsplit_once('/')
+            {
+                let prefix = format!("{dir}/");
+                entries.retain(|e| !e.path.starts_with(&prefix));
+            }
+        }
+        6 | 7 => {
+            let added = added_entry(rng, entries, next);
+            entries.push(added);
+        }
+        8 | 9 => {
+            let kind = *rng.pick(&[Kind::Dir, Kind::Link, Kind::Link, Kind::Fifo]);
+            let bytes = if kind == Kind::Link {
+                link_spec(rng, entries)
+            } else {
+                Vec::new()
+            };
+            (entries[i].kind, entries[i].bytes) = (kind, bytes);
+        }
+        10 => link_a_directory(rng, entries),
+        _ => {
+            // Where the next merge writes: missing, and something at its
+            // temporary path.
+            let path = rng.pick(next).clone();
+            entries.retain(|e| e.path != path);
+            let kind = *rng.pick(&KINDS);
+            let bytes = if kind == Kind::Link {
+                link_spec(rng, entries)
+            } else {
+                b"left by a crash".to_vec()
+            };
+            entries.push(Entry {
+                kind,
+                path: format!("{path}.tmp"),
+                bytes,
+            });
+        }
+    }
+}
+
+/// One edit of what is where the next merge writes (`next`): other bytes,
+/// another kind, missing with something at its temporary path, or its
+/// directory a file or a link.
+fn edit_next(rng: &mut Rng, entries: &mut Vec<Entry>, next: &[String; 3]) {
+    let path = rng.pick(next).clone();
+    let Some(i) = entries.iter().position(|e| e.path == path) else {
+        return;
+    };
+    match rng.below(5) {
+        0 => {
+            let donor = entries[rng.below(entries.len())].bytes.clone();
+            fuzzing::mutate_bytes(rng, &mut entries[i].bytes, &donor);
+        }
+        1 => {
+            let kind = *rng.pick(&[Kind::Dir, Kind::Link, Kind::Fifo]);
+            let bytes = if kind == Kind::Link {
+                link_spec(rng, entries)
+            } else {
+                Vec::new()
+            };
+            (entries[i].kind, entries[i].bytes) = (kind, bytes);
+        }
+        2 => {
+            let removed = entries.remove(i);
+            if rng.chance(70) {
+                let kind = *rng.pick(&KINDS);
+                let bytes = if kind == Kind::Link {
+                    link_spec(rng, entries)
+                } else {
+                    removed.bytes
+                };
+                entries.push(Entry {
+                    kind,
+                    path: format!("{path}.tmp"),
+                    bytes,
+                });
+            }
+        }
+        _ => {
+            // Its directory (`worlds`, `reports` or `changes/<hex>`) made a
+            // file, or a link to a copy of it.
+            let dir = path.rsplit_once('/').map_or("", |(d, _)| d).to_string();
+            let prefix = format!("{dir}/");
+            let mut moved = Vec::new();
+            entries.retain(|e| match e.path.strip_prefix(&prefix) {
+                Some(rest) => {
+                    moved.push(Entry {
+                        path: format!("alt/{rest}"),
+                        ..e.clone()
+                    });
+                    false
+                }
+                None => true,
+            });
+            if rng.chance(50) {
+                entries.push(Entry::file(&dir, b"not a directory"));
+            } else {
+                entries.push(Entry {
+                    kind: Kind::Link,
+                    path: dir,
+                    bytes: b"alt".to_vec(),
+                });
+                entries.extend(moved);
+            }
+        }
+    }
+}
+
+/// The corpus log, crafted: its records edited as documents (half the
+/// time), then its entries edited a few times.
+fn craft_log(rng: &mut Rng, c: &LogCorpus) -> Vec<Entry> {
+    let mut records: Vec<Vec<u8>> = Vec::new();
+    let mut others: Vec<Entry> = Vec::new();
+    for (path, bytes) in &c.files {
+        if path.starts_with("log/") {
+            records.push(bytes.clone());
+        } else {
+            others.push(Entry::file(path, bytes));
+        }
+    }
+    if rng.chance(50) {
+        for _ in 0..rng.count(3) {
+            edit_records(rng, &mut records, &mut others);
+        }
+    }
+    let mut entries: Vec<Entry> = records
+        .iter()
+        .enumerate()
+        .map(|(i, bytes)| Entry::file(&format!("log/{i:08}.json"), bytes))
+        .collect();
+    entries.extend(others);
+    if rng.chance(85) {
+        for _ in 0..rng.count(4) {
+            edit_entries(rng, &mut entries, &c.next);
+        }
+    }
+    entries
+}
+
+/// `WorldLog::open` must accept exactly the logs `expected_log` accepts,
+/// with the same records, and change nothing; it refuses the others with
+/// its documented errors.
+fn check_log_dir(root: &Path) {
+    let before = snapshot(root);
+    let expected = expected_log(root);
+    let opened = WorldLog::open(root);
+    assert!(snapshot(root) == before, "WorldLog::open changed the log");
+    match (opened, expected) {
+        (Ok(log), Some(records)) => {
+            let want: Vec<(ContentId, MergeRecord)> =
+                records.iter().map(|(id, r, _)| (*id, r.clone())).collect();
+            assert!(log.records() == want.as_slice(), "other records");
+            let (_, last, bytes) = records.last().expect("a record");
+            assert!(log.head() == bytes.as_slice(), "another head");
+            assert_eq!(log.world_id(), last.world_after);
+        }
+        (Err(e), None) => assert!(
+            matches!(e, op_world::Error::Invalid(_) | op_world::Error::Io(_)),
+            "{e:?}"
+        ),
+        (Ok(_), None) => panic!("WorldLog::open accepted a log it must refuse"),
+        (Err(e), Some(_)) => panic!("WorldLog::open refused a log it must accept: {e}"),
+    }
+}
+
+#[test]
+fn world_log_directories() {
+    let c = log_corpus();
+    let dir = common::temp_dir("fuzz-log-open");
+    let fifo = fifo_in(&dir);
+    let runs = AtomicU64::new(0);
+    fuzzing::run(
+        Target::new("log-open", 1500).parts(parts_split, parts_join),
+        |rng| tree_encode(0, &craft_log(rng, c)),
+        |input| {
+            let Some((_, entries)) = tree_decode(input) else {
+                return;
+            };
+            let root = dir.join(format!("l{}", runs.fetch_add(1, Ordering::Relaxed)));
+            make_tree(&root, &entries, fifo.as_deref());
+            check_log_dir(&root);
+            std::fs::remove_dir_all(&root).ok();
+        },
+    );
+    std::fs::remove_dir_all(&dir).ok();
+}
+
+/// Whether a `--log` merge may write `bytes` at `path` in the log at
+/// `root`: every directory on the way is a directory or missing, and the
+/// file holds exactly these bytes, or is missing with no directory at its
+/// temporary path (a file, a link or a FIFO there is removed first).
+fn writable(root: &Path, path: &str, bytes: &[u8]) -> bool {
+    let parts: Vec<&str> = path.split('/').collect();
+    let (file, dirs) = parts.split_last().expect("a path");
+    let mut at = root.to_path_buf();
+    for part in dirs {
+        at.push(part);
+        match std::fs::symlink_metadata(&at) {
+            Ok(meta) if meta.is_dir() => {}
+            Ok(_) => return false,
+            Err(_) => return true,
+        }
+    }
+    at.push(file);
+    match std::fs::symlink_metadata(&at) {
+        Ok(meta) => meta.is_file() && std::fs::read(&at).is_ok_and(|b| b == bytes),
+        Err(_) => {
+            let mut tmp = at.into_os_string();
+            tmp.push(".tmp");
+            !std::fs::symlink_metadata(&tmp).is_ok_and(|m| m.is_dir())
+        }
+    }
+}
+
+/// A `--log` merge of the facade on a crafted log, with the corpus world
+/// as the store. It must be refused, changing nothing, unless the lock is
+/// free, the log is valid and ends at the store's world, and everything
+/// where the merge writes is what it may write over (`writable`); then the
+/// store and the log are both written. Found by review: a log whose files
+/// the merge could not write was found only after the store was written,
+/// and the merge stopped with an undo hint.
+fn check_log_merge(c: &LogCorpus, base: &Path, flags: u8, entries: &[Entry], fifo: Option<&Path>) {
+    let (log, world) = (base.join("log"), base.join("world"));
+    make_tree(&log, entries, fifo);
+    std::fs::create_dir_all(&world).expect("store");
+    std::fs::write(world.join("world.json"), &c.world).expect("world.json");
+    let (w0, w1) = (ContentId::of(&c.world), ContentId::of(&c.world_after));
+    let expected = expected_log(&log);
+    let before = snapshot(&log);
+    let lock_free = std::fs::symlink_metadata(log.join(LOG_LOCK)).is_err();
+    let appends = c
+        .next
+        .iter()
+        .zip([&c.change, &c.report, &c.world_after])
+        .all(|(path, bytes)| writable(&log, path, bytes));
+    let args = MergeArgs {
+        require_base: flags & 1 == 1,
+        ..merge_args(&world, &facade_bundle(), &log, Decision::Merged)
+    };
+    let result = args.run(&base.join("scratch"), stand_in_gate(c));
+    let store = read_tree(&world);
+    let Some(records) = expected
+        .filter(|r| lock_free && appends && r.last().expect("a record").1.world_after == w0)
+    else {
+        let e = result.expect_err("a merge on this log is refused");
+        assert!(
+            matches!(e, op_world::Error::Invalid(_) | op_world::Error::Io(_)),
+            "{e:?}"
+        );
+        assert!(
+            snapshot(&log) == before,
+            "a refused merge changed the log: {e}"
+        );
+        assert!(
+            store == [("world.json".to_string(), c.world.clone())],
+            "a refused merge wrote the store: {e}"
+        );
+        return;
+    };
+    let n = records.len();
+    let (last_id, _, _) = records.last().expect("a record");
+    let line = result.expect("a merge on this log goes through");
+    assert!(store.contains(&("world.json".to_string(), c.world_after.clone())));
+    assert!(
+        line.contains(&format!(" (log/{n:08}.json): world {w0} -> {w1}")),
+        "{line}"
+    );
+    let after = WorldLog::open(&log).expect("the log opens after the merge");
+    assert_eq!(after.records().len(), n + 1);
+    for ((id, r), (want_id, want, _)) in after.records().iter().zip(&records) {
+        assert!(id == want_id && r == want, "a record changed");
+    }
+    let (_, record) = after.records().last().expect("the new record");
+    assert_eq!(record.decision, Decision::Merged);
+    assert_eq!(record.change_id, Some(ContentId::of(&c.change)));
+    assert_eq!(record.check_report_id, Some(ContentId::of(&c.report)));
+    assert_eq!((record.world_before, record.world_after), (Some(w0), w1));
+    assert_eq!(record.previous_record_id, Some(*last_id));
+    for (path, bytes) in c.next.iter().zip([&c.change, &c.report, &c.world_after]) {
+        let parts: Vec<&str> = path.split('/').collect();
+        assert!(
+            regular_file(&log, &parts).as_ref() == Some(bytes),
+            "{path} does not hold what the merge wrote"
+        );
+    }
+}
+
+#[test]
+fn log_merges_on_crafted_logs() {
+    let c = log_corpus();
+    let dir = common::temp_dir("fuzz-log-merge");
+    let fifo = fifo_in(&dir);
+    let runs = AtomicU64::new(0);
+    fuzzing::run(
+        Target::new("log-merge", 400).parts(parts_split, parts_join),
+        |rng| {
+            let flags = u8::from(rng.chance(50));
+            let mut entries = craft_log(rng, c);
+            if rng.chance(40) {
+                edit_next(rng, &mut entries, &c.next);
+            }
+            tree_encode(flags, &entries)
+        },
+        |input| {
+            let Some((flags, entries)) = tree_decode(input) else {
+                return;
+            };
+            let base = dir.join(format!("m{}", runs.fetch_add(1, Ordering::Relaxed)));
+            check_log_merge(c, &base, flags, &entries, fifo.as_deref());
+            std::fs::remove_dir_all(&base).ok();
+        },
+    );
+    std::fs::remove_dir_all(&dir).ok();
+}
+
+// ------------------------------------------------------------ require-base --
+
+/// `--require-base` reads a bundle's `change.json`, which may be anything:
+/// it must pass exactly when it is a regular file holding a change set
+/// planned on the store's world, and otherwise return the reader's error.
+#[test]
+fn require_base_on_crafted_bundles() {
+    let c = corpus();
+    let changes: Vec<&Doc> = c
+        .json
+        .iter()
+        .filter(|d| d.format() == Some(ChangeSet::FORMAT))
+        .collect();
+    assert!(changes.len() >= 2);
+    let world = fuzzing::repo_root().join("fixtures/world");
+    let (world_id, _) = Store::new(&world).read_world().expect("fixture world");
+    let dir = common::temp_dir("fuzz-require-base");
+    let fifo = fifo_in(&dir);
+    let runs = AtomicU64::new(0);
+    fuzzing::run(
+        Target::new("require-base", 2000).parts(parts_split, parts_join),
+        |rng| {
+            let doc = rng.pick(&changes);
+            let donor = rng.pick(&changes);
+            let bytes = if rng.chance(10) {
+                doc.bytes.clone()
+            } else {
+                fuzzing::mutate_json(
+                    rng,
+                    &doc.bytes,
+                    doc.value.as_ref(),
+                    &donor.bytes,
+                    donor.value.as_ref(),
+                )
+            };
+            // A link to `copy.json`, a regular file holding a valid change
+            // set: only a reader that follows links would take it.
+            let (kind, bytes) = match rng.below(20) {
+                0 => (Kind::Dir, Vec::new()),
+                1 | 2 => (
+                    Kind::Link,
+                    rng.pick(&["copy.json", "/dev/zero", "missing"])
+                        .as_bytes()
+                        .to_vec(),
+                ),
+                3 => (Kind::Fifo, Vec::new()),
+                _ => (Kind::File, bytes),
+            };
+            let name = if rng.chance(3) {
+                "x.json"
+            } else {
+                "change.json"
+            };
+            let change = Entry {
+                kind,
+                path: name.into(),
+                bytes,
+            };
+            tree_encode(0, &[change, Entry::file("copy.json", &doc.bytes)])
+        },
+        |input| {
+            let Some((_, entries)) = tree_decode(input) else {
+                return;
+            };
+            let bundle = dir.join(format!("b{}", runs.fetch_add(1, Ordering::Relaxed)));
+            make_tree(&bundle, &entries, fifo.as_deref());
+            let expected =
+                regular_file(&bundle, &["change.json"]).map(|b| ChangeSet::from_bytes(&b));
+            let result = require_base(&world, &bundle);
+            std::fs::remove_dir_all(&bundle).ok();
+            match expected {
+                None => assert!(
+                    matches!(&result, Err(op_world::Error::Io(m)) if m.starts_with("change.json: ")),
+                    "{result:?}"
+                ),
+                Some(Err(e)) => assert_eq!(result, Err(e)),
+                Some(Ok(change)) if change.base_world_id == world_id => assert_eq!(result, Ok(())),
+                Some(Ok(change)) => assert_eq!(
+                    result,
+                    Err(op_world::Error::Invalid(format!(
+                        "the store holds world {world_id}, but this change set was planned on {}; plan the refresh again",
+                        change.base_world_id
+                    )))
+                ),
+            }
+        },
+    );
+    std::fs::remove_dir_all(&dir).ok();
+}
+
+// -------------------------------------------------------- merge arguments --
+
+const MERGE_OPTIONS: &[&str] = &[
+    "--previous",
+    "--record",
+    "--report",
+    "--log",
+    "--reason",
+    "--review",
+    "--takedown",
+    "--require-base",
+];
+
+/// Options that are not quite the merge commands' options.
+const NEAR_OPTIONS: &[&str] = &[
+    "--",
+    "---log",
+    "--Log",
+    "-log",
+    "--log=l",
+    "--require-bas",
+    "--require-base=yes",
+    "--revie",
+    "--replay",
+    "--takedowns",
+    "--world",
+    "-",
+    "\u{2014}log",
+];
+
+const ARG_VALUES: &[&str] = &[
+    "w", "b", "l", "p.json", "r.json", "g.json", "", " ", "-x", "x y", "C:\\w", "/w", "\u{e9}",
+    "\u{feff}", "Why.",
+];
+
+const REVIEW_VALUES: &[&str] = &[
+    "github:a=better",
+    "github:a=better:Fine.",
+    "github:b=not_better",
+    "github:c=blocked:No.",
+    "=better",
+    "a=",
+    "a",
+    "a=great",
+    "a==better",
+    "a=better:",
+    "a=better:x:y",
+    "a=:x",
+    "a=BETTER",
+    "a = better",
+];
+
+/// Arguments for `MergeArgs::parse`: the merge commands' options, mostly in
+/// a valid order, then tokens dropped, repeated, swapped or added (options,
+/// near misses, values).
+fn merge_argv(rng: &mut Rng) -> Vec<String> {
+    fn option(argv: &mut Vec<String>, name: &str, value: &str) {
+        argv.push(name.into());
+        argv.push(value.into());
+    }
+    let mut argv: Vec<String> = vec![
+        (*rng.pick(&["w", "world", "--log", ""])).into(),
+        (*rng.pick(&["b", "bundle", "-", ""])).into(),
+    ];
+    if rng.chance(50) {
+        option(&mut argv, "--log", "l");
+    } else {
+        for name in ["--previous", "--record", "--report"] {
+            option(&mut argv, name, rng.pick(ARG_VALUES));
+        }
+    }
+    option(&mut argv, "--reason", "Why.");
+    for _ in 0..rng.below(3) {
+        option(&mut argv, "--review", rng.pick(REVIEW_VALUES));
+    }
+    for flag in ["--takedown", "--require-base"] {
+        if rng.chance(30) {
+            argv.push(flag.into());
+        }
+    }
+    for _ in 0..rng.count(6) {
+        let i = rng.below(argv.len() + 1);
+        let token = match rng.below(4) {
+            0 => rng.pick(MERGE_OPTIONS),
+            1 => rng.pick(NEAR_OPTIONS),
+            2 => rng.pick(REVIEW_VALUES),
+            _ => rng.pick(ARG_VALUES),
+        };
+        match rng.below(6) {
+            0 if i < argv.len() => {
+                argv.remove(i);
+            }
+            1 if i < argv.len() => {
+                let copy = argv[i].clone();
+                argv.insert(i, copy);
+            }
+            2 if i < argv.len() => {
+                let j = rng.below(argv.len());
+                argv.swap(i, j);
+            }
+            3 => argv.truncate(i),
+            _ => argv.insert(i, (*token).into()),
+        }
+    }
+    argv
+}
+
+/// What `MergeArgs::parse` must give, restated from `MergeArgs::USAGE` and
+/// its documentation: the arguments, or `None` for a usage error.
+fn expected_merge_args(args: &[String]) -> Option<MergeArgs> {
+    let [world, bundle, rest @ ..] = args else {
+        return None;
+    };
+    // No directory may start with `--` or be empty.
+    if [world, bundle]
+        .iter()
+        .any(|d| d.starts_with("--") || d.is_empty())
+    {
+        return None;
+    }
+    let mut values: BTreeMap<&str, String> = BTreeMap::new();
+    let (mut reviews, mut takedown, mut require_base) = (Vec::new(), false, false);
+    let mut i = 0;
+    while i < rest.len() {
+        let option = rest[i].as_str();
+        let value = rest.get(i + 1).filter(|v| !v.starts_with("--"));
+        i += 1 + usize::from(value.is_some());
+        match option {
+            "--takedown" if value.is_none() => takedown = true,
+            "--require-base" if value.is_none() => require_base = true,
+            "--review" => {
+                let (reviewer, rest) = value.map_or("", String::as_str).split_once('=')?;
+                let (verdict, notes) = rest.split_once(':').unwrap_or((rest, rest));
+                let verdict = match verdict {
+                    "better" => Verdict::Better,
+                    "not_better" => Verdict::NotBetter,
+                    "blocked" => Verdict::Blocked,
+                    _ => return None,
+                };
+                reviews.push(Review {
+                    reviewer: reviewer.into(),
+                    verdict,
+                    notes: notes.into(),
+                });
+            }
+            "--previous" | "--record" | "--report" | "--log" | "--reason" => {
+                // Every value but the reasons is a path, and no path may be
+                // empty.
+                let value = value?;
+                if value.is_empty() && option != "--reason" {
+                    return None;
+                }
+                if values.insert(option, value.clone()).is_some() {
+                    return None;
+                }
+            }
+            _ => return None,
+        }
+    }
+    let output = match values.remove("--log") {
+        Some(_) if values.keys().any(|k| *k != "--reason") => return None,
+        Some(log) => MergeOutput::Log(log.into()),
+        None => MergeOutput::Files {
+            previous: values.remove("--previous")?.into(),
+            record: values.remove("--record")?.into(),
+            report: values.remove("--report")?.into(),
+        },
+    };
+    Some(MergeArgs {
+        world_dir: world.into(),
+        bundle_dir: bundle.into(),
+        output,
+        decision: if takedown {
+            Decision::Takedown
+        } else {
+            Decision::Merged
+        },
+        reviews,
+        reasons: values.remove("--reason")?,
+        require_base,
+    })
+}
+
+/// A message `MergeArgs::parse` gives for a usage error.
+fn is_usage_error(m: &str) -> bool {
+    let valued = ["--previous", "--record", "--report", "--log", "--reason"];
+    m == format!("merge takes {}", MergeArgs::USAGE)
+        || m == "<world-dir> and <bundle-dir> must not be empty"
+        || ["--previous", "--record", "--report", "--log"]
+            .iter()
+            .any(|o| m == format!("{o} must not be empty"))
+        || m == "--review is <handle>=<verdict>[:<notes>]"
+        || m.starts_with("unknown verdict ")
+        || m.starts_with("unknown option --")
+        || m.starts_with("unexpected argument ")
+        || ["--takedown", "--require-base"]
+            .iter()
+            .any(|o| m == format!("{o} takes no value"))
+        || valued.iter().any(|o| {
+            m == format!("{o} <value> is required")
+                || m == format!("{o} is given twice")
+                || m.starts_with(&format!("{o} cannot be combined with --log"))
+        })
+}
+
+/// `MergeArgs::parse` on arguments from the real options and junk: the
+/// arguments their documentation gives, or a usage error, never a panic.
+#[test]
+fn merge_arguments() {
+    fuzzing::run(
+        Target::new("merge-args", 20_000),
+        |rng| merge_argv(rng).join("\0").into_bytes(),
+        |input| {
+            let args: Vec<String> = String::from_utf8_lossy(input)
+                .split('\0')
+                .map(String::from)
+                .collect();
+            let parsed = MergeArgs::parse(&args);
+            match (&parsed, expected_merge_args(&args)) {
+                (Ok(got), Some(want)) => assert_eq!(*got, want),
+                (Err(m), None) => assert!(is_usage_error(m), "{m}"),
+                (_, want) => panic!("{args:?}: parsed as {parsed:?}, expected {want:?}"),
+            }
+        },
+    );
+}
+
 // ------------------------------------------------------------- regressions --
 //
 // Inputs that once broke a reader, minimised. Each must stay an error.
+
+// The four inputs below were found by the log-open, log-merge,
+// require-base and merge-args targets, run on Linux against the readers as
+// they were before they were hardened (the targets were written with the
+// fix). The two hangs are not shrunk by the engine; these are their
+// essence.
+
+/// The merge arguments `-- "" --log "" --reason ""` (the merge-args target,
+/// shrunk): `--` was taken as the world directory. The two directories come
+/// first, so an option there is a usage error, as in `op_replay merge`.
+#[test]
+fn regression_merge_args_take_no_option_as_a_directory() {
+    let args: Vec<String> = String::from_utf8_lossy(b"--\x00\x00--log\x00\x00--reason\x00")
+        .split('\0')
+        .map(String::from)
+        .collect();
+    assert_eq!(
+        MergeArgs::parse(&args),
+        Err(format!("merge takes {}", MergeArgs::USAGE))
+    );
+}
+
+/// A bundle whose `change.json` is a FIFO (the require-base target):
+/// `--require-base` read it with `fs::read`, which waited forever for a
+/// writer. It is refused unopened. Runs through the engine for its hang
+/// watchdog.
+#[cfg(unix)]
+#[test]
+fn regression_require_base_never_opens_a_fifo() {
+    let dir = common::temp_dir("regression-require-base-fifo");
+    let fifo = fifo_in(&dir);
+    let world = fuzzing::repo_root().join("fixtures/world");
+    fuzzing::run(
+        Target::new("require-base-fifo", 1).exactly(1),
+        |_| {
+            let fifo = Entry {
+                kind: Kind::Fifo,
+                path: "change.json".into(),
+                bytes: Vec::new(),
+            };
+            tree_encode(0, &[fifo])
+        },
+        |input| {
+            let (_, entries) = tree_decode(input).expect("a tree");
+            let bundle = dir.join("bundle");
+            make_tree(&bundle, &entries, fifo.as_deref());
+            assert_eq!(
+                require_base(&world, &bundle),
+                Err(op_world::Error::Io(
+                    "change.json: not a regular file".into()
+                ))
+            );
+            std::fs::remove_dir_all(&bundle).ok();
+        },
+    );
+    std::fs::remove_dir_all(&dir).ok();
+}
+
+/// The corpus log with `log/00000001.json` a FIFO (the log-open target):
+/// `WorldLog::open` read it with `fs::read`, which waited forever. It is
+/// refused unopened. Runs through the engine for its hang watchdog.
+#[cfg(unix)]
+#[test]
+fn regression_a_log_record_that_is_a_fifo_is_never_opened() {
+    let c = log_corpus();
+    let dir = common::temp_dir("regression-log-fifo");
+    let fifo = fifo_in(&dir);
+    fuzzing::run(
+        Target::new("log-open-fifo", 1).exactly(1),
+        |_| {
+            let entries: Vec<Entry> = c
+                .files
+                .iter()
+                .map(|(path, bytes)| match path.as_str() {
+                    "log/00000001.json" => Entry {
+                        kind: Kind::Fifo,
+                        path: path.clone(),
+                        bytes: Vec::new(),
+                    },
+                    _ => Entry::file(path, bytes),
+                })
+                .collect();
+            tree_encode(0, &entries)
+        },
+        |input| {
+            let (_, entries) = tree_decode(input).expect("a tree");
+            let root = dir.join("log");
+            make_tree(&root, &entries, fifo.as_deref());
+            check_log_dir(&root);
+            assert_eq!(
+                WorldLog::open(&root)
+                    .err()
+                    .map(|e| e.to_string())
+                    .as_deref(),
+                Some(
+                    "invalid: the world log's log/00000001.json is not a regular file; records are regular files, not links, directories or pipes"
+                )
+            );
+            std::fs::remove_dir_all(&root).ok();
+        },
+    );
+    std::fs::remove_dir_all(&dir).ok();
+}
+
+/// The corpus log with `worlds` a link to a directory that holds the
+/// baseline's world but not the next one (the log-merge target): a `--log`
+/// merge followed the link and wrote the new world into the linked
+/// directory, outside the log, and its undo hint named a world it reached
+/// through the link. The merge is now refused before it writes anything,
+/// as the target's checks require. Runs where the platform lets a test make
+/// links (not on Windows without the right).
+#[test]
+fn regression_a_log_merge_writes_through_no_linked_directory() {
+    let c = log_corpus();
+    let dir = common::temp_dir("regression-log-merge-link");
+    if let Err(e) = symlink_file(&dir.join("missing"), &dir.join("probe")) {
+        println!("not run: cannot make a link here ({e})");
+        std::fs::remove_dir_all(&dir).ok();
+        return;
+    }
+    let after = format!("{}.json", ContentId::of(&c.world_after).hex());
+    let mut entries = vec![Entry {
+        kind: Kind::Link,
+        path: "worlds".into(),
+        bytes: b"alt".to_vec(),
+    }];
+    for (path, bytes) in &c.files {
+        match path.strip_prefix("worlds/") {
+            Some(name) if name == after => {}
+            Some(name) => entries.push(Entry::file(&format!("alt/{name}"), bytes)),
+            None => entries.push(Entry::file(path, bytes)),
+        }
+    }
+    let base = dir.join("m");
+    check_log_merge(c, &base, 0, &entries, None);
+    assert!(
+        !base.join("log/alt").join(&after).exists(),
+        "the merge wrote through the link"
+    );
+    std::fs::remove_dir_all(&dir).ok();
+}
 
 /// A glb of `nodes` nodes, each showing one primitive of `vertices`
 /// vertices (at the origin) and one triangle, valid but for one kind of
@@ -1409,6 +2874,53 @@ fn regression_store_reads_refuse_irregular_and_oversized_files() {
             let err = read_file(&dir.join(name), MAX_FILE_BYTES).expect_err(name);
             assert_eq!(err.to_string(), "not a regular file", "{name}");
         }
+    }
+    std::fs::remove_dir_all(&dir).ok();
+}
+
+/// `op_world id` read each file with `fs::read`: any size, through links,
+/// and waiting forever on a FIFO. It reads them as a store does now, and
+/// says why it refuses one. Found by review.
+#[test]
+fn regression_op_world_id_reads_only_regular_files() {
+    let dir = common::temp_dir("regression-id");
+    let (file, folder) = (dir.join("file.json"), dir.join("folder"));
+    std::fs::write(&file, b"{}").expect("write");
+    std::fs::create_dir(&folder).expect("mkdir");
+    let mut named = vec![(folder.clone(), "not a regular file")];
+    #[cfg(unix)]
+    {
+        let made = std::process::Command::new("mkfifo")
+            .arg(dir.join("fifo"))
+            .status()
+            .expect("run mkfifo");
+        assert!(made.success(), "mkfifo failed");
+        named.push((dir.join("fifo"), "not a regular file"));
+    }
+    if symlink_file(&file, &dir.join("link")).is_ok() {
+        named.push((dir.join("link"), "not a regular file"));
+    }
+    let long = dir.join("long.json");
+    std::fs::File::create(&long)
+        .and_then(|f| f.set_len(op_world::store::MAX_FILE_BYTES + 1))
+        .expect("a long file");
+    named.push((long, "larger than 67108864 bytes"));
+    for (path, why) in named {
+        let out = std::process::Command::new(env!("CARGO_BIN_EXE_op_world"))
+            .arg("id")
+            .arg(&file)
+            .arg(&path)
+            .output()
+            .expect("run op_world id");
+        assert_eq!(out.status.code(), Some(1), "{}", path.display());
+        assert_eq!(
+            String::from_utf8_lossy(&out.stdout),
+            format!("{}  {}\n", ContentId::of(b"{}"), file.display())
+        );
+        assert_eq!(
+            String::from_utf8_lossy(&out.stderr),
+            format!("{}: {why}\n", path.display())
+        );
     }
     std::fs::remove_dir_all(&dir).ok();
 }

@@ -6,22 +6,43 @@
 //! op_world check-change <world-dir> <bundle-dir> [--report <file>] [--candidate <dir>]
 //!                                 run the contribution gate (RFC 0002) on a
 //!                                 change set; exit 1 if it does not pass
-//! op_world baseline <world-dir> --record <file> --reason <text>
+//! op_world baseline <world-dir> (--record <file> | --log <dir>) --reason <text>
 //!                                 write the first record of a world log
-//! op_world merge <world-dir> <bundle-dir> --previous <record> --record <file>
-//!     --report <file> --reason <text> --review <handle>=<verdict>[:<notes>]... [--takedown]
+//! op_world merge <world-dir> <bundle-dir> (--previous <record> --record <file>
+//!     --report <file> | --log <dir>) --reason <text>
+//!     --review <handle>=<verdict>[:<notes>]... [--takedown] [--require-base]
 //!                                 merge a change set into the store and write
 //!                                 its merge record (RFC 0002 section 6)
 //! ```
+//!
+//! `--log <dir>` keeps a world log in a directory (`op_world::merge::WorldLog`):
+//! `baseline` starts it, and `merge` takes the previous record from it and
+//! appends the new record, the change set, the report and the new world.
+//! `--require-base` refuses a change set that was planned on another world.
+//! A merge takes `merge.lock` in the store, and with `--log` `log.lock` in
+//! the log, before it reads them, and keeps them until it has written the
+//! store and the record; a second merge that finds one stops before it
+//! writes anything. `op_replay merge` takes the same arguments and runs the
+//! complete gate.
+//!
+//! `id` reads each file as a store read does: a regular file itself (not a
+//! link, a directory or a FIFO) of at most 64 MiB.
 
 use std::path::Path;
 use std::process::ExitCode;
 
-use op_world::contrib::{Decision, Outcome, Review, Verdict};
+use op_world::contrib::Outcome;
+use op_world::merge::{MergeArgs, WorldLog};
+use op_world::store::{MAX_FILE_BYTES, read_file};
 use op_world::validate::validate_store;
 use op_world::{ContentId, Store, gate};
 
-const USAGE: &str = "usage:\n  op_world validate <world-dir>\n  op_world id <file>...\n  op_world check-change <world-dir> <bundle-dir> [--report <file>] [--candidate <dir>]\n  op_world baseline <world-dir> --record <file> --reason <text>\n  op_world merge <world-dir> <bundle-dir> --previous <record> --record <file> --report <file> --reason <text> --review <handle>=<verdict>[:<notes>]... [--takedown]";
+fn usage() -> String {
+    format!(
+        "usage:\n  op_world validate <world-dir>\n  op_world id <file>...\n  op_world check-change <world-dir> <bundle-dir> [--report <file>] [--candidate <dir>]\n  op_world baseline <world-dir> (--record <file> | --log <dir>) --reason <text>\n  op_world merge {}",
+        MergeArgs::USAGE
+    )
+}
 
 fn main() -> ExitCode {
     let args: Vec<String> = std::env::args().skip(1).collect();
@@ -32,7 +53,7 @@ fn main() -> ExitCode {
         Some("baseline") if args.len() >= 2 => baseline(&args[1..]),
         Some("merge") if args.len() >= 3 => merge(&args[1..]),
         _ => {
-            eprintln!("{USAGE}");
+            eprintln!("{}", usage());
             ExitCode::from(2)
         }
     }
@@ -63,7 +84,7 @@ fn validate(dir: &Path) -> ExitCode {
 fn print_ids(files: &[String]) -> ExitCode {
     let mut status = ExitCode::SUCCESS;
     for f in files {
-        match std::fs::read(f) {
+        match read_file(Path::new(f), MAX_FILE_BYTES) {
             Ok(bytes) => println!("{}  {f}", ContentId::of(&bytes)),
             Err(e) => {
                 eprintln!("{f}: {e}");
@@ -84,7 +105,7 @@ fn check_change(args: &[String]) -> ExitCode {
             ("--report", Some(v)) => report_path = Some(v.clone()),
             ("--candidate", Some(v)) => candidate = Some(std::path::PathBuf::from(v)),
             _ => {
-                eprintln!("{USAGE}");
+                eprintln!("{}", usage());
                 return ExitCode::from(2);
             }
         }
@@ -180,12 +201,41 @@ fn fail(msg: impl std::fmt::Display) -> ExitCode {
 fn baseline(args: &[String]) -> ExitCode {
     let run = || -> Result<String, String> {
         let f = flags(&args[1..])?;
-        let record = op_world::merge::baseline(Path::new(&args[0]), &one(&f, "--reason")?)
-            .map_err(|e| e.to_string())?;
+        if let Some((name, _)) = f
+            .iter()
+            .find(|(n, _)| !["--record", "--log", "--reason"].contains(&n.as_str()))
+        {
+            return Err(format!("unknown option {name}"));
+        }
+        let has = |name: &str| f.iter().any(|(n, _)| n == name);
+        let log = match (has("--record"), has("--log")) {
+            (true, true) => {
+                return Err(
+                    "--record cannot be combined with --log, which writes the record into the log"
+                        .into(),
+                );
+            }
+            (false, false) => return Err("--record <file> or --log <dir> is required".into()),
+            (_, log) => log,
+        };
+        let world = Path::new(&args[0]);
+        let record =
+            op_world::merge::baseline(world, &one(&f, "--reason")?).map_err(|e| e.to_string())?;
         let bytes = record.to_bytes().map_err(|e| e.to_string())?;
-        std::fs::write(one(&f, "--record")?, &bytes).map_err(|e| e.to_string())?;
+        let place = if log {
+            // The bytes the record names: `WorldLog::start` refuses others.
+            let path = Store::new(world).world_path();
+            let world_bytes =
+                read_file(&path, MAX_FILE_BYTES).map_err(|e| format!("{}: {e}", path.display()))?;
+            WorldLog::start(Path::new(&one(&f, "--log")?), &record, &world_bytes)
+                .map_err(|e| e.to_string())?;
+            " (log/00000000.json)"
+        } else {
+            std::fs::write(one(&f, "--record")?, &bytes).map_err(|e| e.to_string())?;
+            ""
+        };
         Ok(format!(
-            "baseline record {} for world {}",
+            "baseline record {}{place} for world {}",
             ContentId::of(&bytes),
             record.world_after
         ))
@@ -199,68 +249,13 @@ fn baseline(args: &[String]) -> ExitCode {
     }
 }
 
-fn parse_review(text: &str) -> Result<Review, String> {
-    let (reviewer, rest) = text
-        .split_once('=')
-        .ok_or("--review is <handle>=<verdict>[:<notes>]")?;
-    let (verdict, notes) = rest.split_once(':').unwrap_or((rest, rest));
-    let verdict = match verdict {
-        "better" => Verdict::Better,
-        "not_better" => Verdict::NotBetter,
-        "blocked" => Verdict::Blocked,
-        other => {
-            return Err(format!(
-                "unknown verdict {other} (better, not_better, blocked)"
-            ));
-        }
-    };
-    Ok(Review {
-        reviewer: reviewer.into(),
-        verdict,
-        notes: notes.into(),
-    })
-}
-
 fn merge(args: &[String]) -> ExitCode {
-    let run = || -> Result<String, String> {
-        let f = flags(&args[2..])?;
-        let reviews = f
-            .iter()
-            .filter(|(n, _)| n == "--review")
-            .map(|(_, v)| parse_review(v.as_deref().unwrap_or("")))
-            .collect::<Result<Vec<_>, _>>()?;
-        let decision = if f.iter().any(|(n, _)| n == "--takedown") {
-            Decision::Takedown
-        } else {
-            Decision::Merged
-        };
-        let previous = std::fs::read(one(&f, "--previous")?).map_err(|e| e.to_string())?;
-        let scratch = std::env::temp_dir().join(format!("streetwide-merge-{}", std::process::id()));
-        let result = op_world::merge::merge(
-            Path::new(&args[0]),
-            Path::new(&args[1]),
-            &previous,
-            decision,
-            reviews,
-            &one(&f, "--reason")?,
-            &scratch,
-        );
-        let _ = std::fs::remove_dir_all(&scratch);
-        let merged = result.map_err(|e| e.to_string())?;
-        std::fs::write(one(&f, "--report")?, &merged.report_bytes).map_err(|e| e.to_string())?;
-        std::fs::write(one(&f, "--record")?, &merged.record_bytes).map_err(|e| e.to_string())?;
-        Ok(format!(
-            "record {}: world {} -> {}",
-            ContentId::of(&merged.record_bytes),
-            merged
-                .record
-                .world_before
-                .map(|w| w.to_string())
-                .unwrap_or_default(),
-            merged.record.world_after
-        ))
+    let merge = match MergeArgs::parse(args) {
+        Ok(m) => m,
+        Err(e) => return fail(e),
     };
-    match run() {
+    let scratch = std::env::temp_dir().join(format!("streetwide-merge-{}", std::process::id()));
+    match merge.run(&scratch, gate::run) {
         Ok(s) => {
             println!("{s}");
             ExitCode::SUCCESS

@@ -12,7 +12,7 @@
 //! regular file of at most [`MAX_FILE_BYTES`].
 
 use std::fs;
-use std::io::{self, Read};
+use std::io::{self, Read, Write as _};
 use std::path::{Path, PathBuf};
 
 use crate::id::ContentId;
@@ -208,14 +208,31 @@ fn object_path_in(root: &Path, id: &ContentId, kind: ObjectKind) -> PathBuf {
         .join(format!("{hex}.{}", kind.extension()))
 }
 
+/// Writes `path` through a temporary file next to it, then renames it, so a
+/// reader never sees half a file. Whatever is at the temporary path (a file
+/// left by a crash, a link, a FIFO) is removed first and the temporary file
+/// is created anew: a store may come from elsewhere, and the write must not
+/// follow a link out of it or wait on a FIFO. If the write or the rename
+/// fails, the temporary file is removed again.
 fn write_atomically(path: &Path, bytes: &[u8]) -> Result<()> {
     if let Some(parent) = path.parent() {
         fs::create_dir_all(parent)?;
     }
     let tmp = path.with_extension("tmp");
-    fs::write(&tmp, bytes)?;
-    fs::rename(&tmp, path)?;
-    Ok(())
+    match fs::remove_file(&tmp) {
+        Err(e) if e.kind() != io::ErrorKind::NotFound => return Err(e.into()),
+        _ => {}
+    }
+    let written = fs::OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .open(&tmp)
+        .and_then(|mut file| file.write_all(bytes))
+        .and_then(|()| fs::rename(&tmp, path));
+    if written.is_err() {
+        let _ = fs::remove_file(&tmp);
+    }
+    Ok(written?)
 }
 
 #[cfg(test)]
@@ -240,6 +257,53 @@ mod tests {
             assert_eq!(err.to_string(), "not a regular file");
         }
         assert_eq!(read_file(&path, 10).unwrap(), b"12345");
+        fs::remove_dir_all(&dir).ok();
+    }
+
+    /// Found by review: the temporary file was written with `fs::write`,
+    /// which follows a link at its path (a store may come from elsewhere)
+    /// and waits forever on a FIFO, and it was left behind when the rename
+    /// failed. Whatever is at the temporary path is now removed first, and
+    /// the temporary file is removed again after a failure.
+    #[test]
+    fn a_write_follows_no_link_and_leaves_no_temporary_file() {
+        let dir = std::env::temp_dir().join(format!("op_world-store-tmp-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&dir);
+        fs::create_dir_all(&dir).unwrap();
+
+        // The rename fails: a directory is where the file goes.
+        let blocked = dir.join("blocked.json");
+        fs::create_dir_all(blocked.join("inside")).unwrap();
+        assert!(write_atomically(&blocked, b"new").is_err());
+        assert!(
+            fs::symlink_metadata(dir.join("blocked.tmp")).is_err(),
+            "the temporary file is left behind"
+        );
+
+        // A file left by a crash at the temporary path is replaced.
+        let path = dir.join("world.json");
+        fs::write(dir.join("world.tmp"), b"left by a crash").unwrap();
+        write_atomically(&path, b"new").unwrap();
+        assert_eq!(fs::read(&path).unwrap(), b"new");
+        assert!(fs::symlink_metadata(dir.join("world.tmp")).is_err());
+
+        // A link at the temporary path is removed, not written through.
+        let outside = dir.join("outside.txt");
+        fs::write(&outside, b"not the store's").unwrap();
+        #[cfg(unix)]
+        let linked = std::os::unix::fs::symlink(&outside, dir.join("world.tmp"));
+        #[cfg(windows)]
+        let linked = std::os::windows::fs::symlink_file(&outside, dir.join("world.tmp"));
+        #[cfg(not(any(unix, windows)))]
+        let linked: io::Result<()> = Err(io::ErrorKind::Unsupported.into());
+        match linked {
+            Ok(()) => {
+                write_atomically(&path, b"newer").unwrap();
+                assert_eq!(fs::read(&path).unwrap(), b"newer");
+                assert_eq!(fs::read(&outside).unwrap(), b"not the store's");
+            }
+            Err(e) => println!("links not checked: cannot make a link here ({e})"),
+        }
         fs::remove_dir_all(&dir).ok();
     }
 }

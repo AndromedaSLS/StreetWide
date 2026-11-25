@@ -42,12 +42,87 @@ pub fn files_under(dir: &Path) -> Vec<String> {
     out
 }
 
-/// A fresh, empty temporary directory unique to this test.
-pub fn temp_dir(name: &str) -> PathBuf {
+/// A fresh, empty temporary directory unique to this test, deleted again
+/// when this is dropped, normally at the end of the test. Keep it in a
+/// variable for as long as the test uses the directory: a guard that is
+/// only a temporary is dropped at the end of its statement.
+pub struct TempDir(PathBuf);
+
+impl TempDir {
+    pub fn path(&self) -> &Path {
+        &self.0
+    }
+}
+
+impl std::ops::Deref for TempDir {
+    type Target = Path;
+
+    fn deref(&self) -> &Path {
+        &self.0
+    }
+}
+
+impl AsRef<Path> for TempDir {
+    fn as_ref(&self) -> &Path {
+        &self.0
+    }
+}
+
+impl From<&TempDir> for PathBuf {
+    fn from(dir: &TempDir) -> PathBuf {
+        dir.0.clone()
+    }
+}
+
+impl Drop for TempDir {
+    fn drop(&mut self) {
+        let _ = std::fs::remove_dir_all(&self.0);
+    }
+}
+
+/// A fresh, empty temporary directory unique to this test (see [`TempDir`]).
+pub fn temp_dir(name: &str) -> TempDir {
     let dir = std::env::temp_dir().join(format!("op_world-{name}-{}", std::process::id()));
     if dir.exists() {
         std::fs::remove_dir_all(&dir).expect("clean temp dir");
     }
     std::fs::create_dir_all(&dir).expect("create temp dir");
-    dir
+    TempDir(dir)
+}
+
+/// A path that does not exist yet, inside a fresh temporary directory that
+/// is deleted when this is dropped: for outputs that must be made by the
+/// code under test, such as a candidate world.
+pub struct TempPath {
+    path: PathBuf,
+    _dir: TempDir,
+}
+
+impl std::ops::Deref for TempPath {
+    type Target = Path;
+
+    fn deref(&self) -> &Path {
+        &self.path
+    }
+}
+
+impl AsRef<Path> for TempPath {
+    fn as_ref(&self) -> &Path {
+        &self.path
+    }
+}
+
+impl From<&TempPath> for PathBuf {
+    fn from(path: &TempPath) -> PathBuf {
+        path.path.clone()
+    }
+}
+
+/// `rel` inside a fresh temporary directory named after `name`.
+pub fn temp_path(name: &str, rel: &str) -> TempPath {
+    let dir = temp_dir(name);
+    TempPath {
+        path: dir.join(rel),
+        _dir: dir,
+    }
 }
