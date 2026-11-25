@@ -1624,6 +1624,18 @@ RFC 0004's point features. ADR-0020's Q18 (b) goes into the refresh
 planner. ADR-0021 starts with its client prototype and the
 navigation-data RFC.
 
+### Refresh takedowns: ADR-0020's Q18 (b) (2026-11-25)
+
+The planner now applies the accepted Q18 (b). A key whose last change
+was a takedown that removed it keeps the hold code `takedown`, which
+nothing lifts. A key whose last change was a takedown that reverted it
+gets the new code `takedown-revert`: an accept with a reason lifts it,
+and the change goes into a decision set of its own, titled "... that a
+takedown reverted (maintainer decision)". The report schema lists the
+new code, and the maintainer guide and ADR-0020's code table describe
+it. The fixture plan's pinned ids are unchanged; `tools/ingest` and
+`tools/worldfmt` tests: 691 passed, 98 skipped.
+
 ### Lit windows and the night (2026-11-25, ADR-0022 W1 and N2)
 
 The client now draws the night as

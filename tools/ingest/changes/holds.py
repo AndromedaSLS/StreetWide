@@ -238,8 +238,11 @@ def _per_key(cls: Classification, cur: StoreView, new: StoreView, ov: Overrides,
         origin = item.origin
         # H1.
         if prot is not None and prot.kind == "takedown":
-            add(item, "takedown", f"{prot.describe()} {'removed' if prot.removed else 'changed'} it; "
-                                  "a refresh never changes it")
+            if prot.removed:
+                add(item, "takedown", f"{prot.describe()} removed it; a refresh never adds it back")
+            else:
+                add(item, "takedown-revert", f"{prot.describe()} reverted it; a refresh changes it only "
+                                             "if a maintainer accepts that change")
         # H2, H3.
         if origin is not None and origin.kind == "contribution":
             add(item, "contribution", _contribution_details(cls, item))

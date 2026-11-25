@@ -4,8 +4,9 @@ A pending change is emitted only when no code is left on it. A *conflict*
 code lists the change under `conflicts` in the report; the other codes hold
 it back (`held_back`). An accept in the overrides file lifts only the
 liftable codes it names; an allowance lifts the two removal guards.
-Accepting `contribution`, `origin-unclear` or `removed-by-contribution`
-puts the change's whole unit into a decision set of its own.
+Accepting `takedown-revert`, `contribution`, `origin-unclear` or
+`removed-by-contribution` puts the change's whole unit into a decision set
+of its own.
 """
 
 from __future__ import annotations
@@ -31,10 +32,14 @@ class Code:
 
 CODES = (
     Code("takedown", "H1", "conflict",
-         "a refresh never changes a key whose last change was a takedown; "
-         "reversing it is a maintainer's own change set (Q18)",
-         "A takedown froze this key. A refresh never adds it back or changes it. Reversing the takedown is a "
-         "maintainer's own change set, not part of a refresh (Q18: until it is decided, nothing lifts this)."),
+         "a takedown removed it, and a removal by a takedown stays frozen; adding it back is a maintainer's own "
+         "change set (ADR-0020, Q18)",
+         "A takedown removed this key. A refresh never adds it back. Reversing the takedown is a maintainer's own "
+         "change set, not part of a refresh (ADR-0020, Q18)."),
+    Code("takedown-revert", "H1", "conflict", None,
+         "A takedown reverted this key to an earlier version, and a refresh does not change it on its own. If "
+         "upstream's version is right again, accept the change with a reason: it then goes into a decision set of "
+         "its own, judged on its own (ADR-0020, Q18 (b))."),
     Code("contribution", "H2", "conflict", None,
          "A contribution holds this key, and upstream changed, gained or lost the feature since the version the "
          "contribution replaced. Review it. The contribution stays either way; a hold with its content key records "
@@ -101,7 +106,7 @@ CODES = (
 BY_CODE = {c.code: c for c in CODES}
 ORDER = {c.code: i for i, c in enumerate(CODES)}
 LIFTABLE = tuple(c.code for c in CODES if c.liftable)
-DECISION = ("contribution", "origin-unclear", "removed-by-contribution")
+DECISION = ("takedown-revert", "contribution", "origin-unclear", "removed-by-contribution")
 """Accepting one of these puts the unit into a decision set (ADR-0020, section 5)."""
 ALLOWANCE = ("per-tile-removal", "mass-removal")
 """The codes an allowance lifts (ADR-0020, section 6)."""
