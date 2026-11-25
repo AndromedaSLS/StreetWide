@@ -7,6 +7,19 @@ Downloads swissBUILDINGS3D 3.0 Beta, swissALTI3D and OpenStreetMap data for
 the area into `data/cache/` (never committed), converts it to the world
 format of RFC 0001 and writes a content-addressed world store to
 `data/world/<name>/`. See docs/adr/0006-ingest-pipeline-and-data-sources.md.
+
+The ingest always builds a whole world and replaces its output directory;
+`--refresh` only makes it query STAC and Overpass again. Newer data enters
+a world that has contributions as a baseline refresh (RFC 0002 section 7):
+build into a directory of its own, then
+
+    python -m tools.ingest.changes plan --current <canonical> --new <build> --log <log> --out <plan>
+    python -m tools.ingest.changes verify --current <canonical> --plan <plan> --scratch <dir>
+
+`tools.ingest.changes` compares the two stores and writes change sets
+authored by `streetwide:ingest`, and `verify` runs them through the real
+gate. See docs/contributing/baseline-refresh.md and
+docs/adr/0020-baseline-refreshes.md (Proposed).
 """
 
 VERSION = "0.1.0"
