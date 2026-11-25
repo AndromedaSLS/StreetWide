@@ -575,6 +575,20 @@ any change to the schema.
 
 ### Where the licence rules live
 
+**Since this was drafted:** accepted
+[ADR-0015](../docs/adr/0015-zurich-trees-and-lights.md) makes it a
+precondition of ingesting the City of Zurich's points that "`op_world`
+validation checks that each asset's licence expression covers the
+licence of each of its sources". Its ingest (RFC 0004, phase 2) built
+L1 to L4 into whole-world validation as errors, at gate 0.1.5, with a
+Python mirror; every committed manifest and the local district pass. So
+L1 to L4 already apply to world format 0.1.0 as option D describes, by
+ADR-0015's decision. What remains open here is the list itself (G4
+reading `LICENSES/allowlist.json`, forbidden sources, the ingest's
+check at download, client assets) and whether a later format version
+moves the rules into RFC 0001's text (option A) or leaves them where
+ADR-0015 put them.
+
 #### A. World format 0.2.0, with L1 to L4 in validation
 
 - **What changes:** RFC 0001 sections 2 and 3 gain L1 to L4 as format
