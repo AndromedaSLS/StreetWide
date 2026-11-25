@@ -10,10 +10,10 @@
 M2's exit screenshots, at 18:00 on 21 June and 21 December at three
 named places, must show trees, and street lamps lit in December
 ([roadmap](../roadmap.md), M2).
-[RFC 0004](../../rfcs/0004-point-features.md) (Draft) stores trees and
+[RFC 0004](../../rfcs/0004-point-features.md) (Accepted) stores trees and
 light points as points, and says that how the client draws them "needs
 its own ADR extending ADR-0012, before that client work".
-[ADR-0018](0018-performance-tier.md) (Proposed) lists what that work
+[ADR-0018](0018-performance-tier.md) (Accepted) lists what that work
 should bring, and the roadmap's section 8 lists this ADR among the
 decisions waiting. This ADR drafts the options for four parts: trees,
 street lamps, lit windows, and the night exposure and sky they are seen
@@ -29,16 +29,16 @@ under. Floodlit landmarks are a fifth, briefly.
   puts people in the client, so that "trunks and poles stay
   visual in M2".
 - **Decoration is not data**
-  ([ADR-0012](0012-client-realism-from-procedural-detail.md), Proposed).
+  ([ADR-0012](0012-client-realism-from-procedural-detail.md), Accepted).
   What the client invents must never pass for data. F2 shows the plain
   look, with only the world data's palette colours. Nothing drawn is
   saved, merged or checked by the gate. Textures are generated in code,
   with "no files and no new licences".
-- **Licences** ([ADR-0017](0017-licence-allowlist.md), Proposed): client
+- **Licences** ([ADR-0017](0017-licence-allowlist.md), Accepted): client
   assets under CC0 1.0 or CC BY 4.0, no CC BY-SA, nothing
   non-commercial or no-derivatives; code under MIT OR Apache-2.0. Every
   source is credited in ATTRIBUTION.md ([ADR-0001](0001-licensing.md)).
-- **The budget** (ADR-0018, Proposed): a 99th percentile frame time of
+- **The budget** (ADR-0018, Accepted): a 99th percentile frame time of
   at most 16.7 ms on the high preset, on an 8 GB card of the RX 6600
   class at 1080p, at Lindenhof, Hirschenplatz and Rathausbrücke, at 18:00
   on 21 June, 22:30 on 21 June and 18:00 on 21 December. It asks this
@@ -48,7 +48,7 @@ under. Floodlit landmarks are a fifth, briefly.
   nearest 32 to 64 lamps, glowing heads beyond, one model and one light
   per position; lit windows by a shader extension or a coarser effect.
 - **The data** (RFC 0004; [ADR-0015](0015-zurich-trees-and-lights.md)
-  and [ADR-0016](0016-swisssurface3d-heights.md), both Proposed):
+  and [ADR-0016](0016-swisssurface3d-heights.md), both Accepted):
   - **trees:** an anchor, genus, species, taxon, planted year, crown
     diameter (null at the register's 8 m default) and a measured height
     (null where the LiDAR rule failed). `leaf_cycle` and `leaf_type`
@@ -725,8 +725,8 @@ ADR-0018's night-exposure option B, with a curve as Far Cry 5 used.
 
 *Accepted on 2026-11-25 by @victorpicaud:* the options marked
 recommended below (T1 with S1, L2, W1, N2 and F0). The open questions at
-the end stay open; the night's values and the budget share are set as
-they describe.
+the end were settled later the same day, each by its recommendation;
+the night's values and the budget share are set as they describe.
 
 **Recommended:**
 - **trees:** T1, with sun shadows from the nearest level only (S1), and
@@ -945,7 +945,9 @@ before its own guesses.
    default configuration, six stop-and-time pairs have a base run: it
    meets the share at five (the June stops at Hirschenplatz and
    Rathausbrücke and the three December stops, 0.21 to 0.62 ms more) and
-   misses it at Lindenhof in June (3.33 ms more).
+   misses it at Lindenhof in June (3.33 ms more). *Decided 2026-11-25:*
+   a share, starting at 2 ms of GPU time at the 99th percentile on the
+   RTX 3070 at every stop, over the stop's base run.
 2. **The night's values:** the floor (EV100 3 or 4), moonlight (on or
    off, with the real phase or a fixed one), the sky glow's strength,
    and window and shop luminance (CIE's 6 and 50 cd/m², the prototype's
@@ -954,29 +956,62 @@ before its own guesses.
    EV100 3 and 4 with the two 2025 Lindenhof photos, at the three
    stops at 18:00 on 21 December and 22:30 on 21 June, and record the
    values here, with any departure from CIE's figures named as a look
-   choice.
+   choice. *Decided 2026-11-25:* as recommended. The client already
+   draws the night with these starting values
+   ([progress.md](../progress.md): "Lit windows and the night", "Dusk"
+   and "Window glass and the moon"):
+   - **exposure:** a floor of EV100 3. Once the sun is less than 2°
+     above the horizon, the exposure follows the light in the scene,
+     EV100 = 3 + 0.9 × log2(light / 10.6 lx), never above the daylight
+     curve nor below the floor, so the floor is reached with the sun
+     5.2° to 6.2° below the horizon. The slope 0.9 is a look choice;
+   - **moonlight:** on, from the moon's real position and phase, bluish
+     and without shadows, at 16 times the real moon's light (a look
+     choice). Its disc is 0.518° across and at most 6 times the
+     exposure's white (a look choice), and only a nearly full moon has
+     one, fading in from 85% to 95% lit;
+   - **sky glow and fill:** a glow of 1.3 cd/m² at the horizon and
+     0.5 cd/m² overhead, at 2200 K; an ambient fill of 1.8 cd/m² at
+     3000 K, about 5.7 lx on the ground, to be lowered once lamps are
+     drawn. Both are set by eye;
+   - **windows:** a lit home's window 6 cd/m², CIE's figure, with at
+     most 45% of homes lit; a shop window 10 cd/m², a fifth of CIE's 50,
+     a look choice, since 50 cd/m² is white at EV100 3.
+
+   The comparison with the two 2025 photos at EV100 3 and 4 is still to
+   do (order of work, step 2); the values it gives replace these here.
 3. **Tree shadows:** S1, S2 or a distance limit; and none on fast.
    Recommended: S1 now, S2 measured before merging, none on fast.
+   *Decided 2026-11-25:* S1 now, S2 measured before the client work
+   merges, and no tree shadows on fast.
 4. **Point or spot lights.** Recommended: point, for 0.03 to 0.28 ms
-   more; spot lights if the route needs the time back.
+   more; spot lights if the route needs the time back. *Decided
+   2026-11-25:* point lights, and spot lights if the route needs the
+   time back.
 5. **Leaf habit in the client or the world.** Options: a client table
    (as RFC 0004 drafts it); or an amendment to RFC 0004 letting a named
    rule estimate `leaf_cycle` and `leaf_type` from genus, so that every
    reader draws the same seasons (data note, section 10). Recommended:
-   the client table.
+   the client table. *Decided 2026-11-25:* the client table; RFC 0004
+   is not amended for it.
 6. **MeteoSwiss's leaf dates.** Its STAC collection says "CC-BY" with no
    version; its documentation says the data "may be used without
    restriction" with the credit "Source: MeteoSwiss"; ADR-0017 lists CC
    BY 4.0 only (data note, section 4). Options: credit MeteoSwiss in
    ATTRIBUTION.md and the client's credits after ADR-0017's review; or
    take dates from general botany instead. Recommended: the first.
+   *Decided 2026-11-25:* the first. MeteoSwiss is credited "Source:
+   MeteoSwiss" in ATTRIBUTION.md and the client's credits once a review
+   under ADR-0017, accepted the same day, has settled which entry its
+   unversioned "CC-BY" falls under.
 7. **Lamp mounts:** M-A, M-B or M-C. Recommended: M-A, and ask ewz
-   anyway, with ADR-0015's questions.
+   anyway, with ADR-0015's questions. *Decided 2026-11-25:* M-A, and the
+   maintainer asks ewz, with ADR-0015's questions.
 8. **Windows by building class:** one curve in M2, classes after
-   ADR-0019. Recommended: one curve.
+   ADR-0019. Recommended: one curve. *Decided 2026-11-25:* one curve.
 9. **Floodlit landmarks:** F0 in M2; F2 later, when a source or
-   contributors can say which buildings are lit.
+   contributors can say which buildings are lit. *Decided 2026-11-25:*
+   F0 in M2, and F2 later.
 
-**These stay open after the decision.** The maintainer, @victorpicaud,
-decides each and records it here. Each is drafted with a
-recommendation.
+**Settled on 2026-11-25.** The maintainer, @victorpicaud, decided each
+question by its recommendation, as recorded above.

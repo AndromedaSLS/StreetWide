@@ -1,6 +1,6 @@
 # ADR-0017: Keep an allowlist of licences for world data and client assets
 
-- **Status:** Proposed
+- **Status:** Accepted (2026-11-25)
 - **Date:** 2026-11-24
 - **Deciders:** @victorpicaud
 - **Supersedes / superseded by:** none (amends [ADR-0001](0001-licensing.md),
@@ -131,13 +131,22 @@ ADR-0014 did.
 
 ## Decision
 
-*Proposed:* option A. @victorpicaud decides, and the decision and its
-reasons are recorded here when made. The rest of this section describes
-option A.
+*Accepted on 2026-11-25 by @victorpicaud:* option A, an allowlist in the
+repository, enforced in code, with the choices recommended within it:
+- the lists for world data and client assets below, without CC BY-SA 4.0
+  for client assets;
+- additions by pull request under a delegation in the RFC that amends G4
+  ("Changing the list", (i));
+- the gate and validation rules written in a short RFC of their own
+  ("Where the gate and validation changes are written");
+- CMU's motion capture left out for now, with CMU asked in parallel
+  ("Left open by this ADR").
+
+The rest of this section describes option A.
 
 ### What a licence must allow
 
-The rules below are option A as proposed. A licence joins a list only if
+The rules below are option A as accepted. A licence joins a list only if
 it allows:
 1. use for any purpose, including commercial use;
 2. adaptation, and sharing the result as files anyone can download;
@@ -184,7 +193,8 @@ downloads:
 CC BY-SA 4.0 is **not proposed** for client assets. It would be lawful,
 but the client's code is MIT OR Apache-2.0, chosen in ADR-0001 so the
 engine is easy to reuse, and share-alike assets would make the client less
-so. The maintainer may add it.
+so. The maintainer may add it. *Decided 2026-11-25:* it is not on the
+client list.
 
 ### Forbidden
 
@@ -305,9 +315,10 @@ list.
 and changing them needs an RFC open for comment for at least 7 days. Once
 G4 reads the list, its entries decide whether a change merges. Two ways
 to meet that rule:
-- **(i) Delegation (recommended).** The RFC that amends G4 says that G4
-  allows the list's entries, changed as this section describes. Accepting
-  it authorises additions that meet the three rules by pull request: they
+- **(i) Delegation (recommended; decided 2026-11-25).** The RFC that
+  amends G4 says that G4 allows the list's entries, changed as this
+  section describes. Accepting it authorises additions that meet the
+  three rules by pull request: they
   apply the criterion rather than change it, like everyday changes within
   a contract. For: a licence can be added in days, which M6 and M7 need
   country by country. Against: an entry gets a maintainer's review, not
@@ -332,8 +343,8 @@ list changes RFC 0002, and the validation rules change RFC 0001
 section 2. Both are Drafts, but their comment periods can end within a
 week (RFC 0002's runs until at least 2026-11-30), so changes written into
 them now would get less than 7 days of comment.
-- **A short RFC of their own (recommended):** a full comment period, and
-  no wait for questions about point features.
+- **A short RFC of their own (recommended; decided 2026-11-25):** a full
+  comment period, and no wait for questions about point features.
 - **RFC 0004,** whose comment period runs until at least 2026-12-01: one
   RFC fewer, but these rules cover every layer, and RFC 0004 waits for
   the pedestrian ADR.
@@ -351,7 +362,9 @@ them now would get less than 7 days of comment.
 
   Recommended: the first now, and the third in parallel. The terms were
   read over plain HTTP, because the site's HTTPS certificate failed to
-  verify.
+  verify. *Decided 2026-11-25:* the first now, and the third in
+  parallel. CMU's data stays out of the client, 100STYLE serves
+  locomotion, and the maintainer asks CMU.
 - **JAXA's AW3D30.** Commercial use needs notice to JAXA in advance, which
   breaks rule 3 unless one notice covers every later user. That these
   terms govern AW3D30 is inferred from Google Earth Engine's catalogue;
@@ -368,7 +381,12 @@ them now would get less than 7 days of comment.
   swisstopo and Copernicus as still to check. The stored swisstopo terms
   should include swisstopo's clarification of 14 September 2021 on
   central attribution; so far only the OpenStreetMap wiki's record of it
-  has been read.
+  has been read. *Settled 2026-11-25:* ADR-0019 was accepted with option
+  A, so each world-data entry records whether it fits inside an ODbL
+  database. The swisstopo and Copernicus entries say so only once they
+  are checked; for swisstopo, ADR-0019 asks for its clarification to be
+  quoted, or swisstopo asked, and the FSDI terms checked, before
+  publishing.
 - **Training the compiler:** whether data that may not enter the world may
   train models whose output does is for the compiler's ADR (M6).
 
@@ -403,5 +421,6 @@ them now would get less than 7 days of comment.
 - **Not legal advice:** the readings here are the project's own. A review
   by someone experienced in open-data licensing before the world is
   announced (M1) would lower the risk.
-- **Revisit** when ADR-0019 is decided, when a source the project needs
-  fails the rules (AW3D30, CMU), or if a reading here proves wrong.
+- **Revisit** when a source the project needs fails the rules (AW3D30,
+  CMU), or if a reading here proves wrong. ADR-0019, decided on
+  2026-11-25, is taken in under "An ODbL world".

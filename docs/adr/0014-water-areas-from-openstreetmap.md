@@ -1,6 +1,6 @@
 # ADR-0014: Take water areas from OpenStreetMap and place them as level surfaces
 
-- **Status:** Proposed
+- **Status:** Accepted (2026-11-25)
 - **Date:** 2026-11-24
 - **Deciders:** @victorpicaud
 - **Supersedes / superseded by:** none (adds a source to ADR-0006; uses the
@@ -122,7 +122,9 @@ It needs its own decision, with non-OSM data.
 
 ## Decision
 
-Source A with placement A.
+*Accepted on 2026-11-25 by @victorpicaud:* source A (OpenStreetMap
+water areas) with placement A (level surfaces), the recommended options.
+Open question 1 is decided as its recommendation, option E (below).
 
 **Query.** A second Overpass query, with its own cache file, for:
 - ways and relations tagged `natural=water`;
@@ -146,6 +148,11 @@ spoke of one query per area; with this ADR there are two.
 **Assembly.**
 - Ways and multipolygon relations become polygons with holes, in LV95,
   repaired if invalid.
+- **Bounded repair** (open question 1, option E): before repairing an
+  invalid ring, the ingest counts the pairs of segments that are not
+  neighbours and whose bounding boxes overlap, stopping at 1,000. A ring
+  with more than 1,000 such pairs counts as broken, as a ring that does
+  not close does. This holds for ways and joined rings alike.
 - **Nested rings:** they count as deep as they are mapped. A pond on an
   island in a lake is water.
 - **Relations that cannot be assembled:** a relation that reaches the area
@@ -236,6 +243,10 @@ exactly at its border, and needs its own ADR.
     rendering decision of its own;
   - the ripples drift in one direction everywhere, because the data has no
     flow direction for areas.
+- **Work that follows:** the bounded repair of open question 1 in
+  `tools/ingest/water.py`, with tests in
+  `tools/ingest/tests/test_osm_water.py`. Until then, the ingest repairs
+  every invalid ring without a bound.
 - **Revisit:**
   - when swimming is designed;
   - when a national water source would replace OSM in a whole country;
@@ -326,3 +337,8 @@ The cap may have to grow with the ring for lakes larger than Bodensee. B
 stays the fallback if a GEOS version breaks that bound. The same question
 applies to OpenStreetMap building footprints, which go through
 `make_valid` too.
+
+**Decided 2026-11-25:** E, with a cap of 1,000 pairs, for ways and joined
+rings alike; B stays the fallback if a GEOS version breaks that bound.
+The decision covers water. For OpenStreetMap building footprints the
+question stays open: no option is recommended for them.

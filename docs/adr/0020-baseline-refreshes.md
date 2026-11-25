@@ -76,8 +76,9 @@ Each question has a recommended option. On 2026-11-25 the maintainer,
 Decision). The "default until decided" lines below record what the tool
 applied while this ADR was proposed. They are the decisions, except for
 Q18 (section 9), where the tool applied a stricter option than the one
-now decided. The ingest options of section 10 and the amendments A1 to
-A8 are not decided here and are not implemented.
+now decided. Later the same day the maintainer also chose the
+recommended ingest options of section 10; they are not implemented yet.
+The amendments A1 to A8 are not decided here and are not implemented.
 
 ### 1. What the tool compares
 
@@ -545,13 +546,14 @@ one maintainer.
 [GOVERNANCE.md](../../GOVERNANCE.md) adds reviewers (RFC 0002,
 question 7). No code checks who reviews.
 
-### 10. Ingest options left open
+### 10. Ingest options
 
-These change the ingest, not the tool, and none is part of this
-proposal. Each would change manifest bytes once and need a `VERSION`
-bump (section 7).
+These change the ingest, not the tool, and none was part of this ADR's
+proposal. *Decided 2026-11-25:* the recommended choice of each (last
+column). Each changes manifest bytes once and needs a `VERSION` bump
+(section 7). None is implemented yet.
 
-| Option | What it changes | Choices | Recommended |
+| Option | What it changes | Choices | Recommended, and decided 2026-11-25 |
 |---|---|---|---|
 | Q20. Checksums in source versions | A version such as `2026 sha256:<hex>`, and a derived-buildings cache keyed by checksum. Today swisstopo can republish an item under the same id. The ingest then refuses the cached file, whose checksum no longer matches, and after a new download the tool holds the change as `unexplained-change`. A republished building sheet is never parsed again, because that cache is keyed by file name. | now; later | Now. Rule C ignores versions, so a refresh sees no churn from it. |
 | Q21. Narrower height-model listings | Each asset lists only the swissALTI3D items its heights came from, and a deck those of every anchor on its bridge. Today terrain, ribbons, decks and fallback shells list every item of the area. | before the first world that spans several items; live with manifest-only replaces | Before the first such world. It changes nothing in the district, where one item covers everything. |
@@ -564,9 +566,11 @@ each of sections 1 to 9 above. For Q18 that is (b): a removal by a
 takedown stays frozen, and a revert may be lifted by an accept with a
 reason, in a decision set of its own. The tool implements (b) since
 2026-11-25: the hold code `takedown-revert` marks a revert, and an
-accept can lift it. Not decided by
-this ADR: the ingest options of section 10, the amendments A1 to A8,
-and the questions left open below.
+accept can lift it. Later the same day the maintainer decided the ingest
+options of section 10, each by its recommendation, and the three
+questions raised by the reviews of the merge tooling ("Left open by this
+ADR"). Not decided by this ADR: the amendments A1 to A8, and the other
+items left open below.
 
 With these decisions, the tool:
 - never runs the ingest, and never writes to either store or to the
@@ -583,7 +587,7 @@ With these decisions, the tool:
 
 RFC 0002 section 7 carries these rules as a clarification accepted
 with this ADR (section 8, option (a)). The RFC as a whole stays a
-Draft.
+Draft. (RFC 0002 itself was accepted later on 2026-11-25.)
 
 ### Amendments flagged for RFC 0002
 
@@ -651,24 +655,25 @@ tool assumes none of them. They are questions 9 to 16 of
   the ground. Recommended: amend together with A1, since both touch
   G8's terrain rules.
 
-How the contract changes for these is open too: amend RFC 0002 in place
-while it is a Draft and raise `GATE_VERSION`, as water did
-(recommended), or raise the contribution contract version.
+How the contract changes for these was decided on 2026-11-25, with RFC
+0002's acceptance: RFC 0002 is amended in place, and `GATE_VERSION`
+rises as each change is implemented (the recommendation).
 
 ### Left open by this ADR
 
-- The amendments above, and the ingest options of section 10.
+- The amendments above. (The ingest options of section 10 were decided
+  on 2026-11-25.)
 - Hosting, submissions and a merge bot (ADR-0010).
 - Running or scheduling the ingest, stable entity ids across sources,
   and carrying contributions across renames (M3).
-- Raised by the reviews of the merge tooling. Each keeps the default
-  shown until the maintainer decides:
+- Raised by the reviews of the merge tooling. Each kept the default
+  shown until the maintainer decided it on 2026-11-25 (last column):
 
-| Question | Options | Default |
-|---|---|---|
-| The exit code of a merge that wrote the store but not the log (a write into the log failed after its check) | (a) 2, like every refused merge, with a message that says how to put the store back; (b) a code of its own, such as 3, so that scripts can tell it apart | (a) |
-| Durability of a local merge if the machine stops (power loss), not just the process | (a) no flush: a crash of the system right after a merge can leave a truncated record or `world.json`, and the log is then refused until someone repairs it; (b) flush each file and its directory before the next step, at some cost on every merge; (c) leave it to the hosted store and log (ADR-0010) | (a) |
-| How large a JSON document a reader takes (RFC 0001 leaves it open) | (a) 64 MiB, the store's limit for any file; (b) a smaller limit for JSON documents, such as 1 MiB; (c) also a cap on the reviews of a merge record. Python checks each review against the schema, about 0.15 ms each, so a record of 64 MiB takes minutes to read | (a) |
+| Question | Options | Default | Decided 2026-11-25 |
+|---|---|---|---|
+| The exit code of a merge that wrote the store but not the log (a write into the log failed after its check) | (a) 2, like every refused merge, with a message that says how to put the store back; (b) a code of its own, such as 3, so that scripts can tell it apart | (a) | (a): 2, with the message |
+| Durability of a local merge if the machine stops (power loss), not just the process | (a) no flush: a crash of the system right after a merge can leave a truncated record or `world.json`, and the log is then refused until someone repairs it; (b) flush each file and its directory before the next step, at some cost on every merge; (c) leave it to the hosted store and log (ADR-0010) | (a) | (a): no flush |
+| How large a JSON document a reader takes (RFC 0001 leaves it open) | (a) 64 MiB, the store's limit for any file; (b) a smaller limit for JSON documents, such as 1 MiB; (c) also a cap on the reviews of a merge record. Python checks each review against the schema, about 0.15 ms each, so a record of 64 MiB takes minutes to read | (a) | (b), as RFC 0001 decided the same day for its own open question on size limits (its option 1): a limit per kind of document, checked before parsing, stated in its section 7. Asset manifests and merge records take at most 1 MiB, which also bounds a record's reviews (c); change sets 8 MiB; check reports and tile indexes 16 MiB. Readers keep (a) until they enforce these limits |
 
 ## Consequences
 
@@ -686,8 +691,11 @@ while it is a Draft and raise `GATE_VERSION`, as water did
     (section 7);
   - ingest a refresh on the platform of the last baseline (section 5).
 
-  Q20, Q21 and refreshing one source at a time would each change the
-  ingest, with a `VERSION` bump, if chosen.
+  Q20, Q21 and refreshing one source at a time, decided on 2026-11-25
+  (section 10), each change the ingest, with a `VERSION` bump: Q20 now,
+  Q21 before the first world that spans several swissALTI3D items, and
+  refreshing one source at a time before the first new swissALTI3D
+  year.
 - **Work that follows:**
   - in `tools/worldfmt`, mirrors of the candidate world, the change-set
     rules and the log rules, and a strict reader for the glb profile,

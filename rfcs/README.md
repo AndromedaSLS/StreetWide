@@ -17,8 +17,8 @@ Process (see [GOVERNANCE.md](../GOVERNANCE.md)):
 
 | RFC | Title | Status |
 |---|---|---|
-| [0001](0001-world-format.md) | World format | Draft |
-| [0002](0002-contributions-and-merge-rules.md) | Contributions and merge rules | Draft |
-| [0003](0003-water-layer.md) | A water layer | Draft |
-| [0004](0004-point-features.md) | Point features: vegetation and street objects | Draft |
-| [0005](0005-navigation-data.md) | Navigation data: lanes, places and population profiles | Draft |
+| [0001](0001-world-format.md) | World format | Accepted |
+| [0002](0002-contributions-and-merge-rules.md) | Contributions and merge rules | Accepted |
+| [0003](0003-water-layer.md) | A water layer | Accepted |
+| [0004](0004-point-features.md) | Point features: vegetation and street objects | Accepted |
+| [0005](0005-navigation-data.md) | Navigation data: lanes, places and population profiles | Accepted |

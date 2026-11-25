@@ -12,32 +12,27 @@ here has a date. The page is reviewed at every checkpoint and changes by
 pull request.
 
 **Now:**
-- **M1** waits on three decisions: hosting (ADR-0010), how the published
-  world meets the ODbL (ADR-0019) and the licence allowlist (ADR-0017).
-  Work that needs no decision goes on: the client's inspect mode, which
-  marks improvable buildings and gives the facade command, is on `main`.
-  Every reader of untrusted files is now fuzzed, one of the steps before
-  announcing.
-- **Baseline refreshes** (M1) work on `main`: the planner, its
-  `verify` through the gate, and `op_replay merge`. Their rules are
-  accepted in [ADR-0020](adr/0020-baseline-refreshes.md); the
-  amendments A1 to A8 (RFC 0002, questions 9 to 16) are still open.
-- **M2** has started with water for the Limmat: RFC 0003 (a water layer,
-  Draft) and ADR-0014 (water areas from OpenStreetMap, Proposed) are
-  implemented on `main` while they are open for comment, as RFC 0001 and
-  RFC 0002 were.
-- **M2's decisions:** the pedestrian decision RFC 0004 asked for first
-  is accepted: [ADR-0021](adr/0021-pedestrians.md) puts people in the
-  client, drawn from a shared seed outside the simulation's state, so
-  trunks and poles stay visual in M2. How the client draws trees, lamps
-  and lit windows is accepted in
-  [ADR-0022](adr/0022-drawing-trees-lamps-and-windows.md). The
-  navigation data that the people walk on is drafted in
-  [RFC 0005](../rfcs/0005-navigation-data.md) (Draft, comments until at
-  least 2026-12-09). Still waiting for the maintainer: RFC 0004 (trees
-  and street lights in the world format), ADR-0015 (their Zurich
-  sources), ADR-0016 (measured heights) and ADR-0018 (performance tier).
-  Lit windows and the night's look need none of them and come first.
+- **Every decision record is accepted** (2026-11-25): ADR-0010 to
+  ADR-0022 and RFC 0001 to RFC 0005, with their recommended options;
+  the RFCs before the end of their comment periods, by the founding
+  maintainer's decision (each RFC says so). World format 0.1.0 is now
+  frozen: RFC 0001 with the amendments of RFC 0003, 0004 and 0005.
+- **M1** needs the maintainer for what code cannot do: a hosting
+  provider, its account and who pays (ADR-0010); the questions to the
+  OpenStreetMap Foundation's Licensing Working Group (ADR-0019); a Code
+  of Conduct contact and branch protection. The code that follows the
+  decisions comes next: A7 (refresh sets merge only on their base
+  world), RFC 0001's JSON size limits, ADR-0017's allowlist (after its
+  short RFC), and the ODbL notices (ADR-0019).
+- **Baseline refreshes** (M1) work on `main`, with their rules accepted
+  in [ADR-0020](adr/0020-baseline-refreshes.md); the amendments A1 to A8
+  are decided and are built in the order RFC 0002 gives.
+- **M2** has water, lit windows, the night and dusk on `main`. Trees and
+  street lights come next: RFC 0004's point features, their Zurich
+  sources (ADR-0015) and heights (ADR-0016), drawn as ADR-0022 decides.
+  Then the navigation layer (RFC 0005) and the crowd (ADR-0021), whose
+  client prototype passed its checks. The benchmark route (ADR-0018)
+  measures each step.
 
 *Last reviewed: 2026-11-25.*
 
@@ -93,7 +88,7 @@ wide in Zurich ([RFC 0001](../rfcs/0001-world-format.md)).
 |---|---|---|
 | **World** | 0.95 km² of Zurich's old town: 30 tiles, 1,387 buildings, from swisstopo and OpenStreetMap (OSM) data. Switzerland only, one region | Every other place; data sources outside Switzerland |
 | **Data and AI** | The ingest: the same inputs on the same platform give the same world id (a hash of the whole world's content, ADR-0006). No machine learning | Height and roof inference; facades and materials stored in the world data (today the client draws generic windows at render time); an ingest reproducible across platforms; a planet-scale pipeline |
-| **World format** | RFC 0001 (Draft): content-addressed tiles, provenance on every asset, 7 layers, an 8-colour palette, no textures | Water, vegetation and other layers; textures; levels of detail; several regions per world; mesh compression |
+| **World format** | RFC 0001 (accepted 2026-11-25; 0.1.0 frozen with RFC 0003 to 0005): content-addressed tiles, provenance on every asset, 7 layers, an 8-colour palette, no textures | Water, vegetation and other layers; textures; levels of detail; several regions per world; mesh compression |
 | **Scale** | Everything within 600 m is loaded, nothing beyond. 48 MB of content for the district (about 51 MB per km²) | Levels of detail, streaming over HTTP, a disk cache, crossing region boundaries, moving the origin as the player travels |
 | **Simulation** | Deterministic at 60 Hz, bit-identical replays on Linux, Windows and macOS. One thing moves: the player | People, vehicles, interactions, anything else that moves |
 | **Look** | Physically based sky, the real sun for any date and time, shadows, ambient occlusion; procedural windows, roof tiles and paving drawn by the client ([ADR-0012](adr/0012-client-realism-from-procedural-detail.md)) | Water, trees, street furniture, night lights, weather, real facades, a visible character |
@@ -101,7 +96,7 @@ wide in Zurich ([RFC 0001](../rfcs/0001-world-format.md)).
 | **Gameplay** | Walking, flying, a map and named places | Things to do, vehicles, saves, menus, gamepad |
 | **Multiplayer** | None (determinism and per-tick state hashes are the groundwork) | Networking, accounts, moderation |
 | **Contributions** | A gate with ten checks, merges, takedowns and a facade tool, all working locally | Hosting ([ADR-0010](adr/0010-hosting-the-canonical-world.md)), submissions, reviewers, baseline refreshes, a first real contribution |
-| **Community** | One maintainer, no external contributors yet, 13 ADRs, 2 Draft RFCs | A second person who can merge, a Code of Conduct contact, an announcement, an owner for costs |
+| **Community** | One maintainer, no external contributors yet, 22 ADRs and 5 RFCs, all accepted on 2026-11-25 | A second person who can merge, a Code of Conduct contact, an announcement, an owner for costs |
 | **Engineering** | About 14,600 lines of Rust and 4,200 of Python; 106 Rust and 91 Python tests; 12 CI jobs, including the client built and tested on Linux, Windows and macOS; seeded fuzz tests of every reader of untrusted files | GPU and performance tests, releases |
 
 ## 3. Where you can help
@@ -250,13 +245,13 @@ Milestones are numbered by priority, not by date. Each says what it opens
 with and what it needs. After M3, milestones M4, M5 and M6 can run in
 parallel.
 
-### M0. Foundations (built; decisions pending)
+### M0. Foundations (built and decided)
 
 The walkable, deterministic district (progress.md's stages 1–6), the
 contribution gate and merge rules, the facade tool, the fix for the player
 shaking in concave corners, the detailed look and fast travel. All of it is
-on `main`. ADR-0011 to ADR-0013 are Proposed, and RFC 0001 and RFC 0002 are
-drafts (section 8).
+on `main`. ADR-0011 to ADR-0013, RFC 0001 and RFC 0002 were accepted on
+2026-11-25.
 
 ### M1. Open for contributions
 
@@ -567,22 +562,22 @@ arrives) and servers per area for larger groups.
 
 ## 8. Decisions waiting
 
-| Decision | Record | Status | Unblocks |
+Every decision record drafted so far was accepted on 2026-11-25:
+ADR-0010 to ADR-0022 and RFC 0001 to RFC 0005, with their recommended
+options. What still waits:
+
+| Decision or task | Record | Status | Unblocks |
 |---|---|---|---|
-| Hosting, provider and who pays | [ADR-0010](adr/0010-hosting-the-canonical-world.md) | Proposed; the maintainer chooses | M1 |
-| Corner fix, detailed look, fast travel | [ADR-0011](adr/0011-stop-corner-oscillation.md), [ADR-0012](adr/0012-client-realism-from-procedural-detail.md), [ADR-0013](adr/0013-travel-by-starting-new-sessions.md) | Proposed | closing M0 |
-| World format and contribution rules | [RFC 0001](../rfcs/0001-world-format.md), [RFC 0002](../rfcs/0002-contributions-and-merge-rules.md) | Draft | announcing (M1) |
-| Refresh amendments A1 to A8 (terrain edges, shells under facades, the cap, ways under buildings, spawn and tiles, G4 and G5, base world, holes) | [RFC 0002](../rfcs/0002-contributions-and-merge-rules.md#unresolved-questions), questions 9 to 16; [ADR-0020](adr/0020-baseline-refreshes.md#amendments-flagged-for-rfc-0002) | open; ADR-0020 itself is accepted | the first real refresh (M1), M3 |
-| How the published world meets the ODbL; the OSM fallback buildings | [ADR-0019](adr/0019-odbl-and-the-published-world.md), building on ADR-0001 | Proposed | publishing (M1) |
-| Licence allowlist | [ADR-0017](adr/0017-licence-allowlist.md), amending ADR-0001 | Proposed; its gate and validation rules need an RFC | M1, new sources in M2 |
-| Water layer and water source | [RFC 0003](../rfcs/0003-water-layer.md), [ADR-0014](adr/0014-water-areas-from-openstreetmap.md) | Draft and Proposed, implemented; comments until at least 2026-12-01; the contract version is chosen with RFC 0004, and with RFC 0005 if the maintainer takes it into that choice | M2 |
-| Trees and street lights in the world format | [RFC 0004](../rfcs/0004-point-features.md) | Draft; comments until at least 2026-12-01 | M2 |
-| Trees and lights from Zurich's open data; measured heights | [ADR-0015](adr/0015-zurich-trees-and-lights.md), [ADR-0016](adr/0016-swisssurface3d-heights.md) | Proposed | M2 |
-| Performance tier | [ADR-0018](adr/0018-performance-tier.md) | Proposed | M2 |
-| Pedestrians | [ADR-0021](adr/0021-pedestrians.md) | Accepted (2026-11-25): C2, people drawn by the client | M2 |
-| Navigation data; how the client draws trees, lamps and lit windows | [RFC 0005](../rfcs/0005-navigation-data.md), after the pedestrian ADR; [ADR-0022](adr/0022-drawing-trees-lamps-and-windows.md), extending ADR-0012 | RFC 0005 Draft, comments until at least 2026-12-09; ADR-0022 accepted (2026-11-25) | M2 |
-| Code of Conduct contact, branch protection, filing the issue drafts, announcing | tasks, see M1 | open | announcing (M1) |
+| Hosting provider, its account, and who pays | [ADR-0010](adr/0010-hosting-the-canonical-world.md) (option A accepted) | the maintainer chooses and sets up | publishing (M1) |
 | Who owns costs and receives donations | with ADR-0010 | to be drafted | M1 |
+| Questions to the OpenStreetMap Foundation's Licensing Working Group; swisstopo's confirmation | [ADR-0019](adr/0019-odbl-and-the-published-world.md) (option A accepted) | the maintainer writes | publishing (M1) |
+| The licence allowlist's gate and validation rules | an RFC that [ADR-0017](adr/0017-licence-allowlist.md) calls for | to be drafted; it needs world format 0.2.0, since 0.1.0 is frozen | M1, new sources in M2 |
+| Questions to ewz and Grün Stadt Zürich; the fixture's source answers as a release asset | [ADR-0015](adr/0015-zurich-trees-and-lights.md), [ADR-0022](adr/0022-drawing-trees-lamps-and-windows.md) | the maintainer writes and publishes | trees and lights (M2) |
+| A reference card of the RX 6600 class | [ADR-0018](adr/0018-performance-tier.md) | the maintainer obtains one | measuring M2 |
+| hystreet's licence version | [ADR-0021](adr/0021-pedestrians.md), question 2 | the maintainer asks the city | the crowd's profiles (M2) |
+| The navigation ingest's rules | an ADR that [RFC 0005](../rfcs/0005-navigation-data.md) calls for | to be drafted | the crowd (M2) |
+| Questions left open without a recommendation | in each record | open | as each says |
+| Code of Conduct contact, branch protection, filing the issue drafts, announcing | tasks, see M1 | open | announcing (M1) |
 | Whether there is an in-game economy | none yet | not drafted | later |
 | The first game loop, vehicles, networking, the compiler | ADRs | drafted when their milestones start | M4, M5, M6 |
 

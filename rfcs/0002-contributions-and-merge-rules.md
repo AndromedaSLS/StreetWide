@@ -1,10 +1,53 @@
 # RFC 0002: Contributions and merge rules for the canonical world
 
-- **Status:** Draft
+- **Status:** Accepted (2026-11-25)
 - **Authors:** @victorpicaud
 - **Created:** 2026-11-23 (comment period until at least 2026-11-30)
 - **Contract version affected:** new contribution contract `0.1.0`; world
   format 0.1 unchanged
+
+## Decision
+
+*Accepted on 2026-11-25 by @victorpicaud,* the founding maintainer, who
+wrote: "all approved, make choices and merge".
+
+- **Accepted:** the design below, with the options it proposes under
+  "Options considered":
+  - documents in Git and objects in a content-addressed store, hosted
+    as [ADR-0010](../docs/adr/0010-hosting-the-canonical-world.md)
+    decides;
+  - the gate, plus no-regression metrics, plus review where measurement
+    ends;
+  - change sets judged asset by asset;
+  - OSM-derived layers fixed upstream first;
+  - visual-only facades.
+- **Section 7's refresh rules,** the clarification accepted with
+  [ADR-0020](../docs/adr/0020-baseline-refreshes.md), are part of the
+  accepted text.
+- **Unresolved questions:** questions 2 and 8, and questions 9 to 16
+  (ADR-0020's amendments A1 to A8), are decided as each recommends (see
+  [Unresolved questions](#unresolved-questions)). Question 15 adds a
+  rule to sections 2 and 7. The others stay open.
+- **Amended by three RFCs accepted the same day,** whose texts carry
+  their amendments of sections 3 and 4: [RFC 0003](0003-water-layer.md)
+  (water), [RFC 0004](0004-point-features.md) (vegetation and street
+  objects) and [RFC 0005](0005-navigation-data.md) (navigation, and a
+  new check, G11).
+- **Contract version:** the contribution contract stays `0.1.0`,
+  amended in place by those RFCs and by the decisions on questions 9 to
+  16, as RFC 0005 and ADR-0020 recommend. `GATE_VERSION` rises when
+  each change to the gate's output is implemented. From this acceptance
+  on, changing these rules needs an RFC that bumps the contribution
+  contract version (see "Compatibility and migration").
+- **Reason:** the maintainer's decision of 2026-11-25.
+- **Comment period:** accepted on 2026-11-25, before the end of its
+  comment period, by the founding maintainer's decision; no comments
+  had been received and the project had not been announced.
+  [GOVERNANCE.md](../GOVERNANCE.md) (item 3) asks for at least 7 days of
+  comment, which for this RFC ran until at least 2026-11-30.
+- **Follow-up:** the RFC that
+  [ADR-0017](../docs/adr/0017-licence-allowlist.md) calls for writes
+  G4's allowlist, and question 14's decision, into the G4 and G5 rows.
 
 ## Summary
 
@@ -110,6 +153,8 @@ canonical form sorts them.)
 
 **Atomicity.** A change set is applied whole or not at all. It should stay
 small and coherent: at most 50 changes, all serving one stated purpose.
+The cap is to be lifted for change sets authored by `streetwide:ingest`
+before M3 (question 11, decided on 2026-11-25).
 
 **Concurrency is optimistic.** Every `replace` and `remove` names the
 version it expects. If the canonical world has moved on since
@@ -117,6 +162,9 @@ version it expects. If the canonical world has moved on since
 is **stale**. The contributor rebases it: new parents, re-run gate. A change
 set whose parents are all still current can be merged on top of a newer
 world without rebasing, after the gate runs against that newer world.
+Change sets authored by `streetwide:ingest` are the exception: they
+merge only on the world named in their `base_world_id` (section 7,
+question 15).
 
 ### 3. Which layers accept contributions (contribution contract 0.1)
 
@@ -171,6 +219,12 @@ A change set **passes the gate** (`passed: true`) only if every outcome is
 | G10 | Simulation | Every recorded replay of the CI replay suite whose world is the base world, and whose path crosses an affected tile, is re-recorded on the candidate world. It must still reach its recorded waypoints. Hash equality is not expected: the world changed. |
 
 Numbers in G7 and G8 are starting values (see Unresolved questions).
+
+The decisions of 2026-11-25 on questions 9, 10, 14 and 16 change G4,
+G5, G8 and G9 (see Unresolved questions). Until the gate implements
+each of them, raising `GATE_VERSION`, the rows above describe the gate.
+RFC 0003, RFC 0004 and RFC 0005 amend G3, G7 and G8 for their layers,
+and RFC 0005 adds G11.
 
 ### 5. "Beats what is there"
 
@@ -278,9 +332,11 @@ run.
 ### 7. Baseline refreshes and takedowns
 
 *The baseline refresh rules below are a clarification accepted with
-[ADR-0020](../docs/adr/0020-baseline-refreshes.md) on 2026-11-25; the RFC
-as a whole stays a Draft. They change no contract document and no gate
-check.*
+[ADR-0020](../docs/adr/0020-baseline-refreshes.md) on 2026-11-25, while
+the RFC was still a Draft; the RFC as a whole was accepted later the
+same day. They change no contract document and no gate check. The last
+rule, on the base world of a refresh's change sets, is the decision on
+question 15.*
 
 **Baseline refresh.** When `tools/ingest` is run with newer source data
 (a new swisstopo release, a newer OpenStreetMap snapshot), a refresh
@@ -338,6 +394,10 @@ compares its output with the current world asset by asset, matched by
   An accepted change to a contribution gets a set of its own. The sets
   are merged one after another, each made against the world the
   previous one produces.
+- A change set authored by `streetwide:ingest` merges only on the world
+  named in its `base_world_id`. If the canonical world has moved, the
+  refresh is planned again. The merge commands enforce this, not the
+  gate (question 15, decided on 2026-11-25).
 
 **Takedown.** A maintainer may remove or revert an asset immediately,
 without the "beats" rule, for:
@@ -460,6 +520,8 @@ To be built after acceptance:
 
 ## Unresolved questions
 
+Decided on 2026-11-25 where marked; the others stay open.
+
 1. **Hosting** of the canonical object store and the world log (an ADR).
 2. **Thresholds:** the budgets and tolerances in G7 and G8 (with G8's
    step limits) and the metric tolerances. They will be tuned on real
@@ -469,6 +531,11 @@ To be built after acceptance:
    shared by the whole change set would bound that, but would make one
    facade's outcome depend on the others in its change set; until the
    gate runs as a service, the per-facade limits are enough.
+
+   **Decided 2026-11-25:** the numbers above stay until they are tuned
+   on real contributions, and G8's step limits stay per facade until
+   the gate runs as a service. Tuning them changes the rules (see
+   "Compatibility and migration").
 3. **swissSURFACE3D** as the reference for shell and terrain metrics needs
    an ingest ADR and a licence entry. Abroad, other references will be
    needed.
@@ -495,10 +562,17 @@ To be built after acceptance:
 
    Recommendation: leave it until real data comes near the budget.
 
+   **Decided 2026-11-25:** leave it until real data comes near the
+   budget.
+
 Questions 9 to 16 came up while designing the baseline refresh tool;
 ADR-0020 calls them amendments A1 to A8. Each would change a gate rule,
 a merge rule or the contract, so none is part of the section 7
-clarification, and none is decided.
+clarification. Each is decided as
+[ADR-0020](../docs/adr/0020-baseline-refreshes.md#amendments-flagged-for-rfc-0002)
+recommends. How they change the contract is decided as it recommends
+too: in place, with the contribution contract at `0.1.0`, and
+`GATE_VERSION` raised when a gate change is implemented.
 
 9. **Terrain edges in a refresh (A1):** G8 fails a replaced terrain
    whose open edges move, even when its neighbours move the same way in
@@ -506,33 +580,68 @@ clarification, and none is decided.
    merged. G8 could instead require a replaced terrain to meet the
    candidate world's neighbouring terrain bit for bit; see
    [ADR-0020](../docs/adr/0020-baseline-refreshes.md#amendments-flagged-for-rfc-0002).
+
+   **Decided 2026-11-25:** hold now, and amend G8 before the first
+   height-model refresh. G8 will require a replaced terrain to meet the
+   candidate world's neighbouring terrain bit for bit and to keep the
+   world's outer edge, and terrain tiles that share a changed edge go
+   into one change set. Until the gate implements it, the refresh tool
+   holds such terrain.
 10. **Shells under contributions (A2):** G8 checks a facade against its
     shell only when the facade itself changes, so a refresh that changes
     the shell is never checked against the facade on it. G8 could
     re-check contributed dependents when their shell changes, with
     `review` for a refresh and `fail` for a contribution; see
     [ADR-0020](../docs/adr/0020-baseline-refreshes.md#amendments-flagged-for-rfc-0002).
+
+    **Decided 2026-11-25:** hold now, amend later. G8 will re-check
+    contributed dependents when their shell changes, with `review` for a
+    refresh and `fail` for a contribution. Until the gate implements it,
+    the refresh tool holds such a shell, and nothing lifts the hold.
 11. **The 50-change cap for refreshes (A3):** a refresh of every
     building in the Zurich district would need 28 change sets, each
     reviewed on its own. The cap could be lifted for change sets
     authored by `streetwide:ingest`, as RFC 0004 recommends before M3;
     see
     [ADR-0020](../docs/adr/0020-baseline-refreshes.md#amendments-flagged-for-rfc-0002).
+
+    **Decided 2026-11-25:** split refreshes by purpose and at 50 changes
+    for M1 and M2, and lift the cap for change sets authored by
+    `streetwide:ingest` before M3.
 12. **Buildings over mapped ways (A4):** a refreshed building can stand
     over a way that OpenStreetMap still maps, and G9 then fails. G9
     could give `review` instead of `fail` when the blocking asset was
     made by the ingest; see
     [ADR-0020](../docs/adr/0020-baseline-refreshes.md#amendments-flagged-for-rfc-0002).
+
+    **Decided 2026-11-25:** wait for the first real refresh;
+    `compare-worlds` will show whether it happens. G9 does not change
+    until then, and a set that fails this way is planned again with the
+    culprit held.
 13. **The spawn and the tile set (A5):** a change set cannot move the
     spawn, add a tile or remove one, although the ingest places the
     spawn 1 m above the height model and coverage can change upstream.
     Change sets could be allowed to make these changes; see
     [ADR-0020](../docs/adr/0020-baseline-refreshes.md#amendments-flagged-for-rfc-0002).
+
+    **Decided 2026-11-25:** keep holding, and amend when a world's
+    coverage or the ground at its spawn must change. Until then the
+    refresh tool holds what would bury the spawn, and additions to
+    tiles the world lacks.
 14. **Licence and provenance checks on refreshes (A6):** the gate skips
     G4 and G5 for change sets authored by `streetwide:ingest`, but the
     G4 and G5 rows of section 4 do not say so. Both could run on
     refreshes too, as ADR-0017 proposes; see
     [ADR-0020](../docs/adr/0020-baseline-refreshes.md#amendments-flagged-for-rfc-0002).
+
+    **Decided 2026-11-25:** follow
+    [ADR-0017](../docs/adr/0017-licence-allowlist.md)'s proposal. G4's
+    licence check also runs on change sets authored by
+    `streetwide:ingest`, and validation, which G1 runs on every change
+    set, checks that each asset's licence and credits cover those of its
+    sources. The RFC that ADR-0017 calls for writes this into the G4 and
+    G5 rows, with the allowlist; until the gate implements it, refreshes
+    skip G4 and G5.
 15. **Refresh change sets and their base world (A7):** section 2 lets a
     change set whose parents are still current merge on a newer world,
     so a facade merged between two sets of one refresh can end up on a
@@ -540,9 +649,22 @@ clarification, and none is decided.
     set authored by `streetwide:ingest` could be merged only on the
     world named in its `base_world_id`; see
     [ADR-0020](../docs/adr/0020-baseline-refreshes.md#amendments-flagged-for-rfc-0002).
+
+    **Decided 2026-11-25:** adopt it with the clarification: a change
+    set authored by `streetwide:ingest` merges only on the world named
+    in its `base_world_id`, as sections 2 and 7 now say. The merge
+    commands enforce it, so `--require-base` stops being opt-in for
+    such sets; G2 does not change.
 16. **Holes in the ground (A8):** removals skip G7 and G8, and G9's
     probe casts no ray downward, so neither G8 nor G9 notices a missing
     terrain tile. G8 could give `review` for every terrain removal, and
     G9 could flag a probe point that had ground below it in the base
     world and has none in the candidate; see
     [ADR-0020](../docs/adr/0020-baseline-refreshes.md#amendments-flagged-for-rfc-0002).
+
+    **Decided 2026-11-25:** amend together with question 9 (A1), since
+    both touch G8's terrain rules. G8 will give `review` for every
+    terrain removal, and G9 will flag a probe point that had ground
+    below it in the base world (a downward ray within 2 m) and has none
+    in the candidate. Until the gate implements it, the refresh tool's
+    `per-tile-removal` hold stops a hole in the ground.

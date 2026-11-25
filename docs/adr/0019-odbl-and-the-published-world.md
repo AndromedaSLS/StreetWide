@@ -1,6 +1,6 @@
 # ADR-0019: Decide how the published world meets the ODbL
 
-- **Status:** Proposed
+- **Status:** Accepted (2026-11-25)
 - **Date:** 2026-11-24
 - **Deciders:** @victorpicaud
 - **Supersedes / superseded by:** none (builds on ADR-0001, which it
@@ -208,9 +208,11 @@ credit.
 
 ## Decision
 
-*Proposed:* option A, with the ten fallback buildings staying in the
-`shell` layer. **Not decided:** the maintainer, @victorpicaud, decides,
-and the decision and its reasons are recorded here when made.
+*Accepted on 2026-11-25 by @victorpicaud:* option A, the whole
+published world offered under ODbL 1.0, with the ten fallback buildings
+staying in the `shell` layer. Each manifest keeps the licence and
+credits of its own sources. B and C are not chosen, so the B1 or B2
+choice and the "Recommended under B" below do not apply.
 
 **Why A.**
 - Reviews of the water and tree designs found four cases of OSM data
@@ -226,17 +228,18 @@ and the decision and its reasons are recorded here when made.
 **Before publishing under A:** confirm swisstopo (below). Answer the
 contributors' question before the first outside contribution: if CC BY-SA
 4.0 contents do not fit, a new ADR changes the contribution terms and
-supersedes that part of ADR-0001.
+supersedes that part of ADR-0001. Both fall to the maintainer, with the
+question for the Licensing Working Group below.
 
 **If B is chosen:** B1. The ten buildings are small, and a contributor
 can add each one as a shell, with evidence (RFC 0002).
 
 ### What any option needs
 
-- **Checks:** the licence rules proposed in ADR-0017, on baseline
-  refreshes too: every source's licence appears in the asset's licence,
-  and every source's credit in its credits. A feature id's prefix never
-  decides a licence.
+- **Checks:** the licence rules of ADR-0017 (accepted on 2026-11-25), on
+  baseline refreshes too: every source's licence appears in the asset's
+  licence, and every source's credit in its credits. A feature id's
+  prefix never decides a licence.
 - **Notices with the world:** the ODbL notice, the licence texts and the
   credits sit at the store's root, beside `current.json` (ADR-0010). The
   fetch command planned for M1 copies them and prints the notice. This
@@ -315,7 +318,7 @@ game client renders it.
   loaded. B1 also removes the fixture tile's fallback shell.
 - **Privacy:** unchanged. The credit names "OpenStreetMap contributors",
   never a mapper.
-- **Under A:**
+- **Under A,** the option chosen:
   - ATTRIBUTION.md, the README and the roadmap say that the world is
     offered under the ODbL, and ATTRIBUTION.md drops its extraction claim;
   - CONTRIBUTING.md ("Contributing world content") and the facade guide

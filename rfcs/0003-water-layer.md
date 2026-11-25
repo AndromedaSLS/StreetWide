@@ -1,11 +1,40 @@
 # RFC 0003: A water layer
 
-- **Status:** Draft
+- **Status:** Accepted (2026-11-25)
 - **Authors:** @victorpicaud
 - **Created:** 2026-11-24 (comment period until at least 2026-12-01)
 - **Contract version affected:** world format 0.1, amended in place
   (`contract_version` stays `0.1.0`, see "Compatibility and migration");
   contribution contract 0.1, amended in place; gate 0.1.0 → 0.1.1
+
+## Decision
+
+*Accepted on 2026-11-25 by @victorpicaud,* the founding maintainer, who
+wrote: "all approved, make choices and merge".
+
+- **Accepted:** option A, a `water` layer independent of the source, as
+  designed below: one asset per tile, palette material `water`,
+  `collider: none`, closed to contributions, and gate 0.1.1.
+- **Contract version:** amended in place. The world format's
+  `contract_version` stays `0.1.0`, chosen once for this RFC,
+  [RFC 0004](0004-point-features.md) and
+  [RFC 0005](0005-navigation-data.md) (RFC 0004's option A), and the
+  contribution contract stays `0.1.0`. With
+  [RFC 0001](0001-world-format.md) accepted the same day, 0.1.0 is
+  frozen from then.
+- **Already built:** the layer, its checks in the schemas, `op_world`
+  and the Python tools, gate 0.1.1 and the ingest's water
+  ([ADR-0014](../docs/adr/0014-water-areas-from-openstreetmap.md)) were
+  implemented while this RFC was a Draft. The acceptance changes none
+  of them.
+- **Unresolved questions:** "Several sources in one tile" is answered
+  by RFC 0004 section 2, accepted the same day; the others stay open.
+- **Reason:** the maintainer's decision of 2026-11-25.
+- **Comment period:** accepted on 2026-11-25, before the end of its
+  comment period, by the founding maintainer's decision; no comments
+  had been received and the project had not been announced.
+  [GOVERNANCE.md](../GOVERNANCE.md) (item 3) asks for at least 7 days of
+  comment, which for this RFC ran until at least 2026-12-01.
 
 ## Summary
 
@@ -152,6 +181,9 @@ The design above.
   - **One decision with RFC 0004:** [RFC 0004](0004-point-features.md)
     amends the same format, and proposes choosing the version once for
     both RFCs.
+  - **Decided 2026-11-25:** amend in place; `contract_version` stays
+    `0.1.0` for this RFC, RFC 0004 and RFC 0005 together (RFC 0004's
+    option A).
 - **Existing worlds:** a re-ingest adds water assets and new tile indexes,
   so world ids change. Existing assets stay byte-identical. Replays
   recorded in the old world no longer match its id and must be recorded
@@ -185,11 +217,18 @@ The design above.
 
 ## Unresolved questions
 
+Answered on 2026-11-25 where marked; the others stay open.
+
 - **Entering water:** swimming, or keeping players out of rivers. Both
   need a collider kind for water and a simulation contract change.
 - **Several sources in one tile:** for example at a national border, or
   if a national water source replaces OpenStreetMap in one country. That
-  needs feature ids by source rather than by tile.
+  needs feature ids by source rather than by tile. **Answered** by
+  [RFC 0004](0004-point-features.md) section 2, accepted on 2026-11-25
+  with its recommended grammar: water keeps `tile:17/{x}/{y}` and takes
+  the optional `/{source}` suffix when a second water source appears.
+  The rename, an `add` and a `remove`, costs nothing in the simulation,
+  since water has no collider.
 - **Gradients and weirs:** one flat level per water body and terrain
   source tile (ADR-0014) cannot model a weir inside a tile.
 - **Riverbeds:** no open data covers riverbeds (swissBATHY3D covers lakes

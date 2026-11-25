@@ -45,7 +45,7 @@ pedestrians "if their ADR puts them in M2".
   work on its own thread alongside, so a share of a 16.7 ms frame below
   is what the work takes from the main update's budget, and an upper
   bound on what it adds to frame time.
-  [ADR-0018](0018-performance-tier.md) (Proposed) asks for a 99th
+  [ADR-0018](0018-performance-tier.md) (Accepted) asks for a 99th
   percentile frame time of at most 16.7 ms on an 8 GB card of the
   RX 6600 class at 1080p, and names no CPU.
 - **Rollback, if M5's networking ADR chooses it** (the roadmap's
@@ -67,9 +67,9 @@ pedestrians "if their ADR puts them in M2".
 - **Licences:** every source carries its licence
   ([ADR-0001](0001-licensing.md)), and client assets get manifests with
   theirs (roadmap, M2). [ADR-0017](0017-licence-allowlist.md) and
-  [ADR-0019](0019-odbl-and-the-published-world.md), both Proposed,
-  draft which licences are allowed, for world data and client assets,
-  and how the ODbL applies.
+  [ADR-0019](0019-odbl-and-the-published-world.md), both accepted on
+  2026-11-25, set which licences are allowed, for world data and client
+  assets, and how the ODbL applies.
 
 **Evidence.** Gathered on 2026-11-25 in three research notes (open-world
 games; crowd models and walking behaviour; open data for paths, counts
@@ -660,7 +660,8 @@ world they roll back exactly, but still cost 30.4 to 30.9 ms a frame at
 recommended below. C2 in M2: people drawn by the client from a shared
 seed, outside the simulation; a seeded A is the fallback if the client
 prototype fails its checks; C1 is left to M4 and M5. The open questions
-at the end stay open.
+at the end were settled later the same day, each by its recommendation
+(Open questions).
 
 **Recommended: C2 in M2.** The client draws people from a shared seed.
 They stay out of the simulation (out of `op_sim`'s `Schedule`, state
@@ -892,11 +893,11 @@ into the `Schedule` (B or C1).
 
 | What | Source | Licence | Status |
 |---|---|---|---|
-| Lanes: sidewalks, footways, crossings, steps, pedestrian and living streets, squares | OpenStreetMap, on swissALTI3D heights and kept clear of swissBUILDINGS3D shells | `ODbL-1.0 AND LicenseRef-swisstopo-OGD` if keeping clear of shells counts as placing under RFC 0001; open (open question 6) | ways in the cache; crossing nodes, kerbs, entrances, `highway` relations and `area:highway` need new queries |
+| Lanes: sidewalks, footways, crossings, steps, pedestrian and living streets, squares | OpenStreetMap, on swissALTI3D heights and kept clear of swissBUILDINGS3D shells | `ODbL-1.0 AND LicenseRef-swisstopo-OGD`: keeping clear of shells counts as placing under RFC 0001, as RFC 0005 amends it (open question 6) | ways in the cache; crossing nodes, kerbs, entrances, `highway` relations and `area:highway` need new queries |
 | Places: entrances, stops, benches, terraces, shops and places to eat, with opening hours | OpenStreetMap | `ODbL-1.0` | a query for nodes; entrances, stops and benches first |
 | Checks, never copied | the city's walking network and surveyed sidewalks | `CC0-1.0` | quality reports; no allowlist entry needed (ADR-0017) |
 | Hourly shapes by day type, and month factors | Bahnhofstrasse counts (hystreet's pilot); the Limmatquai counter, 2018 to 2024; VBZ boardings by stop and hour | "Creative Commons Attribution", no version; `CC0-1.0`; `CC0-1.0` | hystreet's version first (open question 2); the CC0 sources fit ADR-0017's list |
-| Intensity per lane and occupancy per place | estimated from lane kinds, places and stops, calibrated at the counted places | open: OSM-derived places mixed with counts (open question 6) | the navigation-data RFC |
+| Intensity per lane and occupancy per place | estimated from lane kinds, places and stops, calibrated at the counted places | inside the ODbL navigation assets, with each count source's licence (open question 6) | the navigation-data RFC |
 | Character models and animations | client assets such as MakeHuman's (CC0) and the 100STYLE motion data (CC BY 4.0), both on ADR-0017's list | `CC0-1.0`, `CC-BY-4.0` | manifests and downloads (roadmap, M2); Mixamo, and Quaternius's own licence, are on its forbidden list |
 
 Every source gets its ATTRIBUTION.md entry before its first byte enters
@@ -993,7 +994,9 @@ the world (roadmap, section 5).
    carry the date and time, and the population's version, as
    presentation fields, not inputs. That changes the replay contract
    (an RFC). Recommended: leave it until bug reports need it. M5's
-   sessions carry the same data anyway (C2, Multiplayer).
+   sessions carry the same data anyway (C2, Multiplayer). *Decided
+   2026-11-25:* leave it until bug reports need it; the replay header
+   does not change.
 2. **hystreet's licence.** The city's portal says "Creative Commons
    Attribution" with no version, and links that label to the Open
    Definition's CC BY page, whose main link is version 4.0
@@ -1003,10 +1006,19 @@ the world (roadmap, section 5).
    holds the rights matters too. Confirm the version and the city's
    right to license with the city, or add a `LicenseRef-` entry with
    the stored text, under ADR-0017. Until then the CC0 counts give a
-   first profile.
+   first profile. *Decided 2026-11-25:* as drafted. The CC0 counts give
+   the first profile; hystreet's counts shape nothing until the city
+   confirms the version and its right to license them, or a
+   `LicenseRef-` entry with the stored text passes ADR-0017's review.
+   Asking the city is the maintainer's to do.
 3. **Day types.** The counts separate weekdays, Saturdays and Sundays;
    holidays need a calendar per place, which the navigation-data RFC
-   could carry as data.
+   could carry as data. *Decided 2026-11-25:* holidays are data, carried
+   by the navigation-data RFC
+   ([RFC 0005](../../rfcs/0005-navigation-data.md), accepted the same
+   day with its option H1): a list of holiday dates per tile, so that a
+   city or canton can have its own, from a public list reviewed under
+   ADR-0017 and empty until then.
 4. **Signed zeros in ADR-0003.** `min` and `max` are listed as safe but
    do not fix which zero they return. StreetWide's own simulation code
    never gives them two zeros today: its only use limits the player's
@@ -1015,12 +1027,16 @@ the world (roadmap, section 5).
    character controller, parry 0.31.1's segment distances). A `dmath`
    helper or a clippy rule would close it for StreetWide's own code,
    whatever this ADR decides; dependency code stays covered only by the
-   cross-platform replay check and the Rapier canary.
+   cross-platform replay check and the Rapier canary. *Decided
+   2026-11-25:* close it for StreetWide's own code, by a `dmath` helper
+   or a clippy rule. The draft names both and recommends neither over
+   the other, so which one is still open.
 5. **Stopping, sitting, shopping.** The notes found no peer-reviewed
    rates for how often passers-by stop, sit or enter shops. A short
    count at three named places, recording totals only, would give
    starting values. It is optional: until then, occupancy is set by
-   eye, as games set it.
+   eye, as games set it. *Decided 2026-11-25:* occupancy is set by eye;
+   the count stays optional.
 6. **Lane and profile licences.** RFC 0001 lets an OSM-derived asset
    use another source "only to place its OSM geometry", for example
    terrain heights to drape a road
@@ -1040,8 +1056,20 @@ the world (roadmap, section 5).
    that mix OSM-derived places with CC BY and CC0 counts are ADR-0019's
    question, since using OSM to select or correct other data counts as
    mixing. Recommended: settle both in the navigation-data RFC, with
-   ADR-0019, before the ingest builds lanes.
+   ADR-0019, before the ingest builds lanes. *Decided 2026-11-25:* both
+   are settled in [RFC 0005](../../rfcs/0005-navigation-data.md)
+   (section 10), with ADR-0019, before the ingest builds lanes. ADR-0019
+   was accepted the same day with option A, the whole published world
+   under the ODbL, so counts mixed with OSM-derived places are no
+   licence question: they enter ODbL navigation assets as contents, and
+   each count source still needs ADR-0017's list and, for hystreet,
+   question 2 first. For the lanes, RFC 0005, accepted the same day,
+   decided its option K1: RFC 0001 section 2 is amended so that moving
+   OSM geometry sideways by at most 1 m to clear or meet another
+   source's geometry counts as placing it, never against contributed
+   content. The ingest still builds no lanes or curves until ADR-0017
+   allows each source and ATTRIBUTION.md lists every count source used.
 
-**These stay open after the decision.** The maintainer, @victorpicaud,
-decides each and records it here. Each is drafted with a
-recommendation.
+**Settled on 2026-11-25.** The maintainer, @victorpicaud, decided each
+question by its recommendation, as recorded above. Question 4 keeps one
+choice open: a `dmath` helper or a clippy rule.

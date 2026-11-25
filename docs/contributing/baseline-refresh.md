@@ -17,11 +17,12 @@ Two commands do the work:
 Neither command runs the ingest, and neither writes to the canonical
 store or to its log. You merge the sets yourself, one at a time.
 
-> **Status:** the tools work locally, and the rules they apply are
-> proposed, not decided. [ADR-0020](../adr/0020-baseline-refreshes.md)
-> (*Proposed*) records each choice with its options. Where a choice is
-> open, the tools apply the ADR's recommended option as a default. See
-> [Decisions still open](#decisions-still-open).
+> **Status:** the tools work locally, and the rules they apply are those
+> of [ADR-0020](../adr/0020-baseline-refreshes.md), accepted on
+> 2026-11-25 with its recommended options. RFC 0002's amendments A1 to
+> A8 were decided the same day; until each is implemented, the tools
+> keep the holds described here. See
+> [Decisions and what is still to build](#decisions-and-what-is-still-to-build).
 
 On Windows, write `.venv\Scripts\python` where this guide says
 `.venv/bin/python`. Keep the plan and scratch directories short, such as
@@ -31,9 +32,9 @@ Windows refuses paths over 260 characters unless long paths are enabled.
 ## 1. Where the canonical store and its log live
 
 The **canonical store** is a world store (`world.json` and `objects/`)
-that holds the canonical world. Until hosting is decided
-([ADR-0010](../adr/0010-hosting-the-canonical-world.md)), it exists only
-on the maintainer's disk.
+that holds the canonical world. Until the hosting that
+[ADR-0010](../adr/0010-hosting-the-canonical-world.md) chose is set up,
+it exists only on the maintainer's disk.
 - Keep it outside `data/world/`. The ingest writes to `data/world/<name>`
   by default, and it replaces that directory as a whole.
 - Never give its path to the ingest's `--out`.
@@ -289,10 +290,9 @@ cargo run -p op_replay -- rerecord <suite> --world <canonical> --out <suite>
   a set's `objects/` or anywhere inside a log.
 - **Review.** The gate leaves every change of a refresh to review (G3),
   and a merge needs a review that judges the set `better`. RFC 0002 says
-  that the approving reviewer may not be the change set's author. Until
-  Q22 is decided, ADR-0020's proposed default lets the maintainer who
-  planned the refresh approve it while there is one maintainer, naming
-  the planner in `--reason`.
+  that the approving reviewer may not be the change set's author.
+  ADR-0020's Q22 lets the maintainer who planned the refresh approve it
+  while there is one maintainer, naming the planner in `--reason`.
 - **Replays.** G10 uses only replays recorded in the set's base world.
   After each merge, re-record the suite on the new world with
   `op_replay rerecord`. `op_replay merge` refuses a `--replay` recorded
@@ -354,12 +354,11 @@ same bytes, so planning again is cheap and safe. Plan again also when:
   `verify`'s output.
 - **The final world does not validate.** Also a bug: report it.
 
-## Decisions still open
+## Decisions and what is still to build
 
-Until the maintainer decides, the tools apply the recommended option of
-each choice in ADR-0020 as a default. RFC 0002 section 7 states these
-rules as a clarification proposed together with the ADR. The defaults
-that shape a refresh:
+ADR-0020 was accepted on 2026-11-25 with the recommended option of each
+choice, and RFC 0002 section 7 states these rules (RFC 0002 was accepted
+the same day). The decisions that shape a refresh:
 - **What changed** (Q1): the mesh and the manifest, except
   `parent_version_id`, the generator's version and each source's
   version. Source ids count, so a release that renames its items changes
@@ -385,8 +384,10 @@ that shape a refresh:
 - **Who approves** (Q22): the maintainer who planned it, while there is
   one maintainer.
 
-None of the amendments A1 to A8 is adopted: the tools change no gate
-rule, schema, contract version or merge rule, and the 50-change cap
-stays. They are RFC 0002's unresolved questions 9 to 16. The ingest
-options Q20 and Q21, and refreshing one source at a time, are open too
-(ADR-0020, section 10).
+The amendments A1 to A8 (RFC 0002, questions 9 to 16) were decided on
+2026-11-25 with their recommendations, and are not built yet: until each
+is, the tools keep the holds above, the gate is unchanged and the
+50-change cap stays. A7 comes first (refresh sets merge only on their
+base world); A1 and A8 before the first height-model refresh; A3 before
+M3. The ingest options Q20 and Q21, and refreshing one source at a time,
+were decided too (ADR-0020, section 10) and are still to be built.

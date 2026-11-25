@@ -2529,3 +2529,63 @@ light differently.
   round.
 - The disc's 6 times white and the phase threshold are starting values
   for ADR-0022's open question 2.
+
+### Every decision record accepted (2026-11-25)
+
+The maintainer accepted every remaining record with its recommended
+options ("all approved, make choices and merge"): ADR-0010 to ADR-0019,
+RFC 0001 to RFC 0005, and the questions left open in ADR-0020 to
+ADR-0022. Each record says so in its status and Decision section, and
+each open question with a recommendation is marked "Decided
+2026-11-25". Questions with no recommendation stay open, in the text.
+
+**The RFCs were accepted before the end of their comment periods**
+(GOVERNANCE.md asks for at least 7 days; RFC 0003 and 0004 named
+2026-12-01, RFC 0005 2026-12-09), by the founding maintainer's decision:
+no comments had been received and the project had not been announced.
+Each RFC records this.
+
+**Choices worth knowing:**
+- **World format 0.1.0 is frozen:** RFC 0001 with the amendments of RFC
+  0003, 0004 and 0005 (RFC 0004's contract-version option A). A later
+  rule change to the format, such as ADR-0017's allowlist rules, needs
+  0.2.0, which changes every id.
+- **JSON size limits** (RFC 0001): 1 MiB for manifests and merge
+  records, 8 MiB for change sets, 16 MiB for check reports and tile
+  indexes; points and navigation documents keep 64 MiB until their own
+  limits are set. ADR-0020's review question on JSON size follows it.
+- **RFC 0002's amendments A1 to A8** are decided with their
+  recommendations, the contract amended in place and `GATE_VERSION`
+  raised as each is built: A7 now (refresh sets merge only on their base
+  world); A1 and A8 before the first height-model refresh; A3 before
+  M3; A2, A4 and A5 later.
+- **Hosting** (ADR-0010) is option A, a world repository, a public
+  bucket and a merge bot; the ADR recommends no provider.
+- **The night's values** in use are the decided starting values
+  (ADR-0022, question 2): the photo comparison is still to do.
+
+**For the maintainer** (what code cannot do):
+1. Choose a hosting provider, open the account, name who pays, create
+   the world repository and the merge bot's credentials (ADR-0010).
+2. Write to the OpenStreetMap Foundation's Licensing Working Group, and
+   confirm swisstopo's terms (ADR-0019).
+3. Write to ewz and Grün Stadt Zürich, and publish the fixture's two WFS
+   answers as a release asset (ADR-0015, ADR-0022).
+4. Ask the City of Zurich about hystreet's licence version (ADR-0021).
+5. Ask CMU about its motion-capture licence (ADR-0017).
+6. Obtain a card of the RX 6600 class (ADR-0018).
+7. A Code of Conduct contact and branch protection (M1).
+
+**Work that follows, in order:**
+1. A7: refresh sets merge only on their base world.
+2. RFC 0001's JSON size limits in `op_world` and `tools/worldfmt`, and
+   ADR-0014's bound on repairing water rings in the ingest.
+3. The benchmark route (ADR-0018), so each next step is measured.
+4. RFC 0004's point features end to end: schemas, `op_world` and
+   `tools/worldfmt`, the gate, the Zurich ingest (ADR-0015, ADR-0016),
+   and the client's trees and lamps (ADR-0022), with fixtures and pinned
+   ids updated.
+5. RFC 0005's navigation layer and G11, then the crowd (ADR-0021).
+6. The drafts the decisions call for: ADR-0017's RFC, the navigation
+   ingest's ADR.
+7. The ODbL notices in the client and the store (ADR-0019).

@@ -1,6 +1,6 @@
 # ADR-0015: Take trees and lights in Zurich from Stadt Zürich open data
 
-- **Status:** Proposed
+- **Status:** Accepted (2026-11-25)
 - **Date:** 2026-11-24
 - **Deciders:** @victorpicaud
 - **Supersedes / superseded by:** none (adds two sources to ADR-0006;
@@ -50,8 +50,8 @@ stated otherwise:
 
 ## Options considered
 
-Each question has a recommended option. None is decided: the maintainer,
-@victorpicaud, chooses.
+Each question has a recommended option. On 2026-11-25 the maintainer,
+@victorpicaud, accepted the recommended options (see Decision).
 
 ### 1. Which source supplies trees and street lamps in Switzerland
 
@@ -149,7 +149,7 @@ After a weekly update, the city's earlier data cannot be fetched again.
 
 | Option | For | Against |
 |---|---|---|
-| **A. Archive every raw answer that a published baseline uses, in a source archive beside the world store, addressed by its SHA-256** (recommended) | the baseline can be checked again after the city's data moves on; the fixture can be rebuilt from it; CC0 allows it | needs the bucket of [ADR-0010](0010-hosting-the-canonical-world.md), not chosen yet; about 0.6 MB per changed square and dataset at each refresh |
+| **A. Archive every raw answer that a published baseline uses, in a source archive beside the world store, addressed by its SHA-256** (recommended) | the baseline can be checked again after the city's data moves on; the fixture can be rebuilt from it; CC0 allows it | needs the bucket of [ADR-0010](0010-hosting-the-canonical-world.md), not set up yet; about 0.6 MB per changed square and dataset at each refresh |
 | B. Commit the answers to Git | no new service | data in Git, against CLAUDE.md; the fixture's two answers alone are about 1.1 MB |
 | C. Rely on the city | nothing to do | a baseline's inputs disappear within a week |
 
@@ -164,12 +164,12 @@ layout, as ADR-0010 now notes, and leaves RFC 0001 unchanged.
 
 **Who may read it.** The raw answers hold `strasse`, `quartier` and
 `status`, which never enter a world (section 5, RFC 0004 section 10).
-- **Public, like the rest of the bucket (recommended):** anyone can check
-  a baseline. The answers are the city's own CC0 publication, about trees
-  it manages and its lights, with street and quarter names but nothing
-  about people. Under section 5's option A, an answer with a status
-  outside the accepted six stops the run, so it never backs a baseline
-  and is never archived.
+- **Public, like the rest of the bucket (recommended; decided
+  2026-11-25):** anyone can check a baseline. The answers are the city's
+  own CC0 publication, about trees it manages and its lights, with street
+  and quarter names but nothing about people. Under section 5's option
+  A, an answer with a status outside the accepted six stops the run, so
+  it never backs a baseline and is never archived.
 - **Maintainers only:** street names stay out of public storage, but only
   maintainers can check a baseline.
 
@@ -289,15 +289,42 @@ size when mature, not a measurement: 177 of the 201 district trees in its
 
 ## Decision
 
-*Not decided.* The maintainer, @victorpicaud, decides, and records the
-choices and reasons here. The recommendation is one package: (a) in
-section 1 and A in sections 2 to 7, with the rules below.
+*Accepted on 2026-11-25 by @victorpicaud:* the recommendation, as one
+package: (a) in section 1 and A in sections 2 to 7, with the rules below.
+That is:
+- **Source:** no OSM trees or street lamps anywhere in Switzerland; the
+  city's data in Zurich (section 1, (a));
+- **Fetching:** one WFS request per LV95 kilometre square (section 2, A);
+- **Version:** the publisher's date plus the SHA-256 of the cached answer
+  (section 3, A);
+- **Inputs:** every raw answer that a published baseline uses is archived
+  beside the world store, addressed by its SHA-256, and public like the
+  rest of the bucket (section 4, A); the fixture's two answers as a
+  release asset until then ("Archive" below);
+- **Private ground:** the six statuses are accepted, and anything else
+  stops the run (section 5, A);
+- **Lights:** a generic light point per record, with mount unknown,
+  `count` unknown, points inside buildings kept and listed, the
+  orientation kept as an estimated `yaw`, and heights from the terrain
+  only, bridges included (section 6, A in each part);
+- **Tree attributes:** what the register records about the tree, without
+  `baumtyp`, street, quarter, status or internal ids (section 7, A).
 
 (a) is recommended whatever ADR-0019 decides. Under its options B and C,
 it keeps the Zurich points outside the ODbL. Under A, it costs nothing in
 the district, where (a) and (b) give the same data, and it keeps a later
 move to B open. Under A, (b) is worth a new look once a world reaches
 beyond the city.
+
+[ADR-0019](0019-odbl-and-the-published-world.md) was accepted the same
+day with option A: the whole published world is offered under the ODbL.
+So the rules "No OSM in these points" and "No gap-fill" below are
+choices, not licence needs, and the policy lives as written under
+"option A" in "Where the policy lives". For the same reason, whether the
+client lifts bridge lights onto the deck it draws is not a licence
+question (ADR-0019, "OSM in how the client draws other data");
+[ADR-0022](0022-drawing-trees-lamps-and-windows.md) decides how the
+client draws them.
 
 **Before any byte is ingested.** Nothing from these sources enters any
 world, the fixture included, until:
@@ -312,6 +339,12 @@ world, the fixture included, until:
   ADR-0017 for the same check;
 - RFC 0004 is accepted, after the pedestrian ADR, as RFC 0004
   recommends.
+
+ADR-0017 was accepted on 2026-11-25, with `CC0-1.0` on its list for
+world data, and the pedestrian ADR ([ADR-0021](0021-pedestrians.md))
+and [RFC 0004](../../rfcs/0004-point-features.md) the same day. The list
+itself, the ATTRIBUTION.md rows and the validation check are still to
+come.
 
 **No OSM in these points.** OSM roads, bridges, water and the OSM fallback
 buildings never place, filter, classify or correct a Zurich point. They
@@ -349,11 +382,12 @@ see a breach of a country-wide rule.
 **Archive** (section 4). Until ADR-0010's bucket exists, the answers stay
 in local caches, as Overpass answers do today. For the fixture's two
 answers (about 1.1 MB):
-- **A release asset (recommended):** attach them to a GitHub release of
-  this repository, with their SHA-256 and the publisher's date in
-  `fixtures/README.md`. The fixture can then be rebuilt byte for byte
-  without anyone's cache, and no data enters Git. A release is not
-  content-addressed, so the SHA-256 is what pins the bytes.
+- **A release asset (recommended; decided 2026-11-25):** attach them to a
+  GitHub release of this repository, with their SHA-256 and the
+  publisher's date in `fixtures/README.md`. The fixture can then be
+  rebuilt byte for byte without anyone's cache, and no data enters Git. A
+  release is not content-addressed, so the SHA-256 is what pins the
+  bytes.
 - **Commit them:** simplest, but an exception to CLAUDE.md's "No large
   data in Git", to be recorded where it is made.
 - **Local caches only:** once the city's data moves on, a rebuild depends
@@ -412,7 +446,7 @@ near OSM bridges or water, and the canton's crowns against the register.
 
 ## Consequences
 
-If the recommendation is accepted:
+With the recommendation accepted:
 
 - **Simulation:** unchanged, if RFC 0004 keeps these points visual only.
   The change that adds them carries RFC 0004's replay proof.
@@ -441,12 +475,14 @@ If the recommendation is accepted:
   - about 2,000 light points per km² need a night budget
     ([ADR-0018](0018-performance-tier.md));
   - under (a), the rest of Switzerland has no trees or lamps yet.
-- **Questions for the city:**
+- **Questions for the city,** which the maintainer sends (ADR-0022, open
+  question 7, asks ewz the same):
   - ewz: what `orientierung` measures, and from which direction; whether 0
     means "not set"; what a stack at one coordinate is; why points lie
     inside buildings; whether `nisnr` is stable; whether mount, height or
     luminaire type could be published;
   - Grün Stadt Zürich: whether a replacement tree keeps its number.
-- **Revisit** when ADR-0019 is decided or the Licensing Working Group
-  answers, when ewz answers, when another Swiss source of trees or lamps
-  appears, or if the city's service changes.
+- **Revisit** when the Licensing Working Group answers ADR-0019's
+  questions (ADR-0019 itself was accepted on 2026-11-25), when ewz
+  answers, when another Swiss source of trees or lamps appears, or if the
+  city's service changes.

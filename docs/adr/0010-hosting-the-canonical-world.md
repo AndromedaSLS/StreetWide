@@ -1,6 +1,6 @@
 # ADR-0010: Host the canonical world as a Git world log plus an object store
 
-- **Status:** Proposed
+- **Status:** Accepted (2026-11-25)
 - **Date:** 2026-11-23
 - **Deciders:** @victorpicaud
 - **Supersedes / superseded by:** none
@@ -83,15 +83,31 @@ One release per world version, with objects as release assets.
 
 ## Decision
 
-*Proposed:* option A. The storage provider and account are the
-maintainer's choice and are recorded here when made.
+*Accepted on 2026-11-25 by @victorpicaud:* option A, the recommended
+option: the world log in a separate Git repository, the objects in an
+S3-compatible bucket with public read access, contributions as pull
+requests to the log repository with CI running the gate, and a merge bot
+that uploads the objects and commits the records.
 
-Until then, the canonical world exists only on disk.
-`op_world check-change` and `op_world merge` operate on local
-directories, so tooling does not depend on this decision.
+**Still to be done by the maintainer,** whose choices are recorded here
+when made:
+- choose the provider: any S3-compatible service, such as the three
+  named in option A (Cloudflare R2, Backblaze B2, AWS S3); R2 has no
+  egress fees;
+- open its account and create the bucket, with public read access and a
+  public URL;
+- name who owns the accounts and pays their costs;
+- create the world log repository, and give the merge bot its write
+  credentials as a CI secret.
 
-**A local log** (a note proposed with
-[ADR-0020](0020-baseline-refreshes.md), not decided). A world log kept
+Until the bucket and the log repository exist, the canonical world
+exists only on disk. `op_world check-change` and `op_world merge`
+operate on local directories, so tooling does not depend on the
+provider.
+
+**A local log** (a note added with
+[ADR-0020](0020-baseline-refreshes.md), and accepted with its section 4
+on 2026-11-25). A world log kept
 in a local directory uses option A's layout, with two differences:
 - **`<hex>` in paths:** `changes/<hex>/change.json` and
   `reports/<hex>.json`, where `<hex>` is the content id without
@@ -111,6 +127,6 @@ in a local directory uses option A's layout, with two differences:
 - **Mirrors:** anyone can mirror the world by copying the bucket and the
   log repository; the hash chain proves the mirror complete and unchanged.
 - **Source archive:** [ADR-0015](0015-zurich-trees-and-lights.md)
-  proposes a `sources/` area in the same bucket for raw source answers
+  adds a `sources/` area in the same bucket for raw source answers
   that a published baseline uses, keyed by SHA-256. It is not part of any
   world store, and no world id covers it.

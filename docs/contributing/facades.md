@@ -201,5 +201,5 @@ removes your facade.
   manifest alone, with the same walls and roof, goes through: your
   facade still fits.
 
-These are the rules proposed in
-[ADR-0020](../adr/0020-baseline-refreshes.md), not decided yet.
+These are the rules of
+[ADR-0020](../adr/0020-baseline-refreshes.md), accepted on 2026-11-25.

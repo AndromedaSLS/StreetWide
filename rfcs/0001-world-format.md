@@ -1,9 +1,46 @@
 # RFC 0001: World format
 
-- **Status:** Draft
+- **Status:** Accepted (2026-11-25)
 - **Authors:** @victorpicaud
 - **Created:** 2026-11-22
 - **Contract version:** world format `0.1.0`
+
+## Decision
+
+*Accepted on 2026-11-25 by @victorpicaud,* the founding maintainer, who
+wrote: "all approved, make choices and merge".
+
+- **Accepted:** the design below, with the options it chose under
+  "Options considered": the Web Mercator quadtree (regions at z12, tiles
+  at z17), a region frame with integer tile origins, one asset per
+  feature for building layers and per tile for terrain and transport,
+  canonical JSON without floats, and BLAKE3 ids.
+- **Size limits for JSON documents:** option 1, as recommended: a limit
+  per kind of document, checked before parsing, stated in section 7
+  (see [Unresolved questions](#unresolved-questions)).
+- **Amended by three RFCs accepted the same day,** whose texts carry
+  their amendments; this text is not rewritten for them:
+  - [RFC 0003](0003-water-layer.md): the `water` layer;
+  - [RFC 0004](0004-point-features.md): the `vegetation` and
+    `street_objects` layers, with points documents as asset content;
+  - [RFC 0005](0005-navigation-data.md): the `navigation` layer, with
+    navigation documents as asset content, and its option K1, which
+    widens what section 2 lets an OSM-derived asset do with another
+    source when it places its OSM geometry.
+- **Contract version:** world format `0.1.0` is this RFC as those three
+  RFCs amend it in place: option A of RFC 0004's "Compatibility and
+  migration", chosen once for the three. Under that option, 0.1.0 is
+  frozen when this RFC is accepted, so from 2026-11-25 any further
+  change to the format takes a new `contract_version`.
+- **Reason:** the maintainer's decision of 2026-11-25.
+- **Comment period:** accepted on 2026-11-25, before the end of its
+  comment period, by the founding maintainer's decision; no comments
+  had been received and the project had not been announced.
+  [GOVERNANCE.md](../GOVERNANCE.md) (item 3) asks for at least 7 days of
+  comment, which for this RFC, created on 2026-11-22, would have ended
+  no earlier than 2026-11-29.
+- **Still open:** the unresolved questions not marked as decided or
+  answered.
 
 ## Summary
 
@@ -277,8 +314,21 @@ itself. Downloaded source data never lives here.
 A store may come from anyone (a downloaded world, a contributor's bundle),
 so readers take `world.json` and objects only as regular files, not
 symbolic links, devices or pipes, of at most 64 MiB, and refuse anything
-else before reading it. Whether JSON documents get smaller limits is an
-open question (see Unresolved questions).
+else before reading it.
+
+A JSON document also has a size limit for its kind, checked before it is
+parsed, in `op_world` and `tools/worldfmt` alike (decided on 2026-11-25,
+see Unresolved questions):
+- 1 MiB for asset manifests and merge records;
+- 8 MiB for change sets;
+- 16 MiB for check reports and tile indexes;
+- no limit of its own for world manifests, which grow with the world:
+  only the 64 MiB limit of every file.
+
+Points documents ([RFC 0004](0004-point-features.md)) and navigation
+documents ([RFC 0005](0005-navigation-data.md)) keep the 64 MiB limit
+until a limit of their own is set the same way, from their largest valid
+document with a wide margin.
 
 ## Options considered
 
@@ -350,12 +400,16 @@ assets with `parent_version_id` pointing at the old versions.
 
 ## Unresolved questions
 
+Decided or answered on 2026-11-25 where marked; the others stay open.
+
 - Region boundaries and origin rebasing (next world-format RFC).
 - Levels of detail and aggregated meshes for distant tiles.
 - Textures and richer materials (likely glTF PBR with KTX2, behind a
   profile version bump).
 - How contribution quality is scored for "beats what is there" (separate
-  RFC).
+  RFC). **Answered** by
+  [RFC 0002](0002-contributions-and-merge-rules.md) section 5, accepted
+  on 2026-11-25.
 - **Size limits for JSON documents.** Readers take any file of up to
   64 MiB (section 7), and parse a JSON document whole before any other
   check: `op_world` builds a serde_json tree, `tools/worldfmt` a Python
@@ -391,3 +445,10 @@ assets with `parent_version_id` pointing at the old versions.
   the 64 MiB rule and enforced by `tools/worldfmt` too. It is the remedy
   already chosen for the glb JSON chunk, and it changes no valid
   document.
+
+  **Decided 2026-11-25:** option 1, with each limit set from the largest
+  valid document of its kind and a wide margin, stated in section 7 next
+  to the 64 MiB rule and enforced by `tools/worldfmt` too. The limits in
+  section 7 are the example values above. Points and navigation
+  documents, which came after this question, get theirs the same way
+  and keep 64 MiB until then.

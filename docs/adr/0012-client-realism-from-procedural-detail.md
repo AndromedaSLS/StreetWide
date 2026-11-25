@@ -1,6 +1,6 @@
 # ADR-0012: Make the client look real with procedural detail and physically based light
 
-- **Status:** Proposed
+- **Status:** Accepted (2026-11-25)
 - **Date:** 2026-11-24
 - **Deciders:** @victorpicaud
 - **Supersedes / superseded by:** none (extends ADR-0008; extended by
@@ -80,8 +80,13 @@ other swisstopo data. It would be draped on roofs and open ground.
 
 ## Decision
 
-Option A now. Option C is the strongest candidate for the next world-format
+*Accepted on 2026-11-25 by @victorpicaud:* option A now, as
+recommended. Option C is the strongest candidate for the next world-format
 RFC (roofs and open ground). Facades stay with contributors.
+
+[ADR-0022](0022-drawing-trees-lamps-and-windows.md), accepted the same
+day, extends this decision: trees, street lamps, lit windows, and the
+night's exposure floor and fill.
 
 **What the client draws** (`op_client`: `texgen`, `materials`, `heights`,
 `sky`):
@@ -130,13 +135,19 @@ RFC (roofs and open ground). Facades stay with contributors.
   - **Churches and other special buildings** get house windows: the
     swissBUILDINGS3D shells carry no building type. A type from
     OpenStreetMap could choose styles; that needs the ingest to keep it.
-  - **The Limmat** is terrain in the data, so it now looks like a large
-    paved square. A water layer is the next step for realism, and needs
-    data. Options:
+  - **The Limmat** is terrain in the data, so with this ADR alone it
+    looks like a large paved square. A water layer is the next step for
+    realism, and needs data. Options:
     - swisstopo's swissTLM3D water areas, which can join the terrain
       asset because they come from the same licensor;
     - OpenStreetMap water areas, which would be a separate ODbL asset.
+      [ADR-0014](0014-water-areas-from-openstreetmap.md), accepted on
+      2026-11-25, chose these, and the client draws them.
   - **Streets** have no furniture, trees or people.
+    [ADR-0021](0021-pedestrians.md) and
+    [ADR-0022](0022-drawing-trees-lamps-and-windows.md), accepted on
+    2026-11-25, decide how the client draws people, trees and street
+    lamps.
 - **Not testable in CI:** CI has no GPU. The texture, mapping, height and
   sun code have unit tests. The look was checked with screenshots taken
   by the client's own `--screenshot` option.

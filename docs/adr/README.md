@@ -23,16 +23,16 @@ instead.
 | [0007](0007-replay-file-format.md) | Replay file format | Accepted |
 | [0008](0008-client-architecture-and-streaming.md) | Client architecture and streaming | Accepted |
 | [0009](0009-simulation-based-gate-checks.md) | Where the simulation-based gate checks run | Accepted |
-| [0010](0010-hosting-the-canonical-world.md) | Hosting the canonical world store and world log | Proposed |
-| [0011](0011-stop-corner-oscillation.md) | Stop the player oscillating in concave corners | Proposed |
-| [0012](0012-client-realism-from-procedural-detail.md) | Client realism from procedural detail and physically based light | Proposed |
-| [0013](0013-travel-by-starting-new-sessions.md) | Travel in the client by starting new sessions | Proposed |
-| [0014](0014-water-areas-from-openstreetmap.md) | Water areas from OpenStreetMap, placed as level surfaces | Proposed |
-| [0015](0015-zurich-trees-and-lights.md) | Trees and lights in Zurich from Stadt Zürich open data | Proposed |
-| [0016](0016-swisssurface3d-heights.md) | swissSURFACE3D for measured heights | Proposed |
-| [0017](0017-licence-allowlist.md) | An allowlist of licences for world data and client assets | Proposed |
-| [0018](0018-performance-tier.md) | A performance tier and a benchmark route | Proposed |
-| [0019](0019-odbl-and-the-published-world.md) | How the published world meets the ODbL | Proposed |
+| [0010](0010-hosting-the-canonical-world.md) | Hosting the canonical world store and world log | Accepted |
+| [0011](0011-stop-corner-oscillation.md) | Stop the player oscillating in concave corners | Accepted |
+| [0012](0012-client-realism-from-procedural-detail.md) | Client realism from procedural detail and physically based light | Accepted |
+| [0013](0013-travel-by-starting-new-sessions.md) | Travel in the client by starting new sessions | Accepted |
+| [0014](0014-water-areas-from-openstreetmap.md) | Water areas from OpenStreetMap, placed as level surfaces | Accepted |
+| [0015](0015-zurich-trees-and-lights.md) | Trees and lights in Zurich from Stadt Zürich open data | Accepted |
+| [0016](0016-swisssurface3d-heights.md) | swissSURFACE3D for measured heights | Accepted |
+| [0017](0017-licence-allowlist.md) | An allowlist of licences for world data and client assets | Accepted |
+| [0018](0018-performance-tier.md) | A performance tier and a benchmark route | Accepted |
+| [0019](0019-odbl-and-the-published-world.md) | How the published world meets the ODbL | Accepted |
 | [0020](0020-baseline-refreshes.md) | Baseline refreshes | Accepted |
 | [0021](0021-pedestrians.md) | Pedestrians: in the client, the simulation or both | Accepted |
 | [0022](0022-drawing-trees-lamps-and-windows.md) | How the client draws trees, street lamps and lit windows | Accepted |

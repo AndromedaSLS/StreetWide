@@ -1,12 +1,61 @@
 # RFC 0004: Point features: vegetation and street objects
 
-- **Status:** Draft
+- **Status:** Accepted (2026-11-25)
 - **Authors:** @victorpicaud
 - **Created:** 2026-11-24 (comment period until at least 2026-12-01)
 - **Contract version affected:** world format 0.1, amended in place or
   moved to 0.2.0, in one decision with RFC 0003 (see "Compatibility and
   migration"); contribution contract 0.1, amended in place; gate
   0.1.2 → 0.1.3
+
+## Decision
+
+*Accepted on 2026-11-25 by @victorpicaud,* the founding maintainer, who
+wrote: "all approved, make choices and merge".
+
+- **Accepted:** the design below, with the recommended option of each
+  choice:
+  - format B, a points document per tile and source;
+  - one grammar for per-tile asset ids, `tile:17/{x}/{y}` with an
+    optional `/{source}` (section 2);
+  - one point per record where a source records several at one
+    position;
+  - lights on bridges anchored on the ground (section 5);
+  - this RFC lists which attributes may be estimated (section 4);
+  - refreshes over 50 changes split by source for M2, and no cap for
+    `streetwide:ingest` before M3, as
+    [RFC 0002](0002-contributions-and-merge-rules.md)'s question 11
+    decides;
+  - the pedestrian ADR first:
+    [ADR-0021](../docs/adr/0021-pedestrians.md), accepted earlier the
+    same day, chose C2, people drawn by the client outside `op_sim` in
+    M2. Both layers therefore stay visual only, and section 7's
+    colliders stay for later;
+  - the world format amended in place: `contract_version` stays
+    `0.1.0`, chosen once for [RFC 0003](0003-water-layer.md), this RFC
+    and [RFC 0005](0005-navigation-data.md) (option A under
+    "Compatibility and migration"). The contribution contract is
+    amended in place too.
+- **Left to the documents this RFC names,** all accepted the same day:
+  - ADR-0016's policy 1 (the measured height, or `null`) and ADR-0015's
+    option A for mounts (left unknown), so `height_mm` and `mount` are
+    never estimated, and `yaw` is the only estimated attribute in 0.1
+    (section 4);
+  - ADR-0019's option A, the whole published world under the ODbL, so
+    section 9 needs no per-country table, and its last two rules are
+    choices that ADR-0015 keeps for Zurich;
+  - the G7 point budget stays a starting value, to be set against
+    ADR-0018.
+- **Gate:** G3, G7 and G8 change as section 8 says, with the next free
+  `GATE_VERSION` when they are implemented: 0.1.3 if no other gate
+  change lands first.
+- **Unresolved questions:** none has a recommendation; all stay open.
+- **Reason:** the maintainer's decision of 2026-11-25.
+- **Comment period:** accepted on 2026-11-25, before the end of its
+  comment period, by the founding maintainer's decision; no comments
+  had been received and the project had not been announced.
+  [GOVERNANCE.md](../GOVERNANCE.md) (item 3) asks for at least 7 days of
+  comment, which for this RFC ran until at least 2026-12-01.
 
 ## Summary
 
@@ -27,7 +76,7 @@ including what `content_id`, `size_bytes` and `bounds_mm` mean for content
 that is not a mesh, and [RFC 0002](0002-contributions-and-merge-rules.md)
 section 3, as [RFC 0003](0003-water-layer.md) did for water.
 
-Related drafts: [ADR-0015](../docs/adr/0015-zurich-trees-and-lights.md)
+Related decision records: [ADR-0015](../docs/adr/0015-zurich-trees-and-lights.md)
 and [ADR-0016](../docs/adr/0016-swisssurface3d-heights.md) for the
 sources, [ADR-0017](../docs/adr/0017-licence-allowlist.md) and
 [ADR-0019](../docs/adr/0019-odbl-and-the-published-world.md) for the
@@ -42,17 +91,16 @@ client's budget. Two follow-ups:
   extending ADR-0012, before that client work: drafted since as
   [ADR-0022](../docs/adr/0022-drawing-trees-lamps-and-windows.md).
 
-**Nothing here is decided.** The maintainer, @victorpicaud, decides after
-the comment period. Each open choice is drafted with a recommendation.
-Two choices are tied to other documents:
+**Decided on 2026-11-25,** with the recommended option of each choice
+(see [Decision](#decision)). Two choices were tied to other documents:
 - **The pedestrian ADR, [ADR-0021](../docs/adr/0021-pedestrians.md),
-  first (recommended).** If it puts agents into
-  `op_sim` in M2, trunks and poles become obstacles within M2, and
-  section 7's colliders join this RFC before it is accepted. Deciding it
-  first avoids declaring points visual only and reversing that in the
-  same milestone.
-- **The contract version** is decided once for RFC 0003 and this RFC
-  ("Compatibility and migration").
+  first (recommended).** Had it put agents into `op_sim` in M2, trunks
+  and poles would have become obstacles within M2, and section 7's
+  colliders would have joined this RFC before it was accepted. ADR-0021
+  was accepted first, on 2026-11-25, with C2: people are drawn by the
+  client, outside the simulation, so points stay visual only.
+- **The contract version** was decided once for RFC 0003, this RFC and
+  RFC 0005: amended in place ("Compatibility and migration").
 
 ## Motivation
 
@@ -540,6 +588,10 @@ world id would not pin it, and nothing would carry its provenance.
   - Cons: every manifest, tile-index and world id changes, golden ids
     included, though no mesh or replay checkpoint does; it spends a version
     before anything is published.
+- **Decided 2026-11-25: A,** for RFC 0003, this RFC and RFC 0005
+  together. RFC 0001 was accepted the same day, so 0.1.0, with the three
+  RFCs' amendments, is frozen from then: a later change to the format
+  takes a new version.
 
 **Existing worlds.** A re-ingest adds point assets and tile indexes, so
 world ids change; under A, existing assets stay byte-identical. Replays
@@ -594,6 +646,9 @@ A later RFC could give replay headers an id that covers only colliders.
 - **No new crate or Python package.**
 
 ## Unresolved questions
+
+None of these has a recommendation; all stay open after the acceptance
+of 2026-11-25.
 
 - **The lighting data:** what ewz's orientation and stacks mean, and
   whether light and tree numbers survive a replacement (ADR-0015's

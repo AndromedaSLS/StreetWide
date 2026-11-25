@@ -1,6 +1,6 @@
 # ADR-0011: Stop the player oscillating in concave corners
 
-- **Status:** Proposed
+- **Status:** Accepted (2026-11-25)
 - **Date:** 2026-11-23
 - **Deciders:** @victorpicaud
 - **Supersedes / superseded by:** none (addresses a known limitation of
@@ -93,7 +93,8 @@ all contact planes at once, which resolves corners exactly.
 
 ## Decision
 
-Option A, as `SIM_CONTRACT_VERSION` 0.2.0. It removes the oscillation
+*Accepted on 2026-11-25 by @victorpicaud:* option A, the recommended
+option, as `SIM_CONTRACT_VERSION` 0.2.0. It removes the oscillation
 with the smallest change to the simulation, keeps every move
 collision-checked, and does not change how the player walks anywhere
 else. Option D stays open if more corner cases turn up.

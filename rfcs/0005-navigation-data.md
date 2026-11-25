@@ -1,6 +1,6 @@
 # RFC 0005: Navigation data: lanes, places and population profiles
 
-- **Status:** Draft
+- **Status:** Accepted (2026-11-25)
 - **Authors:** @victorpicaud
 - **Created:** 2026-11-25 (comment period until at least 2026-12-09)
 - **Contract version affected:** world format 0.1, amended in place or
@@ -8,6 +8,84 @@
   contract 0.1, amended in place or bumped (a choice); the next gate
   version (`GATE_VERSION` is 0.1.2 today; 0.1.4 only if RFC 0004's 0.1.3
   lands first). See "Compatibility and migration".
+
+## Decision
+
+*Accepted on 2026-11-25 by @victorpicaud,* the founding maintainer, who
+wrote: "all approved, make choices and merge".
+
+- **Accepted:** the design below, with the recommended option of each
+  choice under "Options considered":
+  - **the content:** A, a graph document per tile and source;
+  - **how lanes are stored:** L1, one graph per tile, cut at tile edges
+    and joined by shared nodes;
+  - **where the profiles live:** P1, inside the navigation document;
+  - **meeting the numbers:** N2 for M2: targets in the data, calibrated
+    by the population function. N3 is weighed again before M3, if
+    calibrating a whole city at load proves slow;
+  - **room beside lanes:** R1, the room per segment and a clearance per
+    node, from the matching;
+  - **matching lanes to shells:** K1, which amends
+    [RFC 0001](0001-world-format.md) section 2. With part 2 as read in
+    section 10, it answers ADR-0021's open question 6. ADR-0019 was
+    accepted the same day with option A, the whole published world
+    under the ODbL, under which part 2 raises no question;
+  - **where the lane check lives:** G11, a check of its own;
+  - **the lane check during a refresh:** (d). ADR-0020's order of sets
+    stays; G11 gives `review` on refresh sets, and its absolute check
+    runs on the refresh's final world;
+  - **a contributed shell in a refresh:** the planner holds that tile's
+    navigation change and lists it for review;
+  - **takedowns:** a wrong door is fixed in OpenStreetMap and brought
+    in by a refresh; if it cannot wait, a takedown reverts the asset,
+    lifted by an accept once OSM is fixed; a takedown removes the asset
+    only when the whole tile must go (section 9);
+  - **passages:** nobody walks a `passage` range in M2. The client opens
+    or hides the wall at a passage only once ADR-0019's question 5 is
+    answered, or where a contributed shell models the opening;
+  - **smaller choices:** the kinds `road`, `area` and `connector`; the
+    area kinds `square` and `street`; places reach lanes at a node, with
+    a `connector` lane where none is mapped; polygons and `area` lanes
+    made by the ingest; a density per area; standing spots stored per
+    place, at least 1.8 m from every lane; E2 for entrances; B1 for
+    benches in M2; a rule id per element and key; points at most 1.5 m
+    apart; month factors per day type, 36 values a curve; H1 for
+    holidays; asset ids `tile:17/{x}/{y}/osm`, with `{source}` the
+    namespace; client offsets around trees and lamp posts.
+- **Contract versions:** the world format is amended in place and stays
+  `0.1.0`, chosen once for [RFC 0003](0003-water-layer.md),
+  [RFC 0004](0004-point-features.md) and this RFC. The recommendation
+  was to make that choice after this RFC's comment period; it was made
+  on the day of acceptance instead. The contribution contract is amended
+  in place too, and stays `0.1.0`. The gate takes the next free `GATE_VERSION` when this RFC is
+  implemented.
+- **Actions that follow:**
+  - record the answer to open question 6 in ADR-0021, as section 10
+    asks;
+  - passages: nobody walking a passage in M2 narrows ADR-0021, which
+    keeps passages for people to walk. Record that in ADR-0021 or in an
+    ADR that supersedes that part of it; this RFC does not say which;
+  - the hold for lanes that a contributed shell blocks is a new hold in
+    the refresh planner, "decided with ADR-0020's holds": record it with
+    them, and build it;
+  - option (d) changes G11 and the planner's comparison of the
+    pre-refresh and final worlds, not ADR-0020's order, so it needs no
+    ADR;
+  - draft the navigation ingest's ADR, as ADR-0014 was drafted for
+    water: tags, queries, rules, id suffixes and the layout of `area`
+    lanes;
+  - before the ingest builds lanes or curves:
+    [ADR-0017](../docs/adr/0017-licence-allowlist.md) allows each
+    source, and [ATTRIBUTION.md](../ATTRIBUTION.md) lists every count
+    source used.
+- **Unresolved questions:** none has a recommendation; all stay open.
+- **Reason:** the maintainer's decision of 2026-11-25.
+- **Comment period:** accepted on 2026-11-25, before the end of its
+  comment period, by the founding maintainer's decision; no comments
+  had been received and the project had not been announced.
+  [GOVERNANCE.md](../GOVERNANCE.md) (item 3) asks for at least 7 days of
+  comment; this RFC named 2026-12-09, and was created, and revised after
+  the crowd prototype, on the day it was accepted.
 
 ## Summary
 
@@ -52,13 +130,12 @@ This amends [RFC 0001](0001-world-format.md) sections 2, 3, 5 and 7, as
 drafts an answer to ADR-0021's open question 6, the licences of lanes and
 profiles.
 
-**Nothing here is decided.** The maintainer, @victorpicaud, decides
-after the comment period. Each open choice is drafted with a
-recommendation. Five choices are tied to other documents:
+**Decided on 2026-11-25,** with the recommended option of each choice
+(see [Decision](#decision)). Five choices were tied to other documents:
 - **ADR-0021's open question 6** is settled with this RFC and
   [ADR-0019](../docs/adr/0019-odbl-and-the-published-world.md), before
-  the ingest builds lanes (section 10). The maintainer records the
-  answer in ADR-0021.
+  the ingest builds lanes (section 10): K1, with part 2 as read there.
+  The answer is still to be recorded in ADR-0021.
 - **The client prototype has run.** ADR-0021's order of work puts a
   throwaway client prototype of C2 before "the navigation-data RFC,
   shaped by what the prototype found". The first draft came before it;
@@ -68,19 +145,19 @@ recommendation. Five choices are tied to other documents:
   room beside lanes and a clearance per node, a density per area,
   standing spots off the lanes, and `blocked` ranges kept rather than
   lanes dropped.
-- **The contract version** is chosen once for RFC 0003, RFC 0004 and this
-  RFC. RFC 0003 and RFC 0004 describe that choice for two RFCs; their
-  texts follow if the maintainer takes this RFC into it ("Compatibility
-  and migration").
+- **The contract version** was chosen once for RFC 0003, RFC 0004 and
+  this RFC: the world format amended in place, at `0.1.0`
+  ("Compatibility and migration").
 - **The order of a refresh's sets** is
   [ADR-0020](../docs/adr/0020-baseline-refreshes.md#5-the-workflow)'s,
-  accepted: visual-only sets first. This RFC recommends keeping it
-  (section 9, "Refreshes"). The options that change it would need their
-  own decision: an ADR that
-  supersedes that row of ADR-0020 section 5, or an amendment beside RFC
-  0002's questions 9 to 16 (A1 to A8).
-- **Refreshed lanes that a contributed shell blocks:** recommended, a new
-  hold in ADR-0020's refresh planner (section 9).
+  accepted: visual-only sets first. It is kept (section 9, "Refreshes",
+  option (d)), so ADR-0020 does not change. The options that change it
+  would have needed their own decision: an ADR that supersedes that row
+  of ADR-0020 section 5, or an amendment beside RFC 0002's questions 9
+  to 16 (A1 to A8).
+- **Refreshed lanes that a contributed shell blocks:** a new hold in
+  ADR-0020's refresh planner (section 9), still to be recorded with
+  ADR-0020's holds.
 
 ## Motivation
 
@@ -1077,6 +1154,10 @@ has decided question 6, [ADR-0017](../docs/adr/0017-licence-allowlist.md)
 allows each source, and [ATTRIBUTION.md](../ATTRIBUTION.md) lists every
 count source used (ADR-0001).
 
+**Decided 2026-11-25:** K1, and part 2 as read above, settled with
+ADR-0019. The ingest still waits for ADR-0017 to allow each source and
+for ATTRIBUTION.md to list every count source used.
+
 **Closed to contributions** while the licence contains `ODbL-1.0`, which
 G3 already enforces.
 
@@ -1545,6 +1626,10 @@ first canonical world is published, whichever comes first; or move to
 - **If RFC 0003 and RFC 0004 are decided first:** this RFC follows their
   choice. It amends in place while 0.1.0 is not frozen, and otherwise
   takes the next minor version.
+- **Decided 2026-11-25:** chosen once for the three RFCs, on the day they
+  were all accepted rather than after this RFC's comment period: amend
+  0.1.0 in place (RFC 0004's option A). RFC 0001 was accepted the same
+  day, so 0.1.0, with the three RFCs' amendments, is frozen from then.
 
 **Contribution contract version.** RFC 0003 and RFC 0004 amend contract
 0.1 in place. RFC 0002 says that changing its rules "needs an RFC that
@@ -1554,6 +1639,9 @@ choice open for A1 to A8.
   water did; no change set's bytes change.
 - **Bump it:** the rule RFC 0002 states; every tool that writes change
   sets, and the fixtures, follow.
+- **Decided 2026-11-25:** amend 0.1 in place. RFC 0002 was accepted the
+  same day, with this RFC's amendments; from then on, its rule applies
+  to any further change.
 
 **Existing worlds.** A re-ingest adds navigation assets and new tile
 indexes, so world ids change. Under in-place amendment, existing assets
@@ -1636,6 +1724,9 @@ only) at each merge, as RFC 0004 notes for points.
 - **No new crate or Python package.**
 
 ## Unresolved questions
+
+None of these has a recommendation; all stay open after the acceptance
+of 2026-11-25.
 
 - **What the client prototype did not exercise:** tile cuts and joining
   (it used one graph for the district), `forward_permille`, opening

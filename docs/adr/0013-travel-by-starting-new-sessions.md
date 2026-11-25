@@ -1,6 +1,6 @@
 # ADR-0013: Travel in the client by starting a new session at the destination
 
-- **Status:** Proposed
+- **Status:** Accepted (2026-11-25)
 - **Date:** 2026-11-24
 - **Deciders:** @victorpicaud
 - **Supersedes / superseded by:** none (extends ADR-0008)
@@ -58,7 +58,9 @@ New input buttons or records that move the player.
 
 ## Decision
 
-Option A.
+*Accepted on 2026-11-25 by @victorpicaud:* option A, the recommended
+option: flying and the map move only the camera, and an arrival starts a
+new session at the destination.
 
 **The two frames:**
 - The client keeps a render frame that stays fixed for the run, so the
@@ -70,6 +72,8 @@ Option A.
 - **Named places and the map:** on open ground (terrain, streets,
   squares, bridges). If the point is inside a building, the nearest open
   ground within 40 m is used, then up to 4 m further from the building.
+  Since [ADR-0014](0014-water-areas-from-openstreetmap.md), these
+  landings also avoid water.
 - **Landing from flight:** on the highest surface below the camera, roof
   or not.
 

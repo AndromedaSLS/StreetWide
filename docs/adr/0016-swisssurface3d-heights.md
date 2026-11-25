@@ -1,6 +1,6 @@
 # ADR-0016: Use swissSURFACE3D for measured heights
 
-- **Status:** Proposed
+- **Status:** Accepted (2026-11-25)
 - **Date:** 2026-11-24
 - **Deciders:** @victorpicaud
 - **Supersedes / superseded by:** none (adds a source to ADR-0006; serves
@@ -253,11 +253,11 @@ cell, without classes:
 
 ## Decision
 
-*Proposed, not decided.* The maintainer (@victorpicaud) chooses; the
-choice and its reasons are recorded here when made. The recommendation:
+*Accepted on 2026-11-25 by @victorpicaud:* the recommendation below.
 
-- **Tree heights:** option A with the 1.5 m rule, under policy 1,
-  measured from the anchor.
+- **Tree heights:** option A (swissSURFACE3D Raster minus swissALTI3D)
+  with the 1.5 m rule, under policy 1 (the measured height, or null),
+  measured from the anchor (a).
 - **Checks:** the canton's crowns in the ingest report (option C), never
   copied into the world.
 - **RFC 0002's metrics:** the classified point cloud (option B), adopted
@@ -272,7 +272,7 @@ keeps the world to measurements, as ADR-0012 asks. B alone serves
 RFC 0002, but it costs 11 times the bytes and a new reader before any
 metric is designed.
 
-If the recommendation is accepted, the ingest works as follows.
+The ingest works as follows.
 
 **Product.** `ch.swisstopo.swisssurface3d-raster`: the 0.5 m GeoTIFF of
 each 1 km tile (`_0.5_2056_5728.tif`), the latest year per tile, checked
@@ -330,16 +330,21 @@ until:
   licence, as ADR-0015 also requires (baseline refreshes skip G4 and G5);
 - RFC 0004 and ADR-0015 are accepted.
 
+ADR-0015, ADR-0017 and RFC 0004 were accepted on 2026-11-25. The
+ATTRIBUTION.md row and the validation check are still to come.
+
 ADR-0017 should also give `LicenseRef-swisstopo-OGD` one text and one URL:
 ADR-0001 and ATTRIBUTION.md link different swisstopo pages, and
-`LICENSES/` has no text for it. If
-[ADR-0019](0019-odbl-and-the-published-world.md) puts the whole world under
-the ODbL, these heights go with it, as terrain heights in OSM-derived
-assets already do (ADR-0006 section 7).
+`LICENSES/` has no text for it. ADR-0017's accepted rules ask for that
+stored copy. [ADR-0019](0019-odbl-and-the-published-world.md), accepted
+the same day with option A, offers the whole published world under the
+ODbL, so these heights go with it there, as terrain heights in
+OSM-derived assets already do (ADR-0006 section 7); each manifest keeps
+the licence of its own sources.
 
 ## Consequences
 
-If the recommendation is accepted:
+With the recommendation accepted:
 
 - **Simulation:** unchanged. Heights belong to visual-only points
   (RFC 0004); `op_sim` never reads them, and no replay checkpoint changes.

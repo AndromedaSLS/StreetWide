@@ -1,10 +1,10 @@
 # ADR-0018: Set a performance tier and a benchmark route
 
-- **Status:** Proposed
+- **Status:** Accepted (2026-11-25)
 - **Date:** 2026-11-24
 - **Deciders:** @victorpicaud
 - **Supersedes / superseded by:** none (sets the budget for ADR-0012's
-  look, and would change its night exposure)
+  look, and changes its night exposure)
 
 ## Context
 
@@ -275,9 +275,14 @@ towards mid-grey at set speeds.
 
 ## Decision
 
-*Proposed, not decided.* The options marked recommended are a proposal
-to the maintainer (@victorpicaud), who decides and records the choice
-here. Until then nothing in this ADR applies.
+*Accepted on 2026-11-25 by @victorpicaud:* the options marked
+recommended below. Reference hardware A, an 8 GB card of the RTX 3060 /
+RX 6600 class at 1080p, with an AMD Radeon RX 6600 as the reference
+card; budget A, a 99th percentile frame time at or under 16.7 ms on the
+high preset; measuring tool A, a benchmark mode in the client; practice
+A, the route on a reference machine at every checkpoint, with results
+in progress.md; and night exposure A, a lower floor still set from the
+sun. The route is the one recommended for zurich-altstadt.
 
 **Recommended tier** (hardware A, budget A):
 - **Machine:** a desktop GPU of the RTX 3060 / RX 6600 class with 8 GB
@@ -291,8 +296,9 @@ here. Until then nothing in this ADR applies.
   8 GB, unlike the RTX 3060, and beside the maintainer's NVIDIA card it
   covers the second main driver. The card chosen, and any substitute
   limit, are recorded in this section when the maintainer decides, or
-  later in a superseding ADR. Each result records its driver;
-  progress.md holds results only.
+  later in a superseding ADR. *Decided 2026-11-25:* the RX 6600, with no
+  substitute limit. Each result records its driver; progress.md holds
+  results only.
 - **Until the project has one,** the route runs on the RTX 3070, and its
   results are marked as faster than the tier.
 - **M2's exit check:** the maintainer runs it on the reference card,
@@ -301,7 +307,8 @@ here. Until then nothing in this ADR applies.
   owner for the cost (roadmap, M1). A contributor's run on a card of the
   class is welcome as a second result. A stricter limit on the RTX 3070
   is not recommended: setting it needs a run on a card of the class
-  anyway.
+  anyway. The project has no RX 6600 yet: buying or borrowing one is the
+  maintainer's to do.
 
 **Recommended tool:** option A, with one route file per world in the
 repository. Until it exists, option B gives the screenshots but no
@@ -340,15 +347,26 @@ table to [progress.md](../progress.md). Raw frame logs stay out of Git.
 **Recommended night exposure** (option A): the floor and the end of the
 ramp are chosen with screenshots of the three places at 22:30 on
 21 June and 18:00 on 21 December, before the exit criterion "street
-lamps lit in December" is claimed. ADR-0012 is still Proposed; if both
-are accepted, this replaces its night exposure.
+lamps lit in December" is claimed. This replaces ADR-0012's night
+exposure, its floor of EV100 6.5.
+
+The client already uses starting values (progress.md, "Lit windows and
+the night" and "Dusk"): a floor of EV100 3, and, once the sun is less
+than 2° above the horizon, an exposure set from the light in the scene,
+EV100 = 3 + 0.9 × log2(light / 10.6 lx), never above the daylight curve
+nor below the floor, so the floor is reached with the sun 5.2° to 6.2°
+below the horizon. Lit windows give their brightness in cd/m² and
+follow the exposure.
+[ADR-0022](0022-drawing-trees-lamps-and-windows.md) (accepted on
+2026-11-25) adds a night fill under this floor, and its open question 2
+records the night's values.
 
 ## Consequences
 
 - **Simulation:** unchanged, whichever options are chosen. The benchmark
   mode, the presets and the exposure are client code. Stops arrive as
   new sessions, as travel does, so no replay format or contract changes.
-- **Order of work in M2,** if the recommendation is accepted:
+- **Order of work in M2:**
   1. the benchmark mode, and today's client measured at 1080p;
   2. if it already misses the budget on the reference class, the
      maintainer chooses between a lighter high preset, the fast preset
@@ -389,7 +407,9 @@ are accepted, this replaces its night exposure.
   requests. Whether CI could run the route on a software renderer, for
   crashes and screenshots but not timings, is untested.
 - **Open:**
-  - who buys or lends the reference card;
+  - who buys or lends the reference card. *Decided 2026-11-25:* the
+    maintainer gets one, bought or borrowed, as the Decision recommends;
+    a purchase still needs an owner for the cost (roadmap, M1);
   - whether today's high preset meets the budget at 1080p on that class
     at all;
   - video memory: Bevy's diagnostics report mesh buffer sizes, not total
