@@ -20,23 +20,28 @@ outside the simulation).
   holds:
   - a graph of nodes and lanes: polylines in integer millimetres, each
     with a kind (sidewalk, footway, crossing, steps, pedestrian or
-    living street, and three kinds this RFC adds) and a width;
-  - walkable areas: squares, and pedestrian streets mapped as areas;
+    living street, and three kinds this RFC adds), a width, and the room
+    free of walls on each side; each node with its clearance from walls;
+  - walkable areas: squares, and pedestrian streets mapped as areas,
+    each with a density of its own;
   - places where trips start and end or people sit and stand:
     entrances, stops, squares, benches, terraces, viewpoints and
-    fountains;
+    fountains, with standing spots off the lanes;
   - the population: hourly curves per day type with a factor per month,
-    a holiday calendar, people per day on each lane, and trips or
-    occupants at each place. Every value a rule set names its rule.
+    a holiday calendar, people per day on each lane, people per hectare
+    on each area, and trips or occupants at each place. The numbers are
+    targets: the client's population function calibrates its walks to
+    meet them. Every value a rule set names its rule.
 - **Visual only in M2.** The layer has `collider: none` and never enters
   the simulation. Its shape (integer millimetres in the region frame, one
   graph per tile joined at tile edges, stable ids, lanes checked against
   colliders) is meant to become simulation input later without a format
   change.
 - **Lanes matched to building shells.** The ingest moves lanes, and
-  snaps doors onto walls, by at most 1 m, and marks what it cannot
-  clear. A new gate check, G11, keeps any change from newly blocking a
-  lane. G9 and G10 stay as they are, as ADR-0021 says.
+  snaps doors onto walls, by at most 1 m, measures the room beside
+  them, and marks what it cannot clear rather than dropping it. A new
+  gate check, G11, keeps any change from newly blocking a lane. G9 and
+  G10 stay as they are, as ADR-0021 says.
 - **Closed to contributions.** Lanes and places come from OpenStreetMap
   (ODbL) and are fixed there. The population's numbers come through the
   ingest's rules and sources (G3).
@@ -54,19 +59,24 @@ recommendation. Five choices are tied to other documents:
   [ADR-0019](../docs/adr/0019-odbl-and-the-published-world.md), before
   the ingest builds lanes (section 10). The maintainer records the
   answer in ADR-0021.
-- **The client prototype first.** ADR-0021's order of work is a
-  throwaway client prototype first, then "the navigation-data RFC,
-  shaped by what the prototype found". Drafting this RFC now departs from
-  that order. Recommended: revise it after the prototype has run its
-  checks, and accept it only then.
+- **The client prototype has run.** ADR-0021's order of work puts a
+  throwaway client prototype of C2 before "the navigation-data RFC,
+  shaped by what the prototype found". The first draft came before it;
+  this version is revised after it
+  ([progress](../docs/progress.md#crowd-prototype-2026-11-25-adr-0021-c2)):
+  numbers that are targets the population function calibrates to, the
+  room beside lanes and a clearance per node, a density per area,
+  standing spots off the lanes, and `blocked` ranges kept rather than
+  lanes dropped.
 - **The contract version** is chosen once for RFC 0003, RFC 0004 and this
   RFC. RFC 0003 and RFC 0004 describe that choice for two RFCs; their
   texts follow if the maintainer takes this RFC into it ("Compatibility
   and migration").
 - **The order of a refresh's sets** is
   [ADR-0020](../docs/adr/0020-baseline-refreshes.md#5-the-workflow)'s,
-  accepted: visual-only sets first. This RFC recommends keeping it (section 9, "Refreshes").
-  The options that change it would need their own decision: an ADR that
+  accepted: visual-only sets first. This RFC recommends keeping it
+  (section 9, "Refreshes"). The options that change it would need their
+  own decision: an ADR that
   supersedes that row of ADR-0020 section 5, or an amendment beside RFC
   0002's questions 9 to 16 (A1 to A8).
 - **Refreshed lanes that a contributed shell blocks:** recommended, a new
@@ -99,7 +109,7 @@ recommendation. Five choices are tied to other documents:
   terraces (`outdoor_seating=yes`), and the Münsterhof, a pedestrian
   multipolygon (ADR-0021).
 - **OSM ways and shells disagree.** In the 4 tiles of ADR-0021's
-  prototype, 269 of 1,120 graph edges (1.77 of 10.44 km) have a point
+  simulation prototype, 269 of 1,120 graph edges (1.77 of 10.44 km) have a point
   where the player capsule overlaps a building shell. Of the 343
   walkable ways there, 44 end on a building outline, as paths to a door
   do, and 6 pass through buildings. Capsule agents on that graph got
@@ -112,8 +122,35 @@ recommendation. Five choices are tied to other documents:
   factors per month (ADR-0021). The city's counter and the boardings are
   CC0; the version of Bahnhofstrasse's licence is still open (ADR-0021,
   open question 2).
-- **Contracts before features** (CLAUDE.md): the client prototype, the
-  ingest and the gate need one shape to build against.
+- **A client prototype of C2 has shown what the crowd needs** (branch
+  `crowd-prototype`;
+  [progress](../docs/progress.md#crowd-prototype-2026-11-25-adr-0021-c2);
+  "the prototype" below, unless the simulation prototype is named).
+  It drew about 500 to 1,150 people within 160 m at ADR-0018's three
+  stops, on 21 June and 21 December, from a pure function of lanes,
+  places and profiles, and passed all six of its checks. On the way it
+  found that:
+  - per-lane numbers were met only by calibrating a walk weight per lane
+    at load (8 rounds of 8,000 sampled trips, about a second for the
+    district): weighted by density alone, the walks gave pedestrian
+    streets half their share and steps three times theirs;
+  - one centred width was not enough: keeping people off walls took the
+    room free on each side, measured every 0.5 m, and each junction's
+    clearance;
+  - lanes across squares were 28.5 of 74.5 km, 38% of all lane length,
+    so areas needed a density of their own (200 people per hectare at
+    the reference);
+  - standing spots had to lie at least 1.8 m from any lane, or walkers
+    passed through standing groups;
+  - clearing lanes of shells dropped 98 lanes (2.4 km), which a
+    `blocked` range would have kept in the graph;
+  - the cache has no benches, terraces, entrances or tram stops, so
+    nobody sat and only 2 stops were found;
+  - the overlap check passed only with both kinds of avoidance, built
+    into the function and client offsets within 40 m; either alone
+    failed in 5 of 6 cases.
+- **Contracts before features** (CLAUDE.md): the ingest, the client and
+  the gate need one shape to build against.
 
 ## Design
 
@@ -180,13 +217,14 @@ cut at a tile edge or at the world's edge.
 | `id` | The node id (section 4). |
 | `position_mm` | Where it is. |
 | `edge` | `null` inside the tile; `tile` for a cut on an edge shared with another tile of the world; `world` for a cut where the world's area ends (section 3). |
+| `clearance_mm` | 0 to 3,000: the radius around the node free of walls, measured as `room_mm` is (below), out to 3,000 (3,000 means at least that). People turning at a junction cut the corner, so they keep within it. From the matching (section 6). |
 
 Every node is the end of at least one lane of the same document.
 
 #### Lanes
 
 A lane is a part of one OSM way between two nodes, or a lane the ingest
-makes. People walk along it, within its width.
+makes. People walk along it, within its width and the room beside it.
 
 | Key | Meaning |
 |---|---|
@@ -194,13 +232,14 @@ makes. People walk along it, within its width.
 | `kind` | One of the kinds below. |
 | `from`, `to` | Two different node ids of the same document. |
 | `points_mm` | The positions between `from` and `to`, in order. Consecutive vertices, the nodes included, are at most 1,500 mm apart horizontally (checked on squared integer distances), as the ingest already densifies ribbons, so that heights follow the ground. |
-| `width_mm` | 300 to 50,000: the walkable width, centred on the polyline. |
+| `width_mm` | 300 to 50,000: the walkable width, centred on the polyline: how far people may spread where no wall is nearer. |
+| `room_mm` | One `[left, right]` pair per segment, from each vertex to the next (one fewer than the vertices): the least room free of walls on each side of the polyline along that segment, seen walking from `from` to `to`. Measured at least every 500 mm along the segment against shells cut 500 mm above the walking surface, out to 5,000 (5,000 means at least that). From the matching (section 6). People keep within the narrower of half the width and the room, less their own clearance from the wall. |
 | `bridge` | `true` if the lane lies on a bridge deck. |
 | `control` | For `crossing`: `signals`, `marked` or `unmarked`, or `null` if unknown. `null` for the other kinds. |
 | `moved_mm` | 0 to 1,000: the largest sideways move the matching made (section 6), from the OSM geometry. |
 | `ranges` | The parts of the lane that people must not simply walk, as `{kind, first, last}` with vertex indices (0 is `from`, then the points, then `to`), sorted and not overlapping. Kinds: `entrance`, the end of a lane that enters a building at a door; `passage`, a part through a building (`tunnel=building_passage`); `blocked`, a part nobody walks: an overlap the matching could not clear, or the end of a lane at a door that is not a place. An `entrance` range ends at a node that is an entrance's `node`. |
 | `curve` | The id of a curve in `population`. |
-| `people_per_day` | 0 to 1,000,000: the people who pass a point of the lane on a mean day of the year, both ways together. |
+| `people_per_day` | 0 to 1,000,000: the people who pass a point of the lane on a mean day of the year, both ways together. A target, which the population function meets by calibrating its walks ("Meeting the numbers"). `null` for `area` lanes, whose people come from their area's density. |
 | `forward_permille` | 0 to 1,000: the share walking from `from` to `to`; `null` for half. At Bahnhofstrasse's middle counting area, 51.8% walk one way; at the Limmatquai, 59.6% (data notes). |
 | `estimated` | The values a rule set (below). |
 
@@ -238,6 +277,9 @@ pedestrian multipolygon, or `area:highway=pedestrian`.
 | `bridge` | `true` if the area lies on a bridge deck. |
 | `polygons_mm` | The area's pieces in this tile: each piece is an outer ring, then any holes; each ring has at least 3 positions on the ground, with the first not repeated at the end. Clipping at tile edges and at the world's edge, as for water, can leave several pieces in one tile. |
 | `nodes` | The sorted ids of the nodes where lanes reach the area. `area` lanes join them, across a square or along a street. |
+| `curve` | The id of a curve in `population`. |
+| `people_per_ha` | 0 to 10,000: the people walking on the area, per hectare, at the reference ("The population"). A target, spread over the area's `area` lanes; the people standing at its spots count apart, as occupancy. |
+| `estimated` | The values a rule set (below). |
 
 - **Streets as areas.** In the cache, Bahnhofstrasse has no
   `highway=pedestrian` line: it is six pedestrian areas, beside
@@ -246,6 +288,15 @@ pedestrian multipolygon, or `area:highway=pedestrian`.
   of Rennweg, and two on the Rathausbrücke, one of them tagged
   `man_made=bridge` and `layer=1`. So areas have two kinds, and squares
   are not all the areas there are.
+- **A density of their own.** The prototype joined the points where
+  lanes reach each area through its centre: 28.5 km of `area` lanes in
+  34 areas, 38% of all lane length, crossing each other. A number per
+  lane would have filled squares many times over, so each area carries
+  its people per hectare, spread over its lanes (the prototype used 200
+  at the reference). How the ingest lays `area` lanes is its ADR's;
+  their lines are routes, and the population function may spread
+  walkers over the polygons, since people on squares that all follow
+  the same straight lines look wrong (the prototype's screenshots).
 - **Not drawn as ground.** Drawing squares is M2's ground work, from
   land-cover data ([roadmap](../docs/roadmap.md), M2).
 
@@ -255,7 +306,8 @@ pedestrian multipolygon, or `area:highway=pedestrian`.
 |---|---|
 | `id` | The place id (section 4). Unique across the world. |
 | `kind` | One of the kinds below. |
-| `anchor_mm` | Where the place is, on the ground: the door, the bench, the stop, the spot to stand at. |
+| `anchor_mm` | Where the place is, on the ground: the door, the seat, the stop, the square's point. A seat (bench or terrace) lies outside the walkable band of every lane. |
+| `spots_mm` | For `stop`, `square`, `viewpoint` and `fountain`: where people stand, a sorted list of positions, each at least 1,800 mm horizontally from the centreline of every lane, clear of walls, and for a square inside its area. `[]` where none fits, and for the other kinds. |
 | `bridge` | `true` if the place lies on a bridge deck. |
 | `moved_mm` | 0 to 1,000: how far the matching moved the anchor from the OSM data (a door snapped onto a wall, section 6). |
 | `node` | The node where people walking to or from the place join the lanes. `null` only for a place where trips neither start nor end, when no lane is near. |
@@ -265,8 +317,8 @@ pedestrian multipolygon, or `area:highway=pedestrian`.
 | `seats` | 1 to 1,000: the seats of a bench or terrace; `null` if unknown. |
 | `hours` | `null` if unknown. Otherwise opening hours: keys `mo` to `su` and `ph` (public holidays), each a sorted list of `[open, close]` minutes after local midnight, with 0 ≤ open < close ≤ 2,880, not overlapping; `[]` means closed. |
 | `curve` | The id of a curve in `population`. |
-| `trips_per_day` | For a place where trips start and end: the trips that start or end there on a mean day of the year. Otherwise `null`. |
-| `occupancy` | For a place where people sit or stand: the people there at the busiest hour of its curve. Otherwise `null`. |
+| `trips_per_day` | For a place where trips start and end: the trips that start or end there on a mean day of the year. Otherwise `null`. A weight: the population function scales the trips of all places by one factor per time, so that the people on lanes and areas meet their numbers ("Meeting the numbers"). |
+| `occupancy` | For a place where people sit or stand: the people there at the reference ("The population"), at its spots or seats. Otherwise `null`. |
 | `estimated` | The values a rule set (below). |
 
 | Kind | Trips start and end | People sit or stand | In the district (ADR-0021 and its data notes) |
@@ -285,13 +337,18 @@ pedestrian multipolygon, or `area:highway=pedestrian`.
   a door of a building that holds only homes. This is ADR-0021's privacy
   rule: trips never start or end at a residential address.
 - **The world's edge** is a place too, but it is not stored: a node with
-  `edge: world` is where trips enter and leave the world.
+  `edge: world` is where trips enter and leave the world. The prototype
+  had 108 such points around the district.
+- **Standing off the lanes.** With spots on the lines people walk,
+  walkers passed through standing groups. Spots at least 1.8 m from any
+  lane fixed it, at the cost of most spots in small squares: 193
+  candidates down to 66 (the prototype). 1,800 mm is a starting value.
 
 #### The population
 
-`population` holds what the tile's lanes and places share: `curves`,
-sorted by `id`, `holidays`, `time_zone` and `week`. Each lane and place
-carries its own numbers (above).
+`population` holds what the tile's lanes, areas and places share:
+`curves`, sorted by `id`, `holidays`, `time_zone` and `week`. Each lane,
+area and place carries its own numbers (above).
 
 A **curve** is the shape of a kind of place through the day and the
 year: a shopping street, a river front, a square, a stop, a shop. The
@@ -319,10 +376,17 @@ people_per_day × share_permille[d] / 1,000
                × hours[d][h] / 10,000
 ```
 
-Trips at a place follow the same formula with `trips_per_day`. The
-population function rounds as its version defines. The formula's yearly
-mean is close to `people_per_day`, not exactly equal: holidays count as
-Sundays, and every month weighs the same whatever its length.
+Trips at a place follow the same formula with `trips_per_day`, before
+the function scales them. The population function rounds as its version
+defines. The formula's yearly mean is close to `people_per_day`, not
+exactly equal: holidays count as Sundays, and every month weighs the
+same whatever its length.
+
+**The reference** for numbers of people present (`people_per_ha`,
+`occupancy`) is the busiest weekday hour of the curve at a month factor
+of 1,000, as the prototype set its densities "at the weekday peak in an
+average month". At another time, the number is scaled by the formula's
+value then over its value at the reference.
 
 The counts show why curves differ by kind of place. At 18:00 on
 Bahnhofstrasse, December brings 1.4 to 2.6 times as many people as
@@ -358,28 +422,66 @@ carriageways, so its numbers are estimates calibrated to the counts.
 Occupancies are set by eye until there are counts of people stopping
 and sitting (ADR-0021, open question 5).
 
+#### Meeting the numbers
+
+The numbers are targets. Who is where follows from trips that start at
+places and walk the lanes, so a lane gets what its junctions give it.
+In the prototype, a walk weighted by each lane's density alone gave
+pedestrian streets half their share and steps three times theirs. It
+met its targets only by calibrating a weight per lane at load (8 rounds
+of 8,000 sampled trips, about a second for the district) and a factor
+per time that brought the expected total to the profiles'; places
+carried relative weights, and the function derived their trips. Which
+side calibrates is a choice ("Meeting the numbers" under "Options
+considered"). Recommended (N2): the data holds targets, and the
+population function calibrates, within its version, with two rules:
+- **Lanes and areas win.** `trips_per_day` is a weight: the function
+  scales the trips of all places by one factor per time, so that the
+  people on lanes and areas meet `people_per_day` and `people_per_ha`.
+  Where places and lanes disagree, the lanes' numbers hold.
+- **Calibration never depends on what is loaded.** It runs over a fixed
+  unit: the whole world in M2, which is one district; later a unit the
+  data fixes, such as a region, never the tiles around the camera.
+  Otherwise two players with other camera paths would get other people,
+  against ADR-0021's rule that nothing from the camera decides who is
+  where.
+
+**How agreement is checked:**
+- **In the data, without a walk model:** at a node with two or more
+  lanes, none of kind `area`, no place and no `tile` or `world` edge, no
+  lane can carry more people than all the others together, or people
+  would appear between lanes. G1 lists such nodes without failing, so
+  that the review of a refresh sees them.
+- **In the function:** its census, as the prototype's check 4: the
+  people it places per lane kind, per area and per stop against the
+  targets, within a band (±25% in the prototype, which met it within
+  -6% to +21%), on the fixture world in ADR-0021's golden test and at
+  the benchmark stops.
+
 #### Estimates and their rules
 
-`estimated` is an object on each lane and place. It maps each value a
-rule set, rather than the source or a count, to the id of that rule,
-such as `adr-xxxx:width-by-kind:1` for a rule in the navigation
+`estimated` is an object on each lane, area and place. It maps each
+value a rule set, rather than the source or a count, to the id of that
+rule, such as `adr-xxxx:width-by-kind:1` for a rule in the navigation
 ingest's ADR. Keys are sorted, as canonical JSON sorts them; `{}` when
 nothing is estimated. One key can come from different rules in one
-document (a width by default per kind, or narrowed near a wall), which
-is why the rule is named per element, not per kind as RFC 0004 does
-("Smaller choices").
+document (a sidewalk placed from its road's tags, or by the fallback
+rule), which is why the rule is named per element, not per kind as RFC
+0004 does ("Smaller choices").
 
 What may be estimated:
 - **lanes:** `points_mm` for `sidewalk` (beside a road), `crossing` (at
   a junction), `area` and `connector`; `width_mm`, `people_per_day` and
   `forward_permille` for every kind;
+- **areas:** `people_per_ha`;
 - **places:** `anchor_mm` for `entrance` (a door estimated for a shop or
   public building with none mapped) and `terrace` (in front of its
-  building, towards the nearest lane); `yaw`, `seats`, `trips_per_day`
-  and `occupancy` for every kind.
+  building, towards the nearest lane); `spots_mm`, `yaw`, `seats`,
+  `trips_per_day` and `occupancy` for every kind.
 
 Nothing else. A move within 1 m by the matching is placement, recorded
-in `moved_mm`, not an estimate.
+in `moved_mm`, not an estimate; `room_mm` and `clearance_mm` are
+measured against the shells, not estimated.
 
 #### Example
 
@@ -418,9 +520,9 @@ illustrative.
     ]
   },
   "nodes": [
-    { "id": "osm:node:2401", "position_mm": [-99280, 408960, 13052], "edge": null },
-    { "id": "osm:node:5120", "position_mm": [-97850, 409010, 15020], "edge": null },
-    { "id": "osm:way:3317/n1", "position_mm": [-103512, 408870, 12044], "edge": "tile" }
+    { "id": "osm:node:2401", "position_mm": [-99280, 408960, 13052], "edge": null, "clearance_mm": 1650 },
+    { "id": "osm:node:5120", "position_mm": [-97850, 409010, 15020], "edge": null, "clearance_mm": 0 },
+    { "id": "osm:way:3317/n1", "position_mm": [-103512, 408870, 12044], "edge": "tile", "clearance_mm": 3000 }
   ],
   "lanes": [
     {
@@ -430,6 +532,7 @@ illustrative.
       "to": "osm:node:5120",
       "points_mm": [[-98565, 408985, 14036]],
       "width_mm": 1500,
+      "room_mm": [[1400, 2100], [1250, 1800]],
       "bridge": false,
       "control": null,
       "moved_mm": 0,
@@ -449,7 +552,8 @@ illustrative.
       "from": "osm:way:3317/n1",
       "to": "osm:node:2401",
       "points_mm": [[-102100, 408900, 12380], [-100690, 408930, 12716]],
-      "width_mm": 1800,
+      "width_mm": 2000,
+      "room_mm": [[650, 5000], [610, 5000], [700, 5000]],
       "bridge": false,
       "control": null,
       "moved_mm": 120,
@@ -459,7 +563,7 @@ illustrative.
       "forward_permille": null,
       "estimated": {
         "people_per_day": "adr-xxxx:flow-from-places:1",
-        "width_mm": "adr-xxxx:width-narrowed-at-wall:1"
+        "width_mm": "adr-xxxx:width-by-kind:1"
       }
     }
   ],
@@ -469,6 +573,7 @@ illustrative.
       "id": "osm:node:5120",
       "kind": "entrance",
       "anchor_mm": [-97850, 409010, 15020],
+      "spots_mm": [],
       "bridge": false,
       "moved_mm": 240,
       "node": "osm:node:5120",
@@ -493,12 +598,14 @@ illustrative.
 }
 ```
 
-**Size:** about 2.5 to 3 MB of canonical JSON for the district's 30
-tiles, under 0.1 MB a tile on average (estimate, not measured: about
+**Size:** about 3 to 3.5 MB of canonical JSON for the district's 30
+tiles, about 0.1 MB a tile on average (estimate, not measured: about
 46 km of lanes at 1.5 m spacing is about 31,000 positions of about 23
-bytes; a few thousand lanes and up to about 2,000 places at 250 to 400
-bytes each with their numbers and rules; and a catalogue of curves of
-about 1 KB each, copied into each tile).
+bytes, and as many `room_mm` pairs of about 13; a few thousand lanes
+and up to about 2,000 places at 250 to 400 bytes each with their numbers
+and rules; and a catalogue of curves of about 1 KB each, copied into
+each tile). The prototype's own lane file for the district, in a text
+format of its own, was 240 KB.
 
 **Format limits:** at most 65,536 nodes, lanes and places, 1,024 areas
 and 1,048,576 positions per document. Those limits allow documents of
@@ -603,11 +710,15 @@ must be.
 
   The district's cached highway and building answer is 3.3 MB today.
   The query never uses `out meta`, so no user or changeset field is read
-  (ADR-0021, Privacy).
+  (ADR-0021, Privacy). The prototype shows why the query is needed: from
+  the cache alone it found no benches, terraces, entrances or tram
+  stops, only 2 stops (the only platforms in range), and nobody sat.
 - **Lanes:**
   - ways split at junctions, places and edges; heights on the terrain
     mesh, or on the top of the deck the ingest already computes for a
-    bridge (section 2, "Heights");
+    bridge (section 2, "Heights"). In the prototype, the highest surface
+    that is not a building (terrain or a transport deck) worked for
+    bridges and steps;
   - widths from `width`, otherwise a default per kind, marked as
     estimated. 39% of the district's footway, pedestrian, path and steps
     length carries a `width` tag (data notes).
@@ -621,15 +732,18 @@ must be.
   notes); most mark theirs as mapped separately, so few lanes are
   estimated there. Elsewhere, many are.
 - **Areas:** squares and pedestrian streets mapped as areas, with
-  `area` lanes that join the nodes where lanes reach them. An area or
-  place over water with no deck under it is left out and reported.
+  `area` lanes that join the nodes where lanes reach them, and a
+  density each. An area or place over water with no deck under it is
+  left out and reported.
 - **Matching to shells.** ADR-0021 asks for lanes clear of building
   shells, except where a lane ends at an entrance or passes through a
   building passage. Under option K1 (section 10):
-  1. probe each lane at points at most 1 m apart against every collider
-     within reach, the neighbouring tiles' included, since a building
-     can reach into a tile it does not belong to (RFC 0001 section 2).
-     A point is blocked by G9's test: the player capsule overlaps a
+  1. probe each lane at points at most 0.5 m apart against every
+     collider within reach, the neighbouring tiles' included, since a
+     building can reach into a tile it does not belong to (RFC 0001
+     section 2). Walls jut out between OSM vertices: in the prototype,
+     probes every 1 to 2 m left people up to 0.35 m inside shells. A
+     point is blocked by G9's test: the player capsule overlaps a
      collider, or rays in the four horizontal directions and up all hit
      within 30 m. G11 uses the same test (section 9);
   2. mark as `entrance` the end of a lane at an entrance place; mark the
@@ -639,21 +753,37 @@ must be.
   3. move the other blocked parts sideways, away from the shell, by at
      most 1 m, keeping junctions joined, and record the largest move in
      `moved_mm`;
-  4. mark what is still blocked as `blocked`, and narrow `width_mm` (as
-     an estimate) where a wall is nearer than half the width plus
-     0.45 m, the distance people keep from house walls (Weidmann 1993,
+  4. mark what is still blocked as `blocked`. Never drop the lane: the
+     prototype dropped what it could not clear, 98 lanes (2.4 km of
+     77 km): 31 ran into a wall, 31 needed a shift at an end, 22 more
+     than 1 m, 11 ended at a node that could not be cleared and 3 had
+     walls on both sides. Dropping can cut a street in two; a `blocked`
+     range keeps the graph whole and shows OSM's mappers where to look;
+  5. measure `room_mm` on each side of every segment and each node's
+     `clearance_mm`, at least every 0.5 m, against the shells cut 0.5 m
+     above the walking surface, as the prototype did, so that a roof
+     overhang above head height does not narrow a lane. A point between
+     two walls about equally far away keeps its sides from the lane's
+     direction: the prototype's first signed distance flipped sign
+     there. How far people keep from a wall within that room is the
+     population function's choice: the prototype kept 0.3 m, and people
+     keep 0.45 m from house walls (Weidmann 1993,
      [ETH Zürich](https://doi.org/10.3929/ethz-b-000242008), p. 89);
-  5. report every move, passage and blocked part, so that errors can be
+  6. report every move, passage and blocked part, so that errors can be
      fixed in OpenStreetMap.
 
   **The 1 m bound** follows OSM's accuracy in the district (96% of its
   sidewalk length within 1 m of the survey) and G8, which lets a shell
-  move by 1 m. Why the prototype's other overlaps occur was not
-  examined, so how many lanes 1 m clears is not known. The first
-  district run reports it, and the bound is a starting value until then.
-  **Only ingest-made shells** are matched (swissBUILDINGS3D and the OSM
-  fallback). A fresh ingest never sees contributed shells (ADR-0020
-  section 1); section 9 says what happens when one blocks a lane.
+  move by 1 m. The prototype gives a first measure, with its own test (a
+  point closer than 0.35 m to a wall cut 0.5 m above the ground, not
+  G9's capsule): 128 of its lanes came that close and 37 had points
+  inside a shell; 38 lanes moved sideways, at most 0.98 m, and 24 nodes
+  moved; 22 lanes needed more than 1 m. The first district run of the
+  ingest reports the same with G9's test, and the bound is a starting
+  value until then. **Only ingest-made shells** are matched
+  (swissBUILDINGS3D and the OSM fallback). A fresh ingest never sees
+  contributed shells (ADR-0020 section 1); section 9 says what happens
+  when one blocks a lane.
 - **Doors, terraces and connectors.** In the district, 1,377 of the
   1,387 shells are swissBUILDINGS3D's and 10 are OSM fallbacks
   (ADR-0019). Under K1:
@@ -669,18 +799,37 @@ must be.
   - a `connector` joins each place to the nearest lane within 30 m that
     it reaches without crossing a shell (starting value). A place with
     none is left out and reported, unless people only sit or stand
-    there.
+    there;
+  - from the cache alone, without entrance nodes, the prototype had 80
+    paths that end at a shop or public building and placed 253 doors on
+    outlines nearest a lane. Its rule against homes held: 67 paths to
+    doors of buildings tagged as homes or with no use were dropped.
 - **Places:** stops, squares, benches, viewpoints and fountains from
   OSM; opening hours parsed from `opening_hours` where the ingest's
   subset of its grammar reads them, otherwise `null`. 70% of the
   district's shops and 75% of its places to eat have the tag.
+- **Spots:** standing positions in squares, at stops, viewpoints and
+  fountains, each at least 1.8 m from every lane's centreline, clear of
+  walls and inside its square. The prototype placed 66 in squares and 4
+  at stops.
 - **Population:**
   - curves from the counts whose licences are settled (section 10):
     Bahnhofstrasse's areas for shopping streets, the Limmatquai for the
-    river front, VBZ boardings by hour for stops;
-  - numbers per lane and place estimated from kinds, places and stops,
-    and calibrated at the counted places (ADR-0021, "Data");
-  - occupancies set by eye;
+    river front, VBZ boardings by hour for stops. The prototype used
+    Bahnhofstrasse's middle area (2025) for city lanes, the Limmatquai
+    (2024) for lanes within 15 m of a way named as a quay or bridge, and
+    their mean for squares; its month factors ran from 853 to 1,277 per
+    mille (Bahnhofstrasse's weekdays, December the highest) and from 672
+    to 1,325 (the Limmatquai, December estimated);
+  - targets per lane, per area and per place, estimated from kinds,
+    places and stops, and calibrated at the counted places (ADR-0021,
+    "Data"). The prototype set people per km at the weekday peak in an
+    average month by hand, as starting values: 350 on pedestrian
+    streets, 120 on living streets, 100 on platforms, 80 on sidewalks,
+    60 on crossings, 50 on footways and on lanes without sidewalks, 30
+    on steps, and 200 people per hectare of square;
+  - occupancies set by eye (the prototype took 40% of square spots and
+    50% of stop spots at the reference);
   - where no counts exist, Zurich's curves, scaled by nearby
     destinations and stops, marked as estimated (ADR-0021).
 - **Nothing from live services:** everything is baked by the ingest and
@@ -696,14 +845,36 @@ must be.
   types, which are defined beside the function (ADR-0021, "Where the
   code lives"), so that no crate gains a dependency on `op_world`.
 - **Radius:** the crowd works out people within a radius inside the
-  600 m the client loads (ADR-0021). `world` nodes are where people
-  enter and leave. A `tile` node whose neighbour is not loaded lies
-  beyond that radius.
+  600 m the client loads (ADR-0021); the prototype drew them within
+  160 m. `world` nodes are where people enter and leave. A `tile` node
+  whose neighbour is not loaded lies beyond that radius.
+- **Calibration at load** (under N2, "Meeting the numbers"): about a
+  second for the district in the prototype, over the whole world, never
+  over the tiles that happen to be loaded.
+- **A near tier:** the prototype passed its overlap check only with both
+  kinds of avoidance: avoidance built into the function (keep right,
+  slower walkers further out, closed-form side steps) and client offsets
+  within 40 m of the camera that fade back to the function's path.
+  Either alone failed in 5 of 6 cases (21 to 93 overlaps a minute
+  against a threshold of 10). Both need to know how much room there is,
+  on each side: that is what `room_mm` and `clearance_mm` give. Sub-lanes
+  by direction, and spreading walkers over a wide street rather than in
+  a column on its right half (a fault the prototype's screenshots
+  showed), are built from the same room; they need no data of their
+  own.
+- **The cost per tick is the client's.** Working out about 1,150 people
+  at a tick took about 2 ms in the prototype, which shows at the 99th
+  percentile of frame time; its fixes (spreading a tick's work over
+  frames, working out far people less often, another thread) need
+  nothing from the format.
 - **What the client draws from it:** a door at each entrance place, and
   a bench at each bench place until `object` names a bench in
   `street_objects`; both are decoration
   ([ADR-0012](../docs/adr/0012-client-realism-from-procedural-detail.md)),
-  hidden in F2's plain look.
+  hidden in F2's plain look. A trip that ends at a door in view is a
+  question for the client, not the data: the prototype held such people
+  standing at the door until out of view, since walking in would be a
+  vanish in view.
 - **Passages:** recommended for M2, nobody walks a `passage` range (see
   "Passages" under "Options considered").
 - **A help for fixing OSM** (a suggestion): the inspect mode could draw
@@ -723,8 +894,9 @@ or M5), the format is meant to be ready:
 - one graph per tile, joined at `tile` nodes by id, so the simulation
   can load lanes by tile within its 160 m, as it loads colliders;
 - sorted, stable ids, and no floats;
-- heights on the surfaces players stand on, and lanes checked against
-  the colliders by G11;
+- heights on the surfaces players stand on, lanes checked against the
+  colliders by G11, and the room beside them measured, which graph
+  agents that keep off walls need as the client's crowd does;
 - pinned by the world id.
 
 What that decision would still need, in its own RFC and without a
@@ -747,9 +919,12 @@ change sets that touch the layer or colliders near lanes.
 `GATE_VERSION` is 0.1.2 today; this RFC's would be 0.1.4 only if RFC
 0004's 0.1.3 lands first, and later still if ADR-0017's list or A1 to A8
 change the gate before it.
-- **G1:** validation covers the document, the world-level pairing of
-  `tile` nodes (section 3), and world-wide unique lane, node and place
-  ids.
+- **G1:** validation covers the document, including spots at least
+  1,800 mm from every lane's centreline and seats outside every lane's
+  walkable band (checked on squared integer distances); the world-level
+  pairing of `tile` nodes (section 3); and world-wide unique lane, node
+  and place ids. It lists, without failing, the nodes where one lane
+  carries more people than all the others ("Meeting the numbers").
 - **G3:** a contributed change to the layer fails, with the advice
   above. A baseline refresh authored by `streetwide:ingest` gets
   `review`. G3 already closes every asset whose licence contains
@@ -758,15 +933,16 @@ change the gate before it.
   has more than ten times the positions or places of the district's
   busiest tile gets `review`; the numbers are set from the first
   district run.
-- **G8:** every lane vertex, area ring position and place anchor lies
-  within 50 mm of the terrain mesh of its tile, or, where marked
+- **G8:** every lane vertex, area ring position, place anchor and spot
+  lies within 50 mm of the terrain mesh of its tile, or, where marked
   `bridge`, of the top surface of a bridge deck, computed exactly from
   millimetre vertices; and `moved_mm` is at most 1,000. Starting values,
   as RFC 0004's G8 for anchors.
 - **G9 and G10:** unchanged, as ADR-0021 says under C2.
 - **G11 (new): lanes,** the "G9-style check" that ADR-0021 asks for.
   - **Probe points:** every lane vertex and points between them at most
-    1 m apart, outside `entrance`, `passage` and `blocked` ranges.
+    0.5 m apart, as the ingest probes (section 6), outside `entrance`,
+    `passage` and `blocked` ranges.
   - **Blocked** means what it means in the ingest's matching (section
     6) and in G9: the player capsule overlaps a collider, or the point
     is enclosed.
@@ -776,12 +952,17 @@ change the gate before it.
     ribbons. A contributed shell that newly blocks a lane fails, though
     its author cannot edit the lane: G9 already treats ribbons so. If
     ADR-0020's amendment A4 makes G9 give `review` when the blocking
-    asset was made by the ingest, G11 follows it.
+    asset was made by the ingest, G11 follows it. A changed collider that
+    cuts into the room a lane or node claims (`room_mm`, `clearance_mm`)
+    without blocking it gets `review`: only a refresh can measure the
+    room again, and until then people may brush the new wall.
   - **Lanes whose geometry changes** (`from`, `to`, `points_mm`,
-    `width_mm`, `bridge` or `ranges`): every probe point must be free in
-    the candidate world. A change of numbers only probes nothing. On a
-    refresh, the outcome is `review` with the findings, and the refresh's
-    final world must pass (below).
+    `width_mm`, `room_mm`, `bridge` or `ranges`, or a node's
+    `clearance_mm`): every probe point must be free in the candidate
+    world, and the room claimed must be free there too, measured as the
+    ingest measures it (within 50 mm). A change of numbers only probes
+    nothing. On a refresh, the outcome is `review` with the findings,
+    and the refresh's final world must pass (below).
   - **The report** lists, per tile, the length of lanes in `blocked`,
     `passage` and `entrance` ranges and how it changed, so that a
     refresh that blocks more stands out.
@@ -796,8 +977,9 @@ sets last", for this reason: "Visual-only sets pass `op_world`'s gate
 alone, and new ribbons merged first keep G9's probes on ways that exist
 upstream." The planner orders `none` before `trimesh` in code. So a
 refresh's navigation set merges before its shell sets, and its lanes,
-matched to the new shells, are first probed against the old ones. Recommended (option (d) under "The
-lane check during a refresh"): keep ADR-0020's order; G11 gives `review`
+matched to the new shells, are first probed against the old ones.
+Recommended (option (d) under "The lane check during a refresh"): keep
+ADR-0020's order; G11 gives `review`
 on refresh sets; and the planner's comparison of the pre-refresh and
 final worlds, which ADR-0020 accepted for its Q19, runs G11's absolute
 check on the final world, which must pass before the first set merges.
@@ -851,15 +1033,18 @@ swissBUILDINGS3D under K1, and each count dataset.
 **Part 1 of the question: what the shells may do.** RFC 0001 lets an
 OSM-derived asset use another source "only to place its OSM geometry".
 The matching uses swisstopo's shells for more than heights: it moves
-lanes sideways, snaps doors and terraces onto walls, narrows widths,
-chooses which lane a connector joins, and marks what it cannot clear.
-Options (compared under "Options considered"):
+lanes sideways, snaps doors and terraces onto walls, measures the room
+beside lanes and around nodes, chooses which lane a connector joins and
+which spots stand clear, and marks what it cannot clear. Options
+(compared under "Options considered"):
 - **K1. Amend RFC 0001 section 2 (recommended):** placing OSM geometry
   includes moving a point or a line sideways by at most 1 m to clear
   another source's geometry or to meet it (a lane clear of a wall, a
-  door on it); narrowing a width; choosing among OSM-derived candidates
-  the one that clears it (the lane a connector joins); and marking what
-  cannot be cleared. Never against contributed content (CC BY-SA 4.0),
+  door on it); measuring the room that geometry leaves beside it
+  (`room_mm`, `clearance_mm`); choosing among OSM-derived candidates
+  the ones that clear it (the lane a connector joins, the spots in a
+  square); and marking what cannot be cleared. Never against
+  contributed content (CC BY-SA 4.0),
   which ADR-0001 and G4 keep apart from ODbL geometry. Every door and
   terrace starts from OSM data (a node, or an OSM building outline), so
   no anchor is placed by swisstopo geometry beyond 1 m.
@@ -940,16 +1125,17 @@ shape OSM lanes, the same question as shells, for a gain in looks only.
     along lanes
     ([Epic](https://dev.epicgames.com/documentation/unreal-engine/city-sample-project-unreal-engine-demonstration));
   - the crowd notes behind ADR-0021 rank lanes on a graph with
-    separation as the best fit for M2, and the prototype's graph agents
-    were cheap and deterministic;
+    separation as the best fit for M2, ADR-0021's simulation prototype
+    found graph agents cheap and deterministic, and its client prototype
+    drew a crowd from such a graph that passed all six of its checks;
   - no glb profile change; each asset single-source by construction;
-  - small: about 2.5 to 3 MB for the district (estimate).
+  - small: about 3 to 3.5 MB for the district (estimate).
 - Cons:
   - a second kind of JSON content, after RFC 0004's points, with its
     own reader in Rust and Python;
   - lineage per tile, not per lane;
-  - an area is walkable only along its lanes, unless client offsets
-    spread people over it.
+  - an area is walked along its lanes, unless the function or client
+    offsets spread people over its polygons.
 
 **B. A navigation mesh** (walkable polygons with portals) per tile.
 - Pros: any point of a square or a wide street is walkable; Assassin's
@@ -1057,17 +1243,99 @@ beside the navigation asset.**
 If the maintainer prefers P3, the lighter remedy is the tolerant G1,
 with takedowns acting on both assets.
 
+### Meeting the numbers
+
+The prototype met its per-lane targets only by calibrating its walks
+(section 2, "Meeting the numbers"). Who does that:
+
+**N1. The ingest stores numbers that already agree,** routing trips from
+places over the lanes with a walk model of its own, and the function
+follows them.
+- Pros: the data is consistent on its face.
+- Cons: the function walks people its own way, so it must still
+  calibrate to meet the lanes' numbers, or the ingest must run the
+  function's own walk; the walk model then lives in two places.
+
+**N2. Targets in the data; the function calibrates (recommended).**
+Lanes and areas carry targets and places carry weights; the function
+calibrates its walk weights and scales the places' trips at load, over
+a fixed unit, within its version, as the prototype did.
+- Pros:
+  - the data says how many people are where, from counts and
+    estimates, and nothing about how the function walks them;
+  - tuning the walk changes only the function's version, as ADR-0021
+    wants ("tuning bumps only the population's own version"), never
+    the world;
+  - it is what the prototype did and checked: within -6% to +21% of
+    its targets at the three stops.
+- Cons:
+  - calibration costs time at load: about a second for the district,
+    more for a larger unit;
+  - the unit must be fixed by the data, never by what is loaded;
+  - agreement shows only in the function's census, beside G1's listing
+    of impossible nodes.
+
+**N3. The ingest bakes a calibrated walk weight per lane,** for a named
+version of the population function.
+- Pros: no calibration at load, and the unit is fixed by construction.
+- Cons: world data tied to a client version, so every change of the
+  walk needs a re-ingest, or the weights stop fitting; the ingest
+  (Python) must run the function's walk (Rust), or a copy of it; it
+  does nothing for the cost per tick, which is the prototype's real
+  cost (section 7).
+
+Recommended: N2 for M2, whose world is one district. N3 is weighed again
+before M3, if calibrating a whole city's unit at load proves slow.
+
+### Room beside lanes
+
+The prototype needed, beside each lane, the room free of walls on each
+side every 0.5 m (walls jut out between OSM vertices), and at each
+junction the clearance from walls, because people turning there cut
+the corner.
+
+**R1. Room per segment and a clearance per node, from the matching
+(recommended).**
+- Pros: measured once by the ingest, against the shells it matched;
+  the population function needs no shells; G11 can check it; ready for
+  the simulation later.
+- Cons: about 0.4 MB more for the district (estimate); a contributed
+  shell that narrows the room gets `review` until a refresh measures
+  again.
+
+**R2. A width and a sideways offset per lane.**
+- Pros: two numbers per lane.
+- Cons: one band per lane, while walls jut out between vertices; not
+  what the prototype needed.
+
+**R3. Computed in the client from the shells at load,** as the prototype
+did in place of the ingest.
+- Pros: no data.
+- Cons: the shells become an input of the population function, which
+  ADR-0021's list of inputs does not include; with tiles streamed, the
+  room near the edge of what is loaded would depend on what is loaded;
+  the simulation would need the same work later.
+
+**R4. Sub-lanes by direction stored as lanes of their own.**
+- Pros: explicit.
+- Cons: twice the lanes, and a split the function can work out from the
+  width and the room, as the prototype's built-in avoidance did (keep
+  right, slower walkers further out).
+
 ### Matching lanes to shells
 
-**K1. Move lanes and snap doors by at most 1 m, narrow, choose
-connectors, and mark the rest (recommended).**
+**K1. Move lanes and snap doors by at most 1 m, measure the room,
+choose connectors and spots, and mark the rest (recommended).**
 - Pros: people stay out of walls in the data, for the crowd now and
   the simulation later; doors sit on walls; G11 can hold every lane to
-  it; the bound matches OSM's measured accuracy in the district.
+  it; the bound matches OSM's measured accuracy in the district. The
+  prototype's clearing, with moves of at most 1 m, left no lane point
+  inside a shell, and nobody stood inside one at any stop.
 - Cons: an amendment of RFC 0001 section 2; contributed shells are
   never used, so a contributed shell can fail G11 on a lane its author
-  cannot edit; whether 1 m clears most overlaps is unknown, and doors
-  more than 1 m from a wall are dropped, how many is unknown.
+  cannot edit; with the prototype's test, 22 lanes needed more than 1 m
+  and would be marked `blocked`; doors more than 1 m from a wall are
+  dropped, how many is unknown.
 
 **K2. Mark only, never move.**
 - Pros: a smaller amendment; lanes stay at OSM's positions.
@@ -1079,10 +1347,11 @@ connectors, and mark the rest (recommended).**
 when drawing them.
 - Pros: no amendment; the cleanest licence position.
 - Cons: the population function would need the shells as an input,
-  which ADR-0021's list of inputs does not include; client offsets
-  cannot fix a lane that runs inside a building; doors on OSM outlines
-  can sit off the shell, so an `entrance` range does not end where the
-  lane meets the wall; the simulation would need matching later anyway.
+  which ADR-0021's list of inputs does not include (the prototype took
+  them, at load, in place of the ingest; see R3); client offsets cannot
+  fix a lane that runs inside a building; doors on OSM outlines can sit
+  off the shell, so an `entrance` range does not end where the lane
+  meets the wall; the simulation would need matching later anyway.
 
 **K4. Clearance offsets in an asset of their own,** as ADR-0021 lists.
 - Pros: what came from shells is visible as one asset.
@@ -1145,8 +1414,11 @@ to 16 (A1 to A8).
 
 ADR-0021's matching keeps lanes that pass through building passages. The
 cache holds 39 highway ways tagged `tunnel=building_passage` (counted for
-this RFC; the prototype's 4 tiles had 6). swissBUILDINGS3D's shells have
-no openings for them, so the wall stands where the passage is.
+this RFC; the simulation prototype's 4 tiles had 6). swissBUILDINGS3D's
+shells have no openings for them, so the wall stands where the passage
+is. The client prototype marked 28 lanes through buildings and let people
+walk them, exempt from its check that nobody stands inside a shell; how
+that looks at the wall was not checked.
 - **Nobody walks a passage in M2 (recommended for M2):** the data keeps
   the passage; the crowd routes around it. This narrows ADR-0021, which
   keeps passages for people to walk, and routes through them detour.
@@ -1182,10 +1454,27 @@ no openings for them, so the wall stands where the passage is.
 - **Areas and their lanes.**
   - The polygons only: readers route across them themselves.
   - **The polygons and `area` lanes made by the ingest (recommended):**
-    people walk only on lanes, and the polygons still let client offsets
-    spread them.
+    the graph stays the one thing people walk, and the polygons let the
+    function or client offsets spread them. The prototype's lanes
+    through each area's centre crossed each other and put walkers on
+    the same straight lines; the ingest's ADR chooses the layout.
   - Mapped lines only: no polygon to stand on, and nothing along
     Bahnhofstrasse.
+- **Areas' numbers.**
+  - **A density per area, spread over its lanes (recommended):** as the
+    prototype did; `area` lanes carry no number of their own.
+  - `people_per_day` on each `area` lane, derived from the area's
+    density by the ingest: more numbers to keep in step, for the same
+    result.
+  - Densities per lane kind only: with 38% of the lane length on areas,
+    they fill squares many times over (the prototype).
+- **Standing spots.**
+  - **Stored per place, at least 1.8 m from every lane (recommended):**
+    G1 checks the distance, and the simulation could use them later.
+    The cost, in the prototype: 193 candidate spots down to 66.
+  - Picked by the function from the polygons and anchors: tunable
+    without a re-ingest, but unchecked by the gate, and a rule inside
+    the function's version.
 - **Entrances.**
   - E1. Mapped entrances only: 208 in the district, against 802 shops
     and 300 places to eat or drink.
@@ -1204,9 +1493,10 @@ no openings for them, so the wall stands where the passage is.
     OSM, as ADR-0015 does for trees and lights.
   - B3. Both, unlinked: two benches drawn for one. Rejected.
 - **How estimates name their rules.**
-  - **A rule id per element and key (recommended):** a width set by
-    default and one narrowed near a wall name different rules in one
-    tile. About 30 bytes for each estimated value.
+  - **A rule id per element and key (recommended):** a sidewalk placed
+    from its road's tags and one placed by the fallback rule name
+    different rules in one tile. About 30 bytes for each estimated
+    value.
   - RFC 0004's shape, one rule per kind and key at the top: smaller,
     but it cannot say which of two rules set a value.
   - Rule ids listed once at the top, and an index per element: smaller,
@@ -1293,7 +1583,10 @@ only) at each merge, as RFC 0004 notes for points.
   release, with only the header's world id changed.
 - **The crowd:** the document holds no floats, and the population
   function seeds its randomness from its ids, so every machine derives
-  the same people from the same world (ADR-0021's golden test). Where a
+  the same people from the same world (ADR-0021's golden test). Its
+  calibration (N2) is part of that function: deterministic, over a unit
+  the data fixes and never over what is loaded. The prototype gave the
+  same people, and the same counts for every check, on two runs. Where a
   world's `time_zone` is not the zone of the crowd's clock, the
   function's version pins the time-zone rules it uses.
 - **Rendering** may differ between machines: doors, benches and people
@@ -1310,8 +1603,9 @@ only) at each merge, as RFC 0004 notes for points.
 - **`op_world`:**
   - a canonical reader and writer;
   - sorting, uniqueness, references inside the document, vertex
-    spacing, ranges, shares that add up, `estimated` keys allowed for
-    their kind, bounds;
+    spacing, one `room_mm` pair per segment, ranges, shares that add up,
+    `estimated` keys allowed for their kind, spots off the lanes, seats
+    outside the walkable bands, bounds;
   - world-level checks: `tile` nodes paired at one position, and ids
     unique across the world.
 - **Every place that assumes a glb,** as RFC 0004 lists them:
@@ -1322,24 +1616,45 @@ only) at each merge, as RFC 0004 notes for points.
   node, points too far apart, a wrong range, a trimesh collider, floats,
   omitted nulls, shares that are off by one, an estimate of a key its
   kind may not estimate.
-- **Gate:** G3's advice and `review` for refreshes; G8 on terrain and on
-  decks; and G11: a shell moved onto a sidewalk fails, a lane with an
-  unmarked blocked point fails, `entrance` and `passage` ranges pass, a
-  change of numbers only probes nothing, a refresh set gets `review`.
+- **Gate:** G1's listing of nodes whose numbers no walk can meet; G3's
+  advice and `review` for refreshes; G8 on terrain and on decks; and
+  G11: a shell moved onto a sidewalk fails, a lane with an unmarked
+  blocked point fails, room claimed where a wall stands fails, a shell
+  that only narrows the room gets `review`, `entrance` and `passage`
+  ranges pass, a change of numbers only probes nothing, a refresh set
+  gets `review`.
 - **Planner:** the final-world G11 check and the hold for lanes blocked
   by a contributed shell.
+- **The population function** (in ADR-0021's golden test, on the fixture
+  tile): calibration gives the same weights for the same document, and
+  its census meets the targets per lane kind, per area and per stop
+  within a band, as the prototype's check 4 did.
 - **Ingest:** the district run reports moves, snaps, dropped doors,
-  passages and blocked lengths, and how many of the prototype's 269
-  overlapping edges it clears.
+  passages and blocked lengths, with G9's test, and how many of the
+  simulation prototype's 269 overlapping edges and the client
+  prototype's 98 dropped lanes it clears.
 - **No new crate or Python package.**
 
 ## Unresolved questions
 
-- **The client prototype** has not run. It may show that the crowd
-  needs more than one width per lane (sub-lanes by direction), or other
-  places. This RFC is revised after it.
+- **What the client prototype did not exercise:** tile cuts and joining
+  (it used one graph for the district), `forward_permille`, opening
+  hours, holidays, sitting (no benches or terraces in the cache), stops
+  beyond 2, and a camera that walks. It ran one seed at three stops and
+  two times; between seeds, the count at a stop varied by about 10%.
+- **Calibration at scale:** how long N2 takes over a whole city's unit,
+  and which unit; N3 if it is too slow.
+- **Areas:** how the ingest lays `area` lanes, and whether the function
+  spreads walkers over the polygons, so that people on squares and wide
+  streets do not walk in lines (the prototype's screenshots).
 - **Why lanes and shells disagree,** beyond doors and passages, was not
-  examined, so the 1 m bound is a guess until the first district run.
+  examined. The client prototype's clearing gives a first measure (38
+  lanes moved within 1 m, 22 needing more), with its own test; the 1 m
+  bound stays a starting value until the ingest's first district run.
+- **Doors in view:** a trip that ends at a door in view is held until
+  out of view in the prototype, since walking in would be a vanish in
+  view; a player who walks may notice. A client matter, but it decides
+  how much the drawn doors are worth.
 - **`{source}` in asset ids:** this RFC uses the namespace (`osm`); RFC
   0004 uses the ids' prefix (`osm:node`). One rule for every layer, or
   one per layer.
