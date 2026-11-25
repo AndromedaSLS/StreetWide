@@ -14,6 +14,7 @@ use crate::gate::{COLLECTIVE_CREDIT, CONTRIBUTION_LICENSE, CONTRIBUTIONS_DATASET
 use crate::glb::{self, GlbMesh, Material, Node, Primitive, f32_to_mm, mm_to_f32};
 use crate::id::ContentId;
 use crate::keys::TileKey;
+use crate::limits::Document;
 use crate::manifest::{AssetManifest, Collider, Generator, Layer, Physics, Provenance, Source};
 use crate::store::{ObjectKind, Store};
 use crate::tile::TileIndex;
@@ -37,7 +38,7 @@ pub fn sample_draft(world_dir: &Path) -> Result<Draft> {
     let world = Store::new(world_dir);
     let (world_id, manifest) = world.read_world()?;
     for wt in &manifest.tiles {
-        let index = TileIndex::from_bytes(&world.read_object(&wt.tile_id, ObjectKind::Json)?)?;
+        let index = TileIndex::from_bytes(&world.read_document(&wt.tile_id, Document::TileIndex)?)?;
         for a in index
             .assets
             .iter()
@@ -49,8 +50,9 @@ pub fn sample_draft(world_dir: &Path) -> Result<Draft> {
             }) else {
                 continue;
             };
-            let shell_manifest =
-                AssetManifest::from_bytes(&world.read_object(&a.manifest_id, ObjectKind::Json)?)?;
+            let shell_manifest = AssetManifest::from_bytes(
+                &world.read_document(&a.manifest_id, Document::AssetManifest)?,
+            )?;
             return draft(world_id, wt.tile, &a.feature_id, walls, &shell_manifest);
         }
     }

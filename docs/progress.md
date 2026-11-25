@@ -2589,3 +2589,55 @@ Each RFC records this.
 6. The drafts the decisions call for: ADR-0017's RFC, the navigation
    ingest's ADR.
 7. The ODbL notices in the client and the store (ADR-0019).
+
+### JSON size limits (2026-11-25, RFC 0001)
+
+RFC 0001's decided size limits (section 7, option 1) are enforced in
+`op_world` and `tools/worldfmt` alike. Reader fuzzing found the problem:
+serde_json takes 16 to 105 bytes of memory per byte of text, so a
+crafted 64 MiB document took about 7 GB.
+
+| Kind | Limit |
+|---|---|
+| asset manifest, merge record | 1 MiB |
+| change set | 8 MiB |
+| check report, tile index | 16 MiB |
+| world manifest | 64 MiB, the limit of every file (none of its own) |
+
+Points and navigation documents keep 64 MiB until their own limits are
+set; nothing reads them yet.
+
+- **Where:** the limits are defined once, in `op_world::limits`
+  (`Document`) and `tools/worldfmt/limits.py`.
+  - `from_bytes` of every document type refuses a longer document before
+    parsing it, and `to_bytes` refuses to write one, so a merge never
+    writes a record (too many reviews) that a later merge could not read.
+  - Where the kind is known, a longer file is refused before it is read
+    (`store::read_document`, `Store::read_document`): the gate, `validate`,
+    merges, `--require-base`, `WorldLog::open`, `op_replay`'s complete
+    gate and `op_stream`.
+  - Python: `changes.parse`, `to_bytes`, `Objects` and `apply`; `log`'s
+    records, change sets, reports and worlds; the planner's `verify`
+    (the gate's reports) and the facade tool.
+- **Messages** name the kind and the limit, the same in both languages:
+  "larger than 1048576 bytes (1 MiB), the limit for an asset manifest".
+- **Gate 0.1.3.** G1's output changes for oversized inputs, so its version
+  changes: a change set over 8 MiB, a bundle manifest over 1 MiB or a
+  candidate tile index over 16 MiB fail G1 with the new message. The
+  sample report changes only in `gate_version`: report `f6e24f74…`.
+  RFC 0004's gate change takes the next free version, 0.1.4.
+- **Valid input is unchanged:** valid documents read up to exactly their
+  limits, and every fixture and pinned id is unchanged but the sample
+  report. The largest valid documents are far below the limits (Zurich:
+  manifests 4,108 bytes, tile indexes 59,148).
+- **Time:** the worst merge record Python can now be given (1 MiB of
+  short reviews) takes about 2 s to check, where 64 MiB took minutes.
+- **Tests:** a valid document of each kind at its limit reads and one
+  byte more is refused, in Rust and Python; the worst case for the
+  parser (one-key objects) one byte over each limit is refused with the
+  memory of the input alone; files over their limit are refused by store
+  reads, validation, the gate (G1), `--require-base`, the world log, the
+  planner's `verify` and the facade tool (in Rust before they are read);
+  writers refuse what readers would; Python's limits and messages are
+  checked against `limits.rs`, and the gate's G1 against Python's
+  messages (`STREETWIDE_GATE=1`).

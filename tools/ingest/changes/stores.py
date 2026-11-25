@@ -32,6 +32,7 @@ from tools.ingest.changes.common import (
 from tools.worldfmt import cjson, glb, schemas
 from tools.worldfmt.changes import ChangeError, Objects, tile_xy
 from tools.worldfmt.ids import PREFIX, content_id, hex_of, is_content_id
+from tools.worldfmt.limits import BY_FORMAT
 from tools.worldfmt.store import Store
 
 CONTRIBUTIONS_DATASET = "StreetWide contributions"
@@ -119,7 +120,7 @@ class SharedObjects(Objects):
             doc = read(cid)
             self.checked[(cid, fmt)] = doc
         else:
-            self.read(cid)
+            self.read(cid, BY_FORMAT[fmt])
         return doc
 
     def tile_index(self, cid: str) -> dict:

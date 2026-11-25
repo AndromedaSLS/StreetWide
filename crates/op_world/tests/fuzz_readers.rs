@@ -29,6 +29,7 @@ use op_world::contrib::{
 use op_world::gate;
 use op_world::glb::{self, GlbMesh, Material, Node, Primitive, mm_to_f32};
 use op_world::keys::{RegionKey, TileKey};
+use op_world::limits::Document;
 use op_world::merge::{LOG_LOCK, MergeArgs, MergeOutput, WorldLog, baseline, require_base};
 use op_world::rules;
 use op_world::sample::parse_mesh_specs;
@@ -249,17 +250,19 @@ fn mutate_doc(rng: &mut Rng, c: &Corpus) -> Vec<u8> {
     )
 }
 
-/// `from_bytes` must accept exactly the canonical documents without
-/// problems, and `problems()` must cope with any canonical document.
+/// `from_bytes` must accept exactly the canonical documents within the
+/// limit for their kind without problems, and `problems()` must cope with
+/// any canonical document.
 fn consistent<T: Serialize + DeserializeOwned>(
     bytes: &[u8],
+    kind: Document,
     problems: fn(&T) -> Vec<String>,
     accepts: fn(&[u8]) -> bool,
 ) {
     if let Ok(doc) = cjson::from_canonical::<T>(bytes) {
         assert_eq!(
             accepts(bytes),
-            problems(&doc).is_empty(),
+            problems(&doc).is_empty() && kind.fits(bytes.len()),
             "from_bytes and problems() disagree"
         );
     }
@@ -298,22 +301,28 @@ fn check_documents(bytes: &[u8]) {
         let alone = verify_log(&[(id, d.clone())]);
         assert_eq!(alone.is_ok(), d.decision == Decision::Baseline);
     }
-    consistent(bytes, AssetManifest::problems, |b| {
-        AssetManifest::from_bytes(b).is_ok()
-    });
-    consistent(bytes, TileIndex::problems, |b| {
+    consistent(
+        bytes,
+        Document::AssetManifest,
+        AssetManifest::problems,
+        |b| AssetManifest::from_bytes(b).is_ok(),
+    );
+    consistent(bytes, Document::TileIndex, TileIndex::problems, |b| {
         TileIndex::from_bytes(b).is_ok()
     });
-    consistent(bytes, WorldManifest::problems, |b| {
-        WorldManifest::from_bytes(b).is_ok()
-    });
-    consistent(bytes, ChangeSet::problems, |b| {
+    consistent(
+        bytes,
+        Document::WorldManifest,
+        WorldManifest::problems,
+        |b| WorldManifest::from_bytes(b).is_ok(),
+    );
+    consistent(bytes, Document::ChangeSet, ChangeSet::problems, |b| {
         ChangeSet::from_bytes(b).is_ok()
     });
-    consistent(bytes, CheckReport::problems, |b| {
+    consistent(bytes, Document::CheckReport, CheckReport::problems, |b| {
         CheckReport::from_bytes(b).is_ok()
     });
-    consistent(bytes, MergeRecord::problems, |b| {
+    consistent(bytes, Document::MergeRecord, MergeRecord::problems, |b| {
         MergeRecord::from_bytes(b).is_ok()
     });
     // Mesh specs (`fixtures/format/meshes.json`, plain JSON): any mesh the
@@ -2507,6 +2516,345 @@ fn merge_arguments() {
             }
         },
     );
+}
+
+// ------------------------------------------------------- JSON size limits --
+//
+// RFC 0001 section 7: every kind of JSON document has a size limit, checked
+// before it is parsed. Found by the fuzzing round: a crafted 64 MiB
+// document, the largest file a store read takes, made serde_json take about
+// 7 GB.
+
+/// Text number `i` of `n` characters: sorted and unique by its number.
+fn padding(i: usize, n: usize) -> String {
+    format!("{i:07}{}", "x".repeat(n - 7))
+}
+
+/// Lengths of items for `doc` whose bytes are exactly `len` long. `doc`
+/// writes one item per length, and an item's bytes grow by one for each
+/// unit of its length, from `min` to `max`, so only small documents are
+/// written to find them.
+fn lengths_for(
+    len: usize,
+    min: usize,
+    max: usize,
+    doc: &dyn Fn(&[usize]) -> Vec<u8>,
+) -> Vec<usize> {
+    let mid = (min + max) / 2;
+    let one = doc(&[mid]).len();
+    let per_item = doc(&[mid, mid]).len() - one;
+    let count = (len - one) / per_item + 1;
+    let mut lengths = vec![mid; count];
+    let mut left = len - (one + (count - 1) * per_item);
+    for l in &mut lengths {
+        let grow = left.min(max - *l);
+        *l += grow;
+        left -= grow;
+    }
+    assert_eq!(left, 0, "cannot make {len} bytes");
+    lengths
+}
+
+/// The canonical bytes of a document of `kind`, made of items of the given
+/// lengths: valid for every kind but change sets, which list one change
+/// per item and so break the cap of 50 changes.
+fn document_of(kind: Document, lengths: &[usize]) -> Vec<u8> {
+    let texts = || lengths.iter().enumerate().map(|(i, &n)| padding(i, n));
+    let fixture = |path: &str| std::fs::read(fuzzing::repo_root().join(path)).expect(path);
+    let sample = "fixtures/changes/facade-sample";
+    match kind {
+        Document::AssetManifest => {
+            let change =
+                ChangeSet::from_bytes(&fixture(&format!("{sample}/change.json"))).expect("sample");
+            let id = change.changes[0].manifest_id.expect("an add");
+            let bundle = Store::new(fuzzing::repo_root().join(sample));
+            let mut m = AssetManifest::from_bytes(
+                &bundle
+                    .read_object(&id, ObjectKind::Json)
+                    .expect("sample manifest"),
+            )
+            .expect("sample manifest");
+            m.provenance.sources[0].source_ids = texts().collect();
+            cjson::to_canonical(&m)
+        }
+        Document::TileIndex => {
+            let world = Store::new(fuzzing::repo_root().join("fixtures/world"));
+            let (_, w) = world.read_world().expect("fixture world");
+            let mut index = TileIndex::from_bytes(
+                &world
+                    .read_object(&w.tiles[0].tile_id, ObjectKind::Json)
+                    .expect("tile index"),
+            )
+            .expect("fixture tile index");
+            let first = index.assets[0].clone();
+            index.assets = texts()
+                .map(|t| op_world::TileAsset {
+                    layer: op_world::Layer::Facade,
+                    feature_id: format!("t:{t}"),
+                    ..first.clone()
+                })
+                .collect();
+            cjson::to_canonical(&index)
+        }
+        Document::WorldManifest => {
+            let (_, mut w) = Store::new(fuzzing::repo_root().join("fixtures/world"))
+                .read_world()
+                .expect("fixture world");
+            w.attribution = texts().collect();
+            cjson::to_canonical(&w)
+        }
+        Document::ChangeSet => {
+            let mut change =
+                ChangeSet::from_bytes(&fixture(&format!("{sample}/change.json"))).expect("sample");
+            let first = change.changes[0].clone();
+            change.changes = texts()
+                .map(|t| Change {
+                    feature_id: format!("t:{t}"),
+                    ..first.clone()
+                })
+                .collect();
+            cjson::to_canonical(&change)
+        }
+        Document::CheckReport => {
+            let mut report = CheckReport::from_bytes(&fixture(&format!("{sample}/report.json")))
+                .expect("sample");
+            report.checks[0].details = texts().collect();
+            cjson::to_canonical(&report)
+        }
+        Document::MergeRecord => {
+            let (_, mut record) = sample_log().swap_remove(0);
+            record.reviews = texts()
+                .enumerate()
+                .map(|(i, notes)| Review {
+                    reviewer: format!("github:r{i:07}"),
+                    verdict: Verdict::Better,
+                    notes,
+                })
+                .collect();
+            cjson::to_canonical(&record)
+        }
+    }
+    .expect("canonical")
+}
+
+/// The longest item of `document_of(kind, ...)`, so that every item stays
+/// valid: feature ids and handles are at most 256 bytes, texts at most
+/// 4,096 characters.
+fn longest_item(kind: Document) -> usize {
+    match kind {
+        Document::TileIndex | Document::ChangeSet => 254,
+        _ => rules::MAX_TEXT_CHARS,
+    }
+}
+
+/// `bytes` parsed as canonical JSON of `kind`'s type, whatever their size,
+/// and written again with `to_bytes`.
+fn write_as(kind: Document, bytes: &[u8]) -> op_world::Result<Vec<u8>> {
+    match kind {
+        Document::AssetManifest => cjson::from_canonical::<AssetManifest>(bytes)?.to_bytes(),
+        Document::TileIndex => cjson::from_canonical::<TileIndex>(bytes)?.to_bytes(),
+        Document::WorldManifest => cjson::from_canonical::<WorldManifest>(bytes)?.to_bytes(),
+        Document::ChangeSet => cjson::from_canonical::<ChangeSet>(bytes)?.to_bytes(),
+        Document::CheckReport => cjson::from_canonical::<CheckReport>(bytes)?.to_bytes(),
+        Document::MergeRecord => cjson::from_canonical::<MergeRecord>(bytes)?.to_bytes(),
+    }
+}
+
+/// `from_bytes` of `kind` on `bytes`, without its value.
+fn read_as(kind: Document, bytes: &[u8]) -> op_world::Result<()> {
+    match kind {
+        Document::AssetManifest => AssetManifest::from_bytes(bytes).map(drop),
+        Document::TileIndex => TileIndex::from_bytes(bytes).map(drop),
+        Document::WorldManifest => WorldManifest::from_bytes(bytes).map(drop),
+        Document::ChangeSet => ChangeSet::from_bytes(bytes).map(drop),
+        Document::CheckReport => CheckReport::from_bytes(bytes).map(drop),
+        Document::MergeRecord => MergeRecord::from_bytes(bytes).map(drop),
+    }
+}
+
+/// A valid document at the limit for its kind reads and writes, and one
+/// byte more is refused before it is parsed, with a message that names the
+/// kind and the limit; `to_bytes` refuses to write it. A change set cannot
+/// reach its limit (50 changes of a few hundred bytes), so one at the limit
+/// is refused for its rules instead, not for its size. World manifests,
+/// whose limit is that of every file (64 MiB), are only checked over it,
+/// below: building and reading 64 MiB here would take seconds.
+#[test]
+fn documents_read_up_to_the_limit_for_their_kind() {
+    for kind in Document::ALL {
+        if kind == Document::WorldManifest {
+            continue;
+        }
+        let limit = kind.max_bytes() as usize;
+        let doc = |lengths: &[usize]| document_of(kind, lengths);
+        let mut lengths = lengths_for(limit, 8, longest_item(kind), &doc);
+        let at = doc(&lengths);
+        assert_eq!(at.len(), limit, "{kind:?}");
+        match kind {
+            Document::ChangeSet => assert_eq!(
+                read_as(kind, &at).unwrap_err().to_string(),
+                "invalid: a change set has 1..=50 changes"
+            ),
+            _ => {
+                read_as(kind, &at).unwrap_or_else(|e| panic!("{kind:?} at its limit: {e}"));
+                assert!(write_as(kind, &at).expect("writes") == at);
+            }
+        }
+        let k = lengths
+            .iter()
+            .position(|&l| l < longest_item(kind))
+            .expect("an item that can grow");
+        lengths[k] += 1;
+        let over = doc(&lengths);
+        assert_eq!(over.len(), limit + 1);
+        assert_eq!(
+            read_as(kind, &over).unwrap_err().to_string(),
+            format!("invalid: {}", kind.too_large())
+        );
+        if kind != Document::ChangeSet {
+            let refused = write_as(kind, &over).unwrap_err().to_string();
+            assert!(refused.ends_with(&kind.too_large()), "{refused}");
+        }
+    }
+}
+
+/// Each kind's worst case for the parser, one byte over its limit: one-key
+/// objects, which serde_json parses at about 83 bytes of memory per byte
+/// (1.4 GB for a check report, 5.6 GB for a world manifest). Each is
+/// refused before it is parsed, with the memory of the input alone. The
+/// input's first byte says its kind.
+#[test]
+fn regression_documents_over_their_limit_are_refused_unparsed() {
+    let next = AtomicU64::new(0);
+    fuzzing::run(
+        Target::new("documents-over-their-limit", 1)
+            .exactly(Document::ALL.len() as u64)
+            .memory(1, 1 << 20),
+        |_| {
+            let k = next.fetch_add(1, Ordering::Relaxed) as usize % Document::ALL.len();
+            let len = Document::ALL[k].max_bytes() as usize + 1;
+            let mut input = vec![k as u8, b'['];
+            while input.len() + 8 < len + 1 {
+                input.extend_from_slice(b"{\"a\":0},");
+            }
+            input.resize(len, b' ');
+            input.push(b']');
+            input
+        },
+        |input| {
+            let kind = Document::ALL[usize::from(input[0])];
+            let doc = &input[1..];
+            assert_eq!(doc.len() as u64, kind.max_bytes() + 1);
+            assert_eq!(
+                read_as(kind, doc).unwrap_err().to_string(),
+                format!("invalid: {}", kind.too_large())
+            );
+        },
+    );
+}
+
+/// A file one byte over the limit for its kind is refused before it is
+/// read, wherever a document of a known kind is read: files, store
+/// objects, validation and the gate, which reports a change set or a
+/// manifest over its limit in G1. The files are sparse where the
+/// filesystem allows.
+#[test]
+fn regression_document_files_over_their_limit_are_refused_unread() {
+    use op_world::store::read_document;
+    let dir = common::temp_dir("regression-document-files");
+    let long = |path: &Path, kind: Document| {
+        std::fs::create_dir_all(path.parent().expect("parent")).expect("mkdir");
+        std::fs::File::create(path)
+            .and_then(|f| f.set_len(kind.max_bytes() + 1))
+            .expect("a long file");
+    };
+    for kind in Document::ALL {
+        let path = dir.join(format!("{kind:?}.json"));
+        long(&path, kind);
+        let err = read_document(&path, kind).expect_err("too large");
+        assert_eq!(err.kind(), std::io::ErrorKind::FileTooLarge);
+        assert_eq!(err.to_string(), kind.too_large());
+        std::fs::remove_file(&path).expect("remove");
+    }
+
+    // A bundle whose manifest is over its limit.
+    let sample = fuzzing::repo_root().join("fixtures/changes/facade-sample");
+    let world = fuzzing::repo_root().join("fixtures/world");
+    let change = ChangeSet::from_bytes(&std::fs::read(sample.join("change.json")).expect("read"))
+        .expect("sample change set");
+    let c = &change.changes[0];
+    let manifest_id = c.manifest_id.expect("an add");
+    let bundle = dir.join("bundle");
+    std::fs::create_dir_all(&bundle).expect("bundle");
+    std::fs::copy(sample.join("change.json"), bundle.join("change.json")).expect("copy");
+    long(
+        &Store::new(&bundle).object_path(&manifest_id, ObjectKind::Json),
+        Document::AssetManifest,
+    );
+    let manifest_error = format!(
+        "I/O error: object {manifest_id}: larger than 1048576 bytes (1 MiB), the limit for an asset manifest"
+    );
+    assert_eq!(
+        Store::new(&bundle)
+            .read_document(&manifest_id, Document::AssetManifest)
+            .unwrap_err()
+            .to_string(),
+        manifest_error
+    );
+    let report = gate::run(&world, &bundle, &dir.join("candidate-1")).expect("a report");
+    assert_eq!(report.gate_version, "0.1.3");
+    assert_eq!(report.checks[0].outcome, op_world::contrib::Outcome::Fail);
+    assert_eq!(
+        report.checks[0].details[0],
+        format!(
+            "{} {} {}: {manifest_error}",
+            c.tile,
+            c.layer.as_str(),
+            c.feature_id
+        )
+    );
+    assert_eq!(report.candidate_world_id, None);
+
+    // A change set over its limit: the gate reports it in G1.
+    long(&bundle.join("change.json"), Document::ChangeSet);
+    let report = gate::run(&world, &bundle, &dir.join("candidate-2")).expect("a report");
+    assert_eq!(report.checks[0].outcome, op_world::contrib::Outcome::Fail);
+    assert_eq!(
+        report.checks[0].details,
+        ["change.json: invalid: larger than 8388608 bytes (8 MiB), the limit for a change set"]
+    );
+    assert!(
+        report.checks[1..]
+            .iter()
+            .all(|c| c.outcome == op_world::contrib::Outcome::NotRun)
+    );
+    assert_eq!(
+        CheckReport::from_bytes(&report.to_bytes().expect("valid")).expect("reads"),
+        report
+    );
+    assert_eq!(
+        require_base(&world, &bundle).unwrap_err().to_string(),
+        "I/O error: change.json: larger than 8388608 bytes (8 MiB), the limit for a change set"
+    );
+
+    // A world whose tile index is over its limit does not validate.
+    let store = dir.join("store");
+    std::fs::create_dir_all(&store).expect("store");
+    std::fs::copy(world.join("world.json"), store.join("world.json")).expect("copy");
+    let (_, w) = Store::new(&store).read_world().expect("fixture world");
+    long(
+        &Store::new(&store).object_path(&w.tiles[0].tile_id, ObjectKind::Json),
+        Document::TileIndex,
+    );
+    let report = validate_store(&Store::new(&store));
+    assert_eq!(
+        report.errors[0],
+        format!(
+            "tile {}: I/O error: object {}: larger than 16777216 bytes (16 MiB), the limit for a tile index",
+            w.tiles[0].tile, w.tiles[0].tile_id
+        )
+    );
+    std::fs::remove_dir_all(&dir).ok();
 }
 
 // ------------------------------------------------------------- regressions --

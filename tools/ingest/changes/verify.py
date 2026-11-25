@@ -97,6 +97,7 @@ from tools.ingest.changes.stores import SharedObjects
 from tools.worldfmt import cjson, schemas
 from tools.worldfmt.changes import INGEST_AUTHOR, ChangeError, Objects, apply
 from tools.worldfmt.ids import content_id
+from tools.worldfmt.limits import CHECK_REPORT
 from tools.worldfmt.store import Store
 
 DEFAULT_OP_REPLAY = "cargo run -q -p op_replay --locked --"
@@ -365,8 +366,12 @@ def write_replacing(path: Path, data: bytes) -> None:
 
 
 def read_gate_report(data: bytes, name: str) -> dict:
-    """A `streetwide.check` report: canonical JSON that passes its schema.
-    Raises VerifyError naming the report as `name`."""
+    """A `streetwide.check` report: at most the limit for check reports
+    (16 MiB, `limits.CHECK_REPORT`), checked before parsing, canonical JSON
+    that passes its schema. Raises VerifyError naming the report as
+    `name`."""
+    if not CHECK_REPORT.fits(len(data)):
+        raise VerifyError(f"{name}: the gate's report is {CHECK_REPORT.too_large()}")
     try:
         report = cjson.loads(data)
     except cjson.CanonicalError as e:

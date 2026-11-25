@@ -5,6 +5,7 @@
 //! - [`keys`]: Web Mercator tile (z17) and region (z12) keys;
 //! - [`manifest`], [`tile`], [`world`]: asset manifests, tile indexes and
 //!   world manifests, mirroring the JSON Schemas in `schemas/`;
+//! - [`limits`]: the size limit of each kind of JSON document;
 //! - [`glb`]: the StreetWide glb profile (reference writer, strict reader);
 //! - [`store`]: the content-addressed world directory;
 //! - [`validate`]: whole-world validation;
@@ -20,6 +21,7 @@ pub mod gate;
 pub mod glb;
 pub mod id;
 pub mod keys;
+pub mod limits;
 pub mod manifest;
 pub mod merge;
 pub mod rules;

@@ -28,8 +28,11 @@
 //!
 //! Bundles, previous records and world logs may come from elsewhere, so
 //! every file is read with [`read_file`]: a regular file of at most
-//! [`MAX_FILE_BYTES`], never a link, a FIFO or a device. A world log holds
-//! no links at all (see [`WorldLog`]).
+//! [`MAX_FILE_BYTES`], never a link, a FIFO or a device. A change set, an
+//! asset manifest, a tile index or a merge record is read with
+//! [`read_document`], at most the limit for its kind (RFC 0001 section 7,
+//! [`crate::limits`]), so a longer one is refused before it is read. A
+//! world log holds no links at all (see [`WorldLog`]).
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::fs;
@@ -42,8 +45,9 @@ use crate::contrib::{
 };
 use crate::gate;
 use crate::id::ContentId;
+use crate::limits::Document;
 use crate::manifest::AssetManifest;
-use crate::store::{MAX_FILE_BYTES, ObjectKind, Store, read_file};
+use crate::store::{MAX_FILE_BYTES, ObjectKind, Store, read_document, read_file};
 use crate::{Error, Result};
 
 /// The lock file a merge holds in the world store's directory.
@@ -305,7 +309,7 @@ fn merge_locked(
         )));
     }
 
-    let change_bytes = read_file(&bundle_dir.join("change.json"), MAX_FILE_BYTES)
+    let change_bytes = read_document(&bundle_dir.join("change.json"), Document::ChangeSet)
         .map_err(|e| Error::Io(format!("change.json: {e}")))?;
     if ContentId::of(&change_bytes) != report.change_id {
         return Err(Error::Invalid(format!(
@@ -343,7 +347,7 @@ fn merge_locked(
         let Some(manifest_id) = c.manifest_id else {
             continue;
         };
-        let bytes = bundle.read_object(&manifest_id, ObjectKind::Json)?;
+        let bytes = bundle.read_document(&manifest_id, Document::AssetManifest)?;
         let manifest = AssetManifest::from_bytes(&bytes)?;
         world.write_object(
             &bundle.read_object(&manifest.content_id, ObjectKind::Glb)?,
@@ -354,7 +358,7 @@ fn merge_locked(
     for t in &candidate_world.tiles {
         if !world.has_object(&t.tile_id, ObjectKind::Json) {
             world.write_object(
-                &candidate.read_object(&t.tile_id, ObjectKind::Json)?,
+                &candidate.read_document(&t.tile_id, Document::TileIndex)?,
                 ObjectKind::Json,
             )?;
         }
@@ -389,7 +393,7 @@ fn failing(report: &CheckReport) -> String {
 /// mandatory for refreshes is amendment A7, which is not adopted.
 pub fn require_base(world_dir: &Path, bundle_dir: &Path) -> Result<()> {
     let (world_id, _) = Store::new(world_dir).read_world()?;
-    let bytes = read_file(&bundle_dir.join("change.json"), MAX_FILE_BYTES)
+    let bytes = read_document(&bundle_dir.join("change.json"), Document::ChangeSet)
         .map_err(|e| Error::Io(format!("change.json: {e}")))?;
     let change = ChangeSet::from_bytes(&bytes)?;
     if change.base_world_id != world_id {
@@ -459,12 +463,12 @@ fn check_dirs(dir: &Path, parts: &[&str]) -> io::Result<()> {
     Ok(())
 }
 
-/// The bytes of the file `parts` in the log directory `dir`: a regular file
-/// of at most `limit` bytes, under directories that are not links (see
-/// [`WorldLog`]).
-fn read_in_log(dir: &Path, parts: &[&str], limit: u64) -> io::Result<Vec<u8>> {
+/// The bytes of the file `parts` in the log directory `dir`, a document of
+/// kind `kind`: a regular file of at most the limit for its kind, under
+/// directories that are not links (see [`WorldLog`]).
+fn read_in_log(dir: &Path, parts: &[&str], kind: Document) -> io::Result<Vec<u8>> {
     check_dirs(dir, parts)?;
-    read_file(&log_path(dir, parts).0, limit)
+    read_document(&log_path(dir, parts).0, kind)
 }
 
 /// The temporary path [`write_atomically`] writes `path` through.
@@ -549,7 +553,8 @@ fn write_content(dir: &Path, parts: &[&str], bytes: &[u8]) -> Result<String> {
 /// regular file that hashes to it.
 fn keeps_world(dir: &Path, id: ContentId) -> bool {
     let name = format!("{}.json", id.hex());
-    read_in_log(dir, &["worlds", &name], MAX_FILE_BYTES).is_ok_and(|b| ContentId::of(&b) == id)
+    read_in_log(dir, &["worlds", &name], Document::WorldManifest)
+        .is_ok_and(|b| ContentId::of(&b) == id)
 }
 
 /// How to put world `id` back into the store: from the log in `dir` when
@@ -584,7 +589,9 @@ fn put_back(dir: &Path, id: ContentId) -> String {
 ///
 /// A log may come from elsewhere (git keeps links), so inside its directory
 /// every directory must be a directory and every file a regular file of at
-/// most [`MAX_FILE_BYTES`]. A link, a FIFO, a device or a directory where a
+/// most the limit for its kind of document (RFC 0001 section 7): 1 MiB for
+/// a record, 8 MiB for a change set and 64 MiB, the limit of every file,
+/// for a world manifest. A link, a FIFO, a device or a directory where a
 /// file should be is refused, and so is a link where a directory should be:
 /// none is ever opened or followed, for reading or for writing. The log's
 /// own directory, the `--log` argument, may be a link.
@@ -649,7 +656,7 @@ impl WorldLog {
                     "the world log's {RECORDS_DIR}/{name} is not a regular file; records are regular files, not links, directories or pipes"
                 )));
             }
-            let bytes = read_file(&records_dir.join(name), MAX_FILE_BYTES)
+            let bytes = read_document(&records_dir.join(name), Document::MergeRecord)
                 .map_err(|e| Error::Io(format!("{RECORDS_DIR}/{name}: {e}")))?;
             let record = MergeRecord::from_bytes(&bytes)
                 .map_err(|e| Error::Invalid(format!("{RECORDS_DIR}/{name}: {e}")))?;
@@ -674,7 +681,7 @@ impl WorldLog {
                     record_name(n)
                 ))
             };
-            let bytes = match read_in_log(dir, &parts, MAX_FILE_BYTES) {
+            let bytes = match read_in_log(dir, &parts, Document::ChangeSet) {
                 Ok(bytes) if ContentId::of(&bytes) == change_id => bytes,
                 Ok(_) => return Err(missing()),
                 Err(e) if e.kind() == io::ErrorKind::NotFound => return Err(missing()),
@@ -1094,7 +1101,7 @@ impl MergeArgs {
                 report,
             } => (
                 Target::Files { record, report },
-                read_file(previous, MAX_FILE_BYTES)
+                read_document(previous, Document::MergeRecord)
                     .map_err(|e| Error::Io(format!("--previous {}: {e}", previous.display())))?,
             ),
         };

@@ -4,6 +4,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::id::ContentId;
 use crate::keys::{RegionKey, TileKey};
+use crate::limits::Document;
 use crate::manifest::BoundsMm;
 use crate::rules::{is_slug, is_sorted_unique, is_text};
 use crate::{CONTRACT_VERSION, Error, Result, cjson};
@@ -65,15 +66,29 @@ pub const MAX_LON_E9: i64 = 180_000_000_000;
 impl WorldManifest {
     pub const FORMAT: &'static str = "streetwide.world";
 
+    /// Parses and checks a canonical world manifest. World manifests have
+    /// no size limit of their own: bytes over the limit of every file
+    /// ([`Document::WorldManifest`]) are refused before they are parsed.
     pub fn from_bytes(bytes: &[u8]) -> Result<Self> {
+        Document::WorldManifest.check(bytes)?;
         let world: Self = cjson::from_canonical(bytes)?;
         world.ensure_valid()?;
         Ok(world)
     }
 
+    /// Canonical bytes; fails if the manifest breaks a rule or its bytes
+    /// would be over the limit of every file.
     pub fn to_bytes(&self) -> Result<Vec<u8>> {
         self.ensure_valid()?;
-        cjson::to_canonical(self)
+        let bytes = cjson::to_canonical(self)?;
+        if !Document::WorldManifest.fits(bytes.len()) {
+            return Err(Error::Invalid(format!(
+                "world manifest {:?}: {}",
+                self.name,
+                Document::WorldManifest.too_large()
+            )));
+        }
+        Ok(bytes)
     }
 
     /// The world id: the hash of the canonical world manifest.
