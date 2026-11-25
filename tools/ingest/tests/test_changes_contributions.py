@@ -135,7 +135,9 @@ def test_shell_under_facade_held(tmp_path: Path) -> None:
             "content_key": None, "lifts": ["dependent-contribution"], "reason": "I want it."}]})
 
 
-def test_takedown_never_readded_or_replaced(tmp_path: Path) -> None:
+def test_takedown_removal_frozen_and_revert_liftable(tmp_path: Path) -> None:
+    """ADR-0020, Q18 (b): a removal by a takedown stays frozen; a revert may
+    be lifted by an accept with a reason, into a decision set of its own."""
     sc = Scenario.start(tmp_path, base())
     # A takedown removes shell 1.
     sc.log.merge(sc.current, [entry_remove(shell(1))], author="github:maintainer", decision="takedown",
@@ -145,16 +147,32 @@ def test_takedown_never_readded_or_replaced(tmp_path: Path) -> None:
     reverted = shell(2).but(parent=c2.manifest_id)
     sc.log.merge(sc.current, [entry_replace(reverted)], [reverted], author="github:maintainer",
                  decision="takedown", reason="Revert (test).")
-    plan = sc.plan(base().put(changed(2)))
+    new = base().put(changed(2))
+    plan = sc.plan(new)
     found = held(plan)
     assert found[shell(1).key] == ["takedown"], "a removal-only takedown keeps the key out"
-    assert found[shell(2).key][0] == "takedown", "a reverted key is frozen"
-    assert "a takedown in log/00000001.json" in plan.report["conflicts"][0]["reasons"][0]["details"]
+    assert found[shell(2).key][0] == "takedown-revert", "a reverted key waits for a maintainer"
+    details = {c["feature_id"]: c["reasons"][0]["details"] for c in plan.report["conflicts"]}
+    assert "a takedown in log/00000001.json" in details[shell(1).feature_id]
+    assert details[shell(1).feature_id].endswith("removed it; a refresh never adds it back")
+    assert "reverted it" in details[shell(2).feature_id]
     assert plan.sets == []
+    # A removal cannot be lifted.
     with pytest.raises(PlanError, match="cannot lift takedown for shell"):
         sc.plan(base(), overrides={"accept": [{
             "layer": "shell", "feature_id": shell(1).feature_id, "current_manifest_id": None,
             "content_key": None, "lifts": ["takedown"], "reason": "Bring it back."}]})
+    # A revert can, and the change goes into a decision set of its own.
+    conflict = next(c for c in plan.report["conflicts"] if c["feature_id"] == shell(2).feature_id)
+    lifts = [r["code"] for r in conflict["reasons"]]
+    plan = sc.plan(new, overrides={"accept": [{
+        "layer": "shell", "feature_id": shell(2).feature_id, "current_manifest_id": reverted.manifest_id,
+        "content_key": conflict["new_content_key"], "lifts": lifts,
+        "reason": "Upstream fixed the building the takedown was about."}]})
+    assert [(s.kind, [e["feature_id"] for e in s.entries]) for s in plan.sets] == [
+        ("decision", [shell(2).feature_id])]
+    assert "that a takedown reverted (maintainer decision)" in plan.sets[0].change["title"]
+    assert plan.report["accepted"][0]["lifted"][0] == "takedown-revert"
 
 
 def test_contribution_removal_not_readded(tmp_path: Path) -> None:

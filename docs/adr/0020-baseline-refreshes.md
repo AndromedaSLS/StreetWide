@@ -267,7 +267,8 @@ it back.
 
 | Code | Kind | Holds | Lifted by |
 |---|---|---|---|
-| `takedown` | conflict | any change to a key whose last record is a takedown | nothing (Q18) |
+| `takedown` | conflict | any change to a key whose last record is a takedown that removed it | nothing (Q18) |
+| `takedown-revert` | conflict | any change to a key whose last record is a takedown that reverted it | an accept, in a decision set (Q18 (b)) |
 | `contribution` | conflict | a change to a contribution whose upstream is `changed`, `new`, `gone` or `unknown` (Q10) | an accept, in a decision set |
 | `origin-unclear` | conflict | a change to an asset whose manifest and log disagree about who made it (Q2) | an accept, in a decision set |
 | `removed-by-contribution` | conflict | an add of a key that a contribution removed (Q5) | an accept, in a decision set |
@@ -561,8 +562,9 @@ bump (section 7).
 *Accepted on 2026-11-25 by @victorpicaud:* the recommended option in
 each of sections 1 to 9 above. For Q18 that is (b): a removal by a
 takedown stays frozen, and a revert may be lifted by an accept with a
-reason, in a decision set of its own. Until the tool implements (b), it
-applies the stricter (a), and nothing lifts `takedown`. Not decided by
+reason, in a decision set of its own. The tool implements (b) since
+2026-11-25: the hold code `takedown-revert` marks a revert, and an
+accept can lift it. Not decided by
 this ADR: the ingest options of section 10, the amendments A1 to A8,
 and the questions left open below.
 

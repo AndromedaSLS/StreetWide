@@ -286,7 +286,7 @@
     "op": { "enum": ["add", "replace", "remove", "move"] },
     "code": {
       "enum": [
-        "takedown", "contribution", "origin-unclear", "removed-by-contribution", "dependent-contribution",
+        "takedown", "takedown-revert", "contribution", "origin-unclear", "removed-by-contribution", "dependent-contribution",
         "possible-duplicate", "removed-bounds-unknown", "tile-not-in-world", "terrain-edges", "height-coupled",
         "per-tile-removal", "mass-removal", "unexplained-change", "manual-hold", "unit-held", "unit-too-large",
         "would-empty-tile", "spawn"

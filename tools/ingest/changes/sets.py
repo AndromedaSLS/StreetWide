@@ -283,7 +283,9 @@ def _decision_title(ctx: Context, s: PlannedSet, accepted: dict[int, dict]) -> s
     lifted = accepted[id(first)]["lifted"] if id(first) in accepted else []
     by = joined(ctx.authors.get(first.key) or ["an unknown author"])
     layer, fid = first.key
-    if "removed-by-contribution" in lifted:
+    if "takedown-revert" in lifted:
+        action = f"{first.op} the {layer} {fid} that a takedown reverted"
+    elif "removed-by-contribution" in lifted:
         action = f"add back the {layer} {fid} that {ctx.removers.get(first.key) or 'a contribution'} removed"
     elif "contribution" in lifted:
         action = f"{first.op} the contributed {layer} {fid} by {by}"

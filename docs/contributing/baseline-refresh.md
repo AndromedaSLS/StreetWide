@@ -318,7 +318,8 @@ same bytes, so planning again is cheap and safe. Plan again also when:
 
 | Code | It means | What to do |
 |---|---|---|
-| `takedown` | The key's last change was a takedown. | Nothing, in a refresh. Reversing a takedown is a maintainer's own change set. Until Q18 is decided, nothing lifts this code. |
+| `takedown` | The key's last change was a takedown that removed it. | Nothing, in a refresh. Adding it back is a maintainer's own change set (Q18). |
+| `takedown-revert` | The key's last change was a takedown that reverted it to an earlier version. | If upstream's version is right again, accept it with a reason: the change goes into a decision set of its own, reviewed on its own (Q18 (b)). |
 | `contribution` | A contribution holds the key, and upstream changed, gained or lost the feature since the version the contribution replaced. | Review it. The contribution stays either way. To record that you reviewed it, hold the key with its `content_key`: the entry then also shows `manual-hold`, until upstream changes again. To take the new data, accept it with a reason: it goes into a decision set. |
 | `origin-unclear` | The manifest and the world log disagree about who made the asset. | Check the log. Accept the change with a reason only once you know: it goes into a decision set. |
 | `removed-by-contribution` | A contribution removed this key, and upstream still has the feature. | Usually, leave it out. If the removal was wrong, accept the add with a reason: it goes into a decision set. |
@@ -376,9 +377,9 @@ that shape a refresh:
 - **Draped assets over contributed terrain** (Q17) are held while that
   terrain is in the world, whether or not upstream changes it and even
   when its own change is accepted, and an accept can lift that.
-- **Takedowns** (Q18): a takedown freezes its key for good. This is
-  stricter than the recommended option, which would let an accept lift a
-  revert.
+- **Takedowns** (Q18, decided (b)): a removal by a takedown freezes its
+  key for good; a revert can be lifted by an accept with a reason, into
+  a decision set of its own.
 - **A refresh in several sets** (Q19): each set is judged on its own,
   and `verify` compares the whole refresh for review.
 - **Who approves** (Q22): the maintainer who planned it, while there is
