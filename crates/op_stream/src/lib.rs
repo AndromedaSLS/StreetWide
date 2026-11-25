@@ -27,6 +27,7 @@ use op_kernel::{
     AssetKey, BoundsMm, ColliderAsset, ColliderMesh, Fetch, GeometryError, GeometrySource,
 };
 use op_world::glb::{self, GlbMesh, f32_to_mm};
+use op_world::limits::Document;
 use op_world::{
     Collider, ContentId, ObjectKind, Store, TileAsset, TileIndex, TileKey, WorldManifest,
 };
@@ -88,7 +89,8 @@ impl WorldIndex {
         let (world_id, world) = store.read_world()?;
         let mut tiles = Vec::with_capacity(world.tiles.len());
         for wt in &world.tiles {
-            let index = TileIndex::from_bytes(&store.read_object(&wt.tile_id, ObjectKind::Json)?)?;
+            let index =
+                TileIndex::from_bytes(&store.read_document(&wt.tile_id, Document::TileIndex)?)?;
             tiles.push(Tile {
                 key: wt.tile,
                 origin_mm: wt.origin_mm,

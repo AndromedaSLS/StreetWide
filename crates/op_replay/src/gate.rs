@@ -24,7 +24,8 @@ use op_sim::probe::ProbeWorld;
 use op_stream::{StoreSource, WorldIndex, collider_mesh};
 use op_world::contrib::{ChangeSet, CheckReport, CheckResult, Outcome};
 use op_world::glb::f32_to_mm;
-use op_world::store::{MAX_FILE_BYTES, read_file};
+use op_world::limits::Document;
+use op_world::store::read_document;
 use op_world::{BoundsMm, Collider, ContentId, Layer, Store, TileKey};
 
 use crate::{Error, Replay, play};
@@ -75,7 +76,7 @@ pub fn check_change(
     let base = WorldIndex::from_store(base_store.clone()).map_err(err)?;
     let candidate = WorldIndex::from_store(candidate_store.clone()).map_err(err)?;
     let change = ChangeSet::from_bytes(
-        &read_file(&bundle_dir.join("change.json"), MAX_FILE_BYTES).map_err(err)?,
+        &read_document(&bundle_dir.join("change.json"), Document::ChangeSet).map_err(err)?,
     )
     .map_err(err)?;
     let Some(region) = changed_region(&base, &candidate, &change) else {

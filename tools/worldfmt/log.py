@@ -35,11 +35,13 @@ itself (not a link, a FIFO or a device) of at most MAX_FILE_BYTES. A change
 set that several records name is read and checked once, and so is each
 world or report read on request.
 
-Merge records may list any number of reviews, and each is checked against
-the schema, which takes about 0.15 ms per review: a record of a few MB takes
-seconds, one of MAX_FILE_BYTES minutes. That time grows with the input, so
-it is no hang, but RFC 0001 has yet to set a size limit for JSON documents
-(ADR-0020 lists the question).
+Each document must also be within the limit for its kind (`limits`, RFC
+0001 section 7), checked before it is parsed: 1 MiB for a merge record,
+8 MiB for a change set, 16 MiB for a check report and 64 MiB, the limit
+of every file, for a world manifest. Merge records may list any number of
+reviews, and each is checked against the schema, which takes about
+0.15 ms per review, so the limit also bounds the time a record takes:
+about 2 s for 1 MiB of short reviews.
 
 Typical use:
 
@@ -62,6 +64,7 @@ from typing import Any
 from tools.worldfmt import changes, cjson, schemas
 from tools.worldfmt.changes import is_feature_id, is_sorted_unique, is_text, rust_debug
 from tools.worldfmt.ids import content_id, hex_of
+from tools.worldfmt.limits import BY_FORMAT, CHANGE_SET, MERGE_RECORD
 from tools.worldfmt.store import MAX_FILE_BYTES, is_link, read_file
 
 FORMAT = "streetwide.merge"
@@ -161,7 +164,11 @@ def _record_problems(record: Any) -> list[str]:
 
 def parse_record(data: bytes) -> dict:
     """Reads the bytes of a merge record as `MergeRecord::from_bytes` does:
-    canonical JSON, then `record_problems`. Raises LogError."""
+    at most the limit for merge records (1 MiB, `limits.MERGE_RECORD`),
+    checked before parsing, then canonical JSON, then `record_problems`.
+    Raises LogError."""
+    if not MERGE_RECORD.fits(len(data)):
+        raise LogError(MERGE_RECORD.too_large())
     try:
         record = cjson.loads(data)  # nested at most cjson.MAX_DEPTH levels deep
     except cjson.CanonicalError as e:
@@ -348,6 +355,9 @@ class WorldLog:
         data = _read(self.root, rel)
         if data is None:
             return None
+        kind = BY_FORMAT[fmt]
+        if not kind.fits(len(data)):
+            raise LogError(f"{rel}: {kind.too_large()}")
         if content_id(data) != cid:
             raise LogError(f"{rel} does not hash to {cid}")
         try:
@@ -475,6 +485,8 @@ def read_log(root: Path | str) -> WorldLog:
 def _read_change(root: Path, change_id: str, record_file: str) -> dict:
     rel = change_path(change_id)
     data = _read(root, rel)
+    if data is not None and not CHANGE_SET.fits(len(data)):
+        raise LogError(f"{rel}: {CHANGE_SET.too_large()}")
     if data is None or content_id(data) != change_id:
         raise LogError(
             f"the world log names change set {change_id} ({record_file}) "

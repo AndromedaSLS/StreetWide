@@ -499,7 +499,7 @@ class Fake:
                                            for w in what]})
             else:
                 checks.append({"id": gid, "name": name, "outcome": outcomes[gid], "details": []})
-        report = {"format": "streetwide.check", "contract_version": "0.1.0", "gate_version": "0.1.2",
+        report = {"format": "streetwide.check", "contract_version": "0.1.0", "gate_version": "0.1.3",
                   "change_id": content_id(change_bytes), "world_id": wid,
                   "candidate_world_id": candidate.world_id, "passed": True, "checks": checks}
         if self.edit is not None:

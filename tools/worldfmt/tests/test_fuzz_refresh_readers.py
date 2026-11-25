@@ -1,6 +1,7 @@
 """Fuzzing the readers of the baseline refresh (ADR-0020; roadmap M1): the
 strict glb reader, change sets, the world log, JSON objects read from a
-directory, and `apply` on crafted worlds and change sets. Each must return
+directory, and `apply` on crafted worlds and change sets; and the size
+limit of each kind of JSON document (RFC 0001 section 7). Each must return
 a value or raise its documented error (GlbError, ChangeError, LogError):
 never another exception, never a hang, never memory out of proportion to
 its input. See `fuzzing.py` for the knobs; the regression tests at the end
@@ -10,7 +11,9 @@ from __future__ import annotations
 
 import copy
 import json
+import math
 import os
+import re
 import shutil
 import stat
 import struct
@@ -19,11 +22,11 @@ from typing import Any
 
 import pytest
 
-from tools.worldfmt import changes, cjson, glb, log, schemas
+from tools.worldfmt import changes, cjson, glb, limits, log, schemas
 from tools.worldfmt.changes import ChangeError, Objects
 from tools.worldfmt.ids import content_id
 from tools.worldfmt.log import LogError
-from tools.worldfmt.store import Store, is_link
+from tools.worldfmt.store import MAX_FILE_BYTES, Store, is_link
 from tools.worldfmt.tests.fuzzing import (
     INTERESTING_U32,
     MEMORY,
@@ -1450,3 +1453,244 @@ def test_the_log_follows_no_link_to_a_directory(log_template: Path, tmp_path: Pa
     clear(root / rel)
     os.replace(tmp_path / "copy", root / rel)
     assert len(log.read_log(root).records) == len(world_log.records)
+
+
+# ------------------------------------------------------- JSON size limits --
+#
+# RFC 0001 section 7: every kind of JSON document has a size limit, checked
+# before it is parsed, in op_world and here alike. Found by the fuzzing
+# round: a crafted 64 MiB document, the largest file a store read takes,
+# made serde_json take about 7 GB.
+
+
+def test_the_limits_are_op_worlds() -> None:
+    rust = (REPO / "crates" / "op_world" / "src" / "limits.rs").read_text(encoding="utf-8")
+    names = {"ASSET_MANIFEST": limits.ASSET_MANIFEST, "MERGE_RECORD": limits.MERGE_RECORD,
+             "CHANGE_SET": limits.CHANGE_SET, "CHECK_REPORT": limits.CHECK_REPORT,
+             "TILE_INDEX": limits.TILE_INDEX, "WORLD_MANIFEST": limits.WORLD_MANIFEST}
+    values = {"MIB": limits.MIB, "MAX_FILE_BYTES": MAX_FILE_BYTES}
+    consts = dict(re.findall(r"pub const MAX_(\w+)_BYTES: u64 = ([^;]+);", rust))
+    assert consts.keys() == names.keys()
+    for name, expression in consts.items():
+        value = math.prod(values[t] if t in values else int(t) for t in map(str.strip, expression.split("*")))
+        assert value == names[name].max_bytes, name
+    words = dict(re.findall(r'Document::(\w+) => "(an? [a-z ]+)",', rust))
+    assert {re.sub(r"(?<!^)([A-Z])", r"_\1", k).upper(): v for k, v in words.items()} == {
+        k: kind.name for k, kind in names.items()}
+    assert [kind.format for kind in limits.KINDS] == [
+        "streetwide.asset", "streetwide.tile", "streetwide.world", "streetwide.change", "streetwide.check",
+        "streetwide.merge"]
+    assert '"larger than {limit} bytes ({} MiB), the limit for {}"' in rust
+    assert limits.CHANGE_SET.too_large() == "larger than 8388608 bytes (8 MiB), the limit for a change set"
+
+
+def padding(i: int, n: int) -> str:
+    """Text number `i` of `n` characters: its number, then x. Texts sort by
+    their numbers, and `{i:07d}x` appears nowhere else in a document: not
+    in a content id, whose hex has no x."""
+    return f"{i:07d}" + "x" * (n - 7)
+
+
+def lengths_for(size: int, low: int, high: int, doc) -> list[int]:
+    """Lengths of items for `doc` whose bytes are exactly `size` long, as in
+    op_world's fuzz_readers.rs: `doc` writes one item per length, and an
+    item's bytes grow by one for each unit of its length, from `low` to
+    `high`, so only small documents are written to find them."""
+    mid = (low + high) // 2
+    one = len(doc([mid]))
+    per_item = len(doc([mid, mid])) - one
+    count = (size - one) // per_item + 1
+    lengths = [mid] * count
+    left = size - (one + (count - 1) * per_item)
+    for i, n in enumerate(lengths):
+        grow = min(left, high - n)
+        lengths[i] += grow
+        left -= grow
+    assert left == 0, f"cannot make {size} bytes"
+    return lengths
+
+
+def one_byte_more(data: bytes, lengths: list[int], high: int) -> bytes:
+    """`data`, written by a builder below from `lengths`, with one more
+    character in the first item that can take one."""
+    k = next(i for i, n in enumerate(lengths) if n < high)
+    mark = f"{k:07d}x".encode()
+    assert data.count(mark) == 1
+    return data.replace(mark, mark + b"x")
+
+
+def dumps(doc: Any) -> bytes:
+    """`cjson.dumps(doc)` at the speed of the json module, for documents
+    whose keys are ASCII and whose texts need no escape (checked below)."""
+    return json.dumps(doc, sort_keys=True, separators=(",", ":"), ensure_ascii=False).encode("utf-8")
+
+
+def manifest_of(lengths: list[int]) -> bytes:
+    m = copy.deepcopy(OTHER_DOCS[-1])
+    m["provenance"]["sources"][0]["source_ids"] = [padding(i, n) for i, n in enumerate(lengths)]
+    return dumps(m)
+
+
+def tile_index_of(lengths: list[int]) -> bytes:
+    index = copy.deepcopy(_fixture_assets()[2])
+    first = index["assets"][0]
+    index["assets"] = [dict(first, layer="facade", feature_id="t:" + padding(i, n)) for i, n in enumerate(lengths)]
+    return dumps(index)
+
+
+def record_of(lengths: list[int]) -> bytes:
+    return dumps({
+        "format": "streetwide.merge", "contract_version": "0.1.0", "decision": "baseline", "change_id": None,
+        "world_before": None, "world_after": content_id(b"world"), "check_report_id": None, "reasons": "x",
+        "previous_record_id": None,
+        "reviews": [{"reviewer": f"github:r{i:07d}", "verdict": "better", "notes": padding(i, n)}
+                    for i, n in enumerate(lengths)],
+    })
+
+
+def read_kind(kind: limits.Kind, data: bytes, tmp_path: Path) -> Any:
+    """`data` read as a document of `kind`: change sets and merge records by
+    their parsers, check reports from a world log, manifests as objects
+    from memory, tile indexes too but unparsed (tens of thousands of assets
+    take jsonschema too long; objects in a directory are refused below).
+    Raises what each raises."""
+    cid = content_id(data)
+    if kind is limits.CHANGE_SET:
+        return changes.parse(data)
+    if kind is limits.MERGE_RECORD:
+        return log.parse_record(data)
+    if kind is limits.CHECK_REPORT:
+        root = tmp_path / "log"
+        path = root / log.report_path(cid)
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_bytes(data)
+        try:
+            return log.WorldLog(root=root, records=()).report(cid)
+        finally:
+            shutil.rmtree(root)
+    if kind is limits.TILE_INDEX:
+        return Objects({cid: data}).read(cid, kind)
+    return Objects({cid: data}).manifest(cid)
+
+
+# (kind, builder, longest item): a builder writes a valid document of the
+# kind from item lengths. Change sets cannot reach their limit (50 changes
+# of a few hundred bytes), and check reports take long to write and parse
+# at 16 MiB here, so for them a document of spaces stands in: at the limit
+# the parser refuses it, not its size.
+AT_THE_LIMIT = {
+    "asset manifest": (limits.ASSET_MANIFEST, manifest_of, changes.MAX_TEXT_CHARS),
+    "merge record": (limits.MERGE_RECORD, record_of, changes.MAX_TEXT_CHARS),
+    "tile index": (limits.TILE_INDEX, tile_index_of, 254),
+    "change set": (limits.CHANGE_SET, None, 0),
+    "check report": (limits.CHECK_REPORT, None, 0),
+}
+
+
+@pytest.mark.parametrize("what", list(AT_THE_LIMIT))
+def test_documents_read_up_to_the_limit_for_their_kind(what: str, tmp_path: Path) -> None:
+    # A document at the limit for its kind reads (or goes on to the parser);
+    # one byte more is refused before it is parsed, with op_world's message.
+    kind, doc, longest = AT_THE_LIMIT[what]
+    if doc is None:
+        at = b" " * kind.max_bytes
+        with pytest.raises(ValueError, match="not canonical JSON: invalid JSON: Expecting value"):
+            read_kind(kind, at, tmp_path)
+        over = at + b" "
+    else:
+        assert doc([8, 9]) == cjson.dumps(cjson.loads(doc([8, 9]))), "the builder writes canonical JSON"
+        lengths = lengths_for(kind.max_bytes, 8, longest, doc)
+        at = doc(lengths)
+        assert len(at) == kind.max_bytes
+        assert read_kind(kind, at, tmp_path) == (at if kind is limits.TILE_INDEX else cjson.loads(at))
+        over = one_byte_more(at, lengths, longest)
+    assert len(over) == kind.max_bytes + 1
+    with pytest.raises(ValueError) as refused:
+        read_kind(kind, over, tmp_path)
+    assert str(refused.value).endswith(kind.too_large())
+
+
+def worst_case(kind: limits.Kind) -> bytes:
+    """One byte over the limit of `kind`: one-key objects, the input that
+    takes a JSON parser the most memory per byte."""
+    data = b"[" + b'{"a":0},' * (kind.max_bytes // 8)
+    return data[: kind.max_bytes].ljust(kind.max_bytes, b" ") + b"]"
+
+
+@pytest.mark.parametrize("kind", [limits.CHANGE_SET, limits.MERGE_RECORD, limits.CHECK_REPORT,
+                                  limits.TILE_INDEX, limits.ASSET_MANIFEST], ids=lambda k: k.format)
+def test_documents_over_their_limit_are_refused_unparsed(kind: limits.Kind, tmp_path: Path) -> None:
+    # The worst case for the parser, one byte over the limit: refused before
+    # it is parsed, with the memory of the input alone (parsing it would
+    # take hundreds of megabytes, gigabytes at 16 MiB), and an object in a
+    # directory before it is read.
+    data = worst_case(kind)
+    assert len(data) == kind.max_bytes + 1
+    cid = content_id(data)
+    store = Store(tmp_path / "store")
+    in_store = kind in (limits.TILE_INDEX, limits.ASSET_MANIFEST)
+    if in_store:
+        path = store.object_path(cid, "json")
+        path.parent.mkdir(parents=True)
+        with open(path, "wb") as f:
+            f.truncate(len(data))  # sparse where the file system allows
+
+    def case(rng: Rng) -> None:
+        with reading(len(data)):
+            with pytest.raises(ValueError) as refused:
+                read_kind(kind, data, tmp_path)
+        assert str(refused.value).endswith(kind.too_large())
+        if in_store:
+            with reading(0):
+                with pytest.raises(ChangeError, match=f"^object {cid}: {re.escape(kind.too_large())}$"):
+                    Objects(store.root).doc(cid, kind)
+
+    try:
+        run_cases(f"{kind.format} over its limit", 1, case, memory=(1, 1 << 20))
+    finally:
+        shutil.rmtree(store.root, ignore_errors=True)
+
+
+def test_a_log_refuses_records_and_change_sets_over_their_limit(log_template: Path, tmp_path: Path) -> None:
+    # As op_world's WorldLog::open, with its messages after the file name.
+    root = tmp_path / "log"
+    shutil.copytree(log_template, root)
+    world_log = log.read_log(root)
+    record = world_log.records[1].path
+    (root / record).write_bytes(worst_case(limits.MERGE_RECORD))
+    with pytest.raises(LogError, match=f"^{record}: {re.escape(limits.MERGE_RECORD.too_large())}$"):
+        log.read_log(root)
+    shutil.rmtree(root)
+    shutil.copytree(log_template, root)
+    rel = log.change_path(world_log.records[1].change_id)
+    (root / rel).write_bytes(worst_case(limits.CHANGE_SET))
+    with pytest.raises(LogError, match=f"^{rel}: {re.escape(limits.CHANGE_SET.too_large())}$"):
+        log.read_log(root)
+    shutil.rmtree(root)
+
+
+def test_writers_refuse_what_readers_would(monkeypatch: pytest.MonkeyPatch) -> None:
+    # As op_world's to_bytes: a change set, or a tile index or world that
+    # `apply` builds, over the limit for its kind is not written. Smaller
+    # limits stand in for the real ones here.
+    sample = changes.parse((SAMPLE / "change.json").read_bytes())
+    small = len(changes.to_bytes(sample)) - 1
+    monkeypatch.setattr(changes, "CHANGE_SET", limits.Kind("streetwide.change", "a change set", small))
+    with pytest.raises(ChangeError, match=f"^larger than {small} bytes \\(0 MiB\\), the limit for a change set$"):
+        changes.to_bytes(sample)
+    with pytest.raises(ChangeError, match="the limit for a change set$"):
+        changes.parse(cjson.dumps(sample))
+    monkeypatch.undo()
+    _, world, _ = _fixture_assets()
+    candidate = changes.apply(world, sample, Objects(SAMPLE, WORLD))
+    ((key, tile_id),) = candidate.tile_ids.items()
+    tile_limit = len(candidate.objects[tile_id]) - 1
+    monkeypatch.setattr(changes, "TILE_INDEX", limits.Kind("streetwide.tile", "a tile index", tile_limit))
+    with pytest.raises(ChangeError, match=f"^tile index {key}: larger than {tile_limit} bytes"):
+        changes.apply(world, sample, Objects(SAMPLE, WORLD))
+    monkeypatch.undo()
+    world_limit = len(candidate.world_bytes) - 1
+    assert len((WORLD / "world.json").read_bytes()) <= world_limit, "the base world fits"
+    monkeypatch.setattr(changes, "WORLD_MANIFEST", limits.Kind("streetwide.world", "a world manifest", world_limit))
+    with pytest.raises(ChangeError, match=f"^the candidate world: larger than {world_limit} bytes"):
+        changes.apply(world, sample, Objects(SAMPLE, WORLD))

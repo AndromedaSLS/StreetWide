@@ -10,9 +10,12 @@ from pathlib import Path
 import numpy as np
 import pytest
 
-from tools.contrib.facade import ContributionError, export_reference, find_building, make_bundle, palette_material
+from tools.contrib.facade import (
+    ContributionError, World, export_reference, find_building, make_bundle, palette_material,
+)
 from tools.contrib.gltf_in import GltfError, read
 from tools.worldfmt import cjson, schemas
+from tools.worldfmt.limits import TILE_INDEX
 from tools.worldfmt.store import Store
 
 REPO = Path(__file__).resolve().parents[3]
@@ -127,3 +130,18 @@ def test_flat_normals_are_unit_length(tmp_path):
     manifest = cjson.loads(Store(tmp_path).read_object(change["changes"][0]["manifest_id"], "json"))
     (part,) = read(Store(tmp_path).read_object(manifest["content_id"], "glb"))
     assert len(part.triangles) > 0 and np.isfinite(part.triangles).all()
+
+
+def test_a_tile_index_over_its_limit_is_refused_unparsed(tmp_path):
+    # RFC 0001 section 7: a tile index is at most 16 MiB, checked before it
+    # is parsed. One-key objects take a parser the most memory per byte.
+    data = b"[" + b'{"a":0},' * (TILE_INDEX.max_bytes // 8)
+    data = data[: TILE_INDEX.max_bytes].ljust(TILE_INDEX.max_bytes, b" ") + b"]"
+    store = Store(tmp_path)
+    world = cjson.loads((WORLD / "world.json").read_bytes())
+    world["tiles"][0]["tile_id"] = store.write_object(data, "json")
+    store.write_world(world)
+    with pytest.raises(ContributionError) as e:
+        World(tmp_path)
+    assert str(e.value) == f"tile {world['tiles'][0]['tile']} is {TILE_INDEX.too_large()}"
+    store.object_path(world["tiles"][0]["tile_id"], "json").unlink()

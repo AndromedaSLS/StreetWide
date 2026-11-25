@@ -22,6 +22,7 @@ use crate::contrib::{
 use crate::glb::{self, GlbMesh};
 use crate::id::ContentId;
 use crate::keys::TileKey;
+use crate::limits::Document;
 use crate::manifest::{AssetManifest, BoundsMm, Collider, Layer};
 use crate::rules::{MAX_TEXT_CHARS, is_text};
 use crate::store::{MAX_FILE_BYTES, ObjectKind, Store, read_file};
@@ -31,8 +32,8 @@ use crate::{Error, Result};
 
 /// Bumped whenever the gate's output for some change set changes (0.1.1:
 /// the water layer, RFC 0003; 0.1.2: bounded readers and G8, the fuzzing
-/// round).
-pub const GATE_VERSION: &str = "0.1.2";
+/// round; 0.1.3: the size limits of JSON documents, RFC 0001 section 7).
+pub const GATE_VERSION: &str = "0.1.3";
 
 /// Licence of contributed content (ADR-0001).
 pub const CONTRIBUTION_LICENSE: &str = "CC-BY-SA-4.0";
@@ -222,6 +223,9 @@ struct Proposed {
 pub fn run(world_dir: &Path, bundle_dir: &Path, candidate_dir: &Path) -> Result<CheckReport> {
     let world = Store::new(world_dir);
     let (world_id, base) = world.read_world()?;
+    // Read up to the limit of every file, so that a change set over its own
+    // limit gets a report: `ChangeSet::from_bytes` refuses it in G1 before
+    // parsing it.
     let change_path = bundle_dir.join("change.json");
     let change_bytes = read_file(&change_path, MAX_FILE_BYTES)
         .map_err(|e| Error::Io(format!("change.json: {e}")))?;
@@ -246,7 +250,7 @@ pub fn run(world_dir: &Path, bundle_dir: &Path, candidate_dir: &Path) -> Result<
     // The base world's tiles.
     let mut tiles: BTreeMap<TileKey, (usize, TileIndex)> = BTreeMap::new();
     for (i, wt) in base.tiles.iter().enumerate() {
-        let index = TileIndex::from_bytes(&world.read_object(&wt.tile_id, ObjectKind::Json)?)?;
+        let index = TileIndex::from_bytes(&world.read_document(&wt.tile_id, Document::TileIndex)?)?;
         tiles.insert(wt.tile, (i, index));
     }
 
@@ -290,7 +294,7 @@ pub fn run(world_dir: &Path, bundle_dir: &Path, candidate_dir: &Path) -> Result<
             continue;
         };
         let loaded = bundle
-            .read_object(&manifest_id, ObjectKind::Json)
+            .read_document(&manifest_id, Document::AssetManifest)
             .and_then(|b| AssetManifest::from_bytes(&b))
             .and_then(|m| {
                 let bytes = bundle.read_object(&m.content_id, ObjectKind::Glb)?;
@@ -603,11 +607,13 @@ fn build_candidate(
     for wt in &world.tiles {
         let index = match edited.get(&wt.tile) {
             Some(i) => i.clone(),
-            None => TileIndex::from_bytes(&candidate.read_object(&wt.tile_id, ObjectKind::Json)?)?,
+            None => {
+                TileIndex::from_bytes(&candidate.read_document(&wt.tile_id, Document::TileIndex)?)?
+            }
         };
         for a in &index.assets {
             let m = AssetManifest::from_bytes(
-                &candidate.read_object(&a.manifest_id, ObjectKind::Json)?,
+                &candidate.read_document(&a.manifest_id, Document::AssetManifest)?,
             )?;
             credits.extend(m.provenance.attribution);
         }
@@ -642,7 +648,7 @@ fn check_budgets_and_placement(
     for wt in &world.tiles {
         indexes.insert(
             wt.tile,
-            TileIndex::from_bytes(&candidate.read_object(&wt.tile_id, ObjectKind::Json)?)?,
+            TileIndex::from_bytes(&candidate.read_document(&wt.tile_id, Document::TileIndex)?)?,
         );
     }
     for (i, c) in change.changes.iter().enumerate() {

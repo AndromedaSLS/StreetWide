@@ -4,6 +4,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::id::ContentId;
 use crate::keys::TileKey;
+use crate::limits::Document;
 use crate::rules::{is_feature_id, is_https_url, is_license, is_sorted_unique, is_text};
 use crate::{CONTRACT_VERSION, Error, Result, cjson};
 
@@ -159,17 +160,29 @@ pub const MAX_ASSET_BYTES: u64 = 64 * 1024 * 1024;
 impl AssetManifest {
     pub const FORMAT: &'static str = "streetwide.asset";
 
-    /// Parses and checks a canonical manifest.
+    /// Parses and checks a canonical manifest. Bytes over the limit for
+    /// asset manifests ([`Document::AssetManifest`]) are refused before
+    /// they are parsed.
     pub fn from_bytes(bytes: &[u8]) -> Result<Self> {
+        Document::AssetManifest.check(bytes)?;
         let manifest: Self = cjson::from_canonical(bytes)?;
         manifest.ensure_valid()?;
         Ok(manifest)
     }
 
-    /// Canonical bytes; fails if the manifest breaks a rule.
+    /// Canonical bytes; fails if the manifest breaks a rule or its bytes
+    /// would be over the limit for asset manifests.
     pub fn to_bytes(&self) -> Result<Vec<u8>> {
         self.ensure_valid()?;
-        cjson::to_canonical(self)
+        let bytes = cjson::to_canonical(self)?;
+        if !Document::AssetManifest.fits(bytes.len()) {
+            return Err(Error::Invalid(format!(
+                "asset manifest for {:?}: {}",
+                self.feature_id,
+                Document::AssetManifest.too_large()
+            )));
+        }
+        Ok(bytes)
     }
 
     /// The version id: the hash of the canonical manifest.

@@ -39,10 +39,11 @@ from tools.ingest.changes.overrides import (
 )
 from tools.ingest.changes.plan import make_plan, write_plan
 from tools.ingest.changes.stores import read_manifest, read_store
-from tools.ingest.changes.verify import Options, VerifyError, verify
+from tools.ingest.changes.verify import Options, VerifyError, read_gate_report, verify
 from tools.ingest.tests.refresh_worlds import A, B, GROUND_MM, Log, Scenario, World, swiss_shell, terrain
 from tools.ingest.tests.test_changes_fixture import BASELINE_REASON, FIXTURE_WORLD, pre_water_store
 from tools.worldfmt import cjson, glb
+from tools.worldfmt.limits import CHECK_REPORT
 from tools.worldfmt.changes import INGEST_AUTHOR, Objects, apply, parse
 from tools.worldfmt.ids import content_id, hex_of
 from tools.worldfmt.store import Store, is_link
@@ -658,7 +659,7 @@ def passing_report(current: Path, bundle: Path) -> dict:
     checks = [{"id": f"G{n}", "name": name, "outcome": outcomes.get(f"G{n}", "pass"),
                "details": [f"{w}: baseline refresh by {INGEST_AUTHOR}; a maintainer reviews it" for w in what]
                if n == 3 else []} for n, name in enumerate(names, 1)]
-    return {"format": "streetwide.check", "contract_version": "0.1.0", "gate_version": "0.1.2",
+    return {"format": "streetwide.check", "contract_version": "0.1.0", "gate_version": "0.1.3",
             "change_id": content_id(change_bytes), "world_id": world_id, "candidate_world_id": candidate.world_id,
             "passed": True, "checks": checks}
 
@@ -804,6 +805,30 @@ def test_a_gate_report_of_another_kind_says_so(tmp_path):
         run_verify(current, plan, tmp_path / "scratch", tmp_path / "summary.json", tools)
     assert str(e.value) == "gate/001.json: the gate's report is not a streetwide.check document: its format is not " \
                            "streetwide.check"
+
+
+def test_a_gate_report_over_its_limit_is_refused_unparsed(tmp_path):
+    # RFC 0001 section 7: a check report is at most 16 MiB, checked before
+    # it is parsed, as op_world checks it. One-key objects take a parser the
+    # most memory per byte: about 1.4 GB for this one in serde_json.
+    data = b"[" + b'{"a":0},' * (CHECK_REPORT.max_bytes // 8)
+    data = data[: CHECK_REPORT.max_bytes].ljust(CHECK_REPORT.max_bytes, b" ") + b"]"
+    assert len(data) == CHECK_REPORT.max_bytes + 1
+    message = f"gate/001.json: the gate's report is {CHECK_REPORT.too_large()}"
+
+    def case(rng: Rng) -> None:
+        with reading(len(data)):
+            with pytest.raises(VerifyError) as e:
+                read_gate_report(data, "gate/001.json")
+        assert str(e.value) == message
+
+    run_cases("verify gate report over its limit", 1, case, memory=(1, 1 << 20))
+    current, plan = small_plan(tmp_path)
+    tools = FakeTools()
+    tools.report = data
+    with pytest.raises(VerifyError) as e:
+        run_verify(current, plan, tmp_path / "scratch", tmp_path / "summary.json", tools)
+    assert str(e.value) == message
 
 
 def test_a_store_has_an_object_only_as_a_regular_file(tmp_path):

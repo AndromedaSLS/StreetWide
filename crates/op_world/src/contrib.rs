@@ -1,6 +1,7 @@
 //! Contribution documents (RFC 0002): change sets, check reports and merge
 //! records. All are canonical JSON (RFC 0001 section 5) named by their
-//! content id.
+//! content id, with a size limit for each kind (RFC 0001 section 7, see
+//! [`crate::limits`]).
 
 use serde::de::DeserializeOwned;
 use serde::{Deserialize, Serialize};
@@ -8,6 +9,7 @@ use serde::{Deserialize, Serialize};
 use crate::cjson;
 use crate::id::ContentId;
 use crate::keys::TileKey;
+use crate::limits::Document;
 use crate::manifest::Layer;
 use crate::rules::{is_feature_id, is_sorted_unique, is_text};
 use crate::{Error, Result};
@@ -19,10 +21,15 @@ pub const MAX_CHANGES: usize = 50;
 /// Author of baseline refreshes produced by `tools/ingest`.
 pub const INGEST_AUTHOR: &str = "streetwide:ingest";
 
+/// Parses a document of kind `kind`: bytes over its limit are refused
+/// before they are parsed, then the document must be canonical and have no
+/// `problems`.
 fn parse<T: Serialize + DeserializeOwned>(
     bytes: &[u8],
+    kind: Document,
     problems: impl Fn(&T) -> Vec<String>,
 ) -> Result<T> {
+    kind.check(bytes)?;
     let doc: T = cjson::from_canonical(bytes)?;
     let p = problems(&doc);
     if p.is_empty() {
@@ -30,6 +37,17 @@ fn parse<T: Serialize + DeserializeOwned>(
     } else {
         Err(Error::Invalid(p.join("; ")))
     }
+}
+
+/// The canonical bytes of a document of kind `kind` with these `problems`,
+/// which must be none, and at most its limit long.
+fn write<T: Serialize>(doc: &T, kind: Document, problems: Vec<String>) -> Result<Vec<u8>> {
+    if !problems.is_empty() {
+        return Err(Error::Invalid(problems.join("; ")));
+    }
+    let bytes = cjson::to_canonical(doc)?;
+    kind.check(&bytes)?;
+    Ok(bytes)
 }
 
 /// What a change does to one asset.
@@ -81,15 +99,11 @@ impl ChangeSet {
     pub const FORMAT: &'static str = "streetwide.change";
 
     pub fn from_bytes(bytes: &[u8]) -> Result<Self> {
-        parse(bytes, Self::problems)
+        parse(bytes, Document::ChangeSet, Self::problems)
     }
 
     pub fn to_bytes(&self) -> Result<Vec<u8>> {
-        let p = self.problems();
-        if !p.is_empty() {
-            return Err(Error::Invalid(p.join("; ")));
-        }
-        cjson::to_canonical(self)
+        write(self, Document::ChangeSet, self.problems())
     }
 
     pub fn id(&self) -> Result<ContentId> {
@@ -188,15 +202,11 @@ impl CheckReport {
     pub const FORMAT: &'static str = "streetwide.check";
 
     pub fn from_bytes(bytes: &[u8]) -> Result<Self> {
-        parse(bytes, Self::problems)
+        parse(bytes, Document::CheckReport, Self::problems)
     }
 
     pub fn to_bytes(&self) -> Result<Vec<u8>> {
-        let p = self.problems();
-        if !p.is_empty() {
-            return Err(Error::Invalid(p.join("; ")));
-        }
-        cjson::to_canonical(self)
+        write(self, Document::CheckReport, self.problems())
     }
 
     pub fn problems(&self) -> Vec<String> {
@@ -290,15 +300,11 @@ impl MergeRecord {
     pub const FORMAT: &'static str = "streetwide.merge";
 
     pub fn from_bytes(bytes: &[u8]) -> Result<Self> {
-        parse(bytes, Self::problems)
+        parse(bytes, Document::MergeRecord, Self::problems)
     }
 
     pub fn to_bytes(&self) -> Result<Vec<u8>> {
-        let p = self.problems();
-        if !p.is_empty() {
-            return Err(Error::Invalid(p.join("; ")));
-        }
-        cjson::to_canonical(self)
+        write(self, Document::MergeRecord, self.problems())
     }
 
     pub fn problems(&self) -> Vec<String> {

@@ -17,6 +17,7 @@ from tools.contrib import GENERATOR, VERSION
 from tools.contrib.gltf_in import GltfError, Part, read
 from tools.worldfmt import CONTRACT_VERSION, cjson, glb, schemas
 from tools.worldfmt.ids import content_id
+from tools.worldfmt.limits import BY_FORMAT
 from tools.worldfmt.store import Store, read_file
 
 CONTRIBUTION_CONTRACT = "0.1.0"
@@ -36,7 +37,12 @@ class ContributionError(ValueError):
 
 
 def _document(data: bytes, fmt: str, what: str) -> dict:
-    """`data` parsed as a canonical, schema-valid document of format `fmt`."""
+    """`data` parsed as a canonical, schema-valid document of format `fmt`,
+    within the limit for its kind (RFC 0001 section 7), which is checked
+    before parsing."""
+    kind = BY_FORMAT[fmt]
+    if not kind.fits(len(data)):
+        raise ContributionError(f"{what} is {kind.too_large()}")
     try:
         doc = cjson.loads(data)
     except cjson.CanonicalError as e:

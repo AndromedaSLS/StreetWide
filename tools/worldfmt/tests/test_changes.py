@@ -1,6 +1,7 @@
 """Change sets from Python (tools/worldfmt/changes.py) agree with op_world:
 `problems` refuses what `ChangeSet::from_bytes` refuses, with the same
-messages, and `apply` builds the gate's candidate world byte for byte,
+messages, documents over the limit for their kind are refused in the same
+words, and `apply` builds the gate's candidate world byte for byte,
 checked against ids that Rust made."""
 
 from __future__ import annotations
@@ -14,7 +15,7 @@ from pathlib import Path
 
 import pytest
 
-from tools.worldfmt import changes, cjson, schemas
+from tools.worldfmt import changes, cjson, limits, schemas
 from tools.worldfmt.changes import ChangeError, Objects
 from tools.worldfmt.ids import content_id
 from tools.worldfmt.store import Store
@@ -640,6 +641,46 @@ def test_op_world_refuses_the_same_manifests(case, edit, messages, check_change,
     report = check_change(FIXTURE_WORLD, tmp_path / "bundle")
     assert report["candidate_world_id"] is None and not report["passed"]
     assert any(d.endswith(": " + "; ".join(messages)) for d in gate_details(report, "G1")), gate_details(report, "G1")
+
+
+# -------------------------------------------- documents over their limit --
+# RFC 0001 section 7: refused before they are parsed, in op_world's words.
+
+
+def oversized_bundle(root: Path) -> tuple[Path, str]:
+    """The facade sample with its manifest one byte over the limit for asset
+    manifests (a sparse file where the file system allows), and its id."""
+    shutil.copytree(SAMPLE / "objects", root / "objects")
+    shutil.copy(SAMPLE / "change.json", root / "change.json")
+    cid = sample()["changes"][0]["manifest_id"]
+    with open(Store(root).object_path(cid, "json"), "wb") as f:
+        f.truncate(limits.ASSET_MANIFEST.max_bytes + 1)
+    return root, cid
+
+
+def test_documents_over_their_limit_are_refused_in_op_worlds_words(tmp_path: Path) -> None:
+    data = b" " * (limits.CHANGE_SET.max_bytes + 1)
+    with pytest.raises(ChangeError, match=f"^{re.escape(limits.CHANGE_SET.too_large())}$"):
+        changes.parse(data)
+    bundle, cid = oversized_bundle(tmp_path / "bundle")
+    with pytest.raises(ChangeError, match=f"^object {cid}: {re.escape(limits.ASSET_MANIFEST.too_large())}$"):
+        Objects(bundle, FIXTURE_WORLD).manifest(cid)
+    shutil.rmtree(bundle)
+
+
+def test_op_world_refuses_the_same_documents_over_their_limit(check_change, tmp_path: Path) -> None:
+    bundle = tmp_path / "change-set"
+    shutil.copytree(SAMPLE / "objects", bundle / "objects")
+    (bundle / "change.json").write_bytes(b" " * (limits.CHANGE_SET.max_bytes + 1))
+    report = check_change(FIXTURE_WORLD, bundle)
+    assert gate_details(report, "G1") == [f"change.json: invalid: {limits.CHANGE_SET.too_large()}"]
+    bundle, cid = oversized_bundle(tmp_path / "manifest")
+    report = check_change(FIXTURE_WORLD, bundle)
+    assert report["candidate_world_id"] is None and not report["passed"]
+    message = f": object {cid}: {limits.ASSET_MANIFEST.too_large()}"
+    assert any(d.endswith(message) for d in gate_details(report, "G1")), gate_details(report, "G1")
+    shutil.rmtree(tmp_path / "change-set")
+    shutil.rmtree(bundle)
 
 
 # ----------------------------------------- agreement with ids Rust made --

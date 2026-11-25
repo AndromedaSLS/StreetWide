@@ -4,6 +4,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::id::ContentId;
 use crate::keys::{RegionKey, TileKey};
+use crate::limits::Document;
 use crate::manifest::{BoundsMm, Collider, Layer};
 use crate::rules::{is_feature_id, is_license};
 use crate::{CONTRACT_VERSION, Error, Result, cjson};
@@ -37,15 +38,29 @@ pub struct TileIndex {
 impl TileIndex {
     pub const FORMAT: &'static str = "streetwide.tile";
 
+    /// Parses and checks a canonical tile index. Bytes over the limit for
+    /// tile indexes ([`Document::TileIndex`]) are refused before they are
+    /// parsed.
     pub fn from_bytes(bytes: &[u8]) -> Result<Self> {
+        Document::TileIndex.check(bytes)?;
         let index: Self = cjson::from_canonical(bytes)?;
         index.ensure_valid()?;
         Ok(index)
     }
 
+    /// Canonical bytes; fails if the index breaks a rule or its bytes would
+    /// be over the limit for tile indexes.
     pub fn to_bytes(&self) -> Result<Vec<u8>> {
         self.ensure_valid()?;
-        cjson::to_canonical(self)
+        let bytes = cjson::to_canonical(self)?;
+        if !Document::TileIndex.fits(bytes.len()) {
+            return Err(Error::Invalid(format!(
+                "tile index {}: {}",
+                self.tile,
+                Document::TileIndex.too_large()
+            )));
+        }
+        Ok(bytes)
     }
 
     /// The tile id: the hash of the canonical tile index.

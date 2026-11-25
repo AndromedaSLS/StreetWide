@@ -9,13 +9,16 @@
 //! A store may come from elsewhere (a downloaded world, a contributor's
 //! bundle), so reads check what they read: an object's bytes must hash to
 //! its id, and every file is read with [`read_file`], which takes only a
-//! regular file of at most [`MAX_FILE_BYTES`].
+//! regular file of at most [`MAX_FILE_BYTES`]. A JSON document whose kind
+//! is known is read with [`read_document`] or [`Store::read_document`],
+//! which take at most the limit for its kind ([`crate::limits`]).
 
 use std::fs;
 use std::io::{self, Read, Write as _};
 use std::path::{Path, PathBuf};
 
 use crate::id::ContentId;
+use crate::limits::Document;
 use crate::manifest::MAX_ASSET_BYTES;
 use crate::world::WorldManifest;
 use crate::{Error, Result};
@@ -35,6 +38,10 @@ pub const MAX_FILE_BYTES: u64 = MAX_ASSET_BYTES;
 /// are refused before anything is read: the path must name a regular file
 /// itself, not a link to one. The error does not name the path; callers
 /// say what was read.
+///
+/// A file larger than `limit` is refused with [`io::ErrorKind::FileTooLarge`],
+/// anything else that is not a regular file with
+/// [`io::ErrorKind::InvalidData`].
 ///
 /// The path is checked, then opened, and the open file is checked again, so
 /// a device or a larger file put in its place in between is refused too.
@@ -60,7 +67,7 @@ fn read_file_opened_with(
     // `take` stops a file that grew after the checks above.
     file.take(limit.saturating_add(1)).read_to_end(&mut bytes)?;
     if bytes.len() as u64 > limit {
-        return Err(refused(format!("larger than {limit} bytes")));
+        return Err(too_large(limit));
     }
     Ok(bytes)
 }
@@ -68,16 +75,36 @@ fn read_file_opened_with(
 /// What [`read_file`] takes: a regular file of at most `limit` bytes.
 fn check_file(meta: &fs::Metadata, limit: u64) -> io::Result<()> {
     if !meta.is_file() {
-        return Err(refused("not a regular file".into()));
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidData,
+            "not a regular file",
+        ));
     }
     if meta.len() > limit {
-        return Err(refused(format!("larger than {limit} bytes")));
+        return Err(too_large(limit));
     }
     Ok(())
 }
 
-fn refused(why: String) -> io::Error {
-    io::Error::new(io::ErrorKind::InvalidData, why)
+fn too_large(limit: u64) -> io::Error {
+    io::Error::new(
+        io::ErrorKind::FileTooLarge,
+        format!("larger than {limit} bytes"),
+    )
+}
+
+/// The bytes of the JSON document of kind `kind` at `path`: [`read_file`]
+/// with the limit for its kind ([`Document::max_bytes`], RFC 0001 section
+/// 7), so a longer file is refused before it is read, and the error says
+/// the kind and its limit ([`Document::too_large`]).
+pub fn read_document(path: &Path, kind: Document) -> io::Result<Vec<u8>> {
+    read_file(path, kind.max_bytes()).map_err(|e| {
+        if e.kind() == io::ErrorKind::FileTooLarge {
+            io::Error::new(io::ErrorKind::FileTooLarge, kind.too_large())
+        } else {
+            e
+        }
+    })
 }
 
 /// Whether `path` names a regular file itself, as [`read_file`] requires. A
@@ -156,13 +183,29 @@ impl Store {
     /// a directory or a FIFO in one layer does not hide the object in the
     /// next: objects are named by their hash, so any copy will do.
     pub fn read_object(&self, id: &ContentId, kind: ObjectKind) -> Result<Vec<u8>> {
+        self.read_object_with(id, kind, |path| read_file(path, MAX_FILE_BYTES))
+    }
+
+    /// [`Store::read_object`] for a JSON document of kind `kind`, such as a
+    /// tile index or an asset manifest: a file over the limit for its kind
+    /// is refused before it is read ([`read_document`]).
+    pub fn read_document(&self, id: &ContentId, kind: Document) -> Result<Vec<u8>> {
+        self.read_object_with(id, ObjectKind::Json, |path| read_document(path, kind))
+    }
+
+    /// [`Store::read_object`], reading the file it finds with `read`.
+    fn read_object_with(
+        &self,
+        id: &ContentId,
+        kind: ObjectKind,
+        read: impl FnOnce(&Path) -> io::Result<Vec<u8>>,
+    ) -> Result<Vec<u8>> {
         let path = std::iter::once(&self.root)
             .chain(&self.fallbacks)
             .map(|dir| object_path_in(dir, id, kind))
             .find(|p| is_regular_file(p))
             .unwrap_or_else(|| self.object_path(id, kind));
-        let bytes =
-            read_file(&path, MAX_FILE_BYTES).map_err(|e| Error::Io(format!("object {id}: {e}")))?;
+        let bytes = read(&path).map_err(|e| Error::Io(format!("object {id}: {e}")))?;
         let actual = ContentId::of(&bytes);
         if actual != *id {
             return Err(Error::HashMismatch {

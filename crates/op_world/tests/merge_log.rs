@@ -12,6 +12,7 @@ use op_world::contrib::{
     Change, ChangeSet, CheckReport, Decision, INGEST_AUTHOR, MergeRecord, Op, Outcome, Review,
     Verdict, verify_log,
 };
+use op_world::limits::{MAX_CHANGE_SET_BYTES, MAX_MERGE_RECORD_BYTES};
 use op_world::merge::{
     LOG_LOCK, MergeArgs, MergeOutput, STORE_LOCK, WorldLog, baseline, merge_with, require_base,
 };
@@ -1311,8 +1312,9 @@ fn refusal_with(dir: &Path, path: &Path, make: impl FnOnce(&Path, &Path)) -> Str
 }
 
 /// A world log can come from elsewhere (git keeps links), so it may hold
-/// only directories and regular files of at most MAX_FILE_BYTES. Anything
-/// else is refused, never followed or opened. Found by review: records and
+/// only directories and regular files of at most the limit for their kind
+/// of document (RFC 0001 section 7). Anything else is refused, never
+/// followed or opened. Found by review: records and
 /// change sets were read whole with `fs::read`, which followed links,
 /// waited forever on a FIFO and took any size.
 #[test]
@@ -1348,16 +1350,27 @@ fn a_log_holds_only_directories_and_regular_files() {
         refusal_with(&dir, &dir.join("changes"), make_file),
         format!("I/O error: changes/{hex}/change.json: changes is not a directory")
     );
-    // Longer than any file a store read takes: refused unread (the file
-    // is sparse where the filesystem allows).
-    let oversized = |p: &Path, _: &Path| {
-        std::fs::File::create(p)
-            .and_then(|f| f.set_len(MAX_FILE_BYTES + 1))
-            .unwrap();
+    // Longer than the limit for its kind (RFC 0001 section 7), or than any
+    // file a store read takes: refused unread (the file is sparse where the
+    // filesystem allows).
+    let longer_than = |limit: u64| {
+        move |p: &Path, _: &Path| {
+            std::fs::File::create(p)
+                .and_then(|f| f.set_len(limit + 1))
+                .unwrap();
+        }
     };
+    for limit in [MAX_MERGE_RECORD_BYTES, MAX_FILE_BYTES] {
+        assert_eq!(
+            refusal_with(&dir, &record, longer_than(limit)),
+            "I/O error: log/00000001.json: larger than 1048576 bytes (1 MiB), the limit for a merge record"
+        );
+    }
     assert_eq!(
-        refusal_with(&dir, &record, oversized),
-        "I/O error: log/00000001.json: larger than 67108864 bytes"
+        refusal_with(&dir, &change, longer_than(MAX_CHANGE_SET_BYTES)),
+        format!(
+            "I/O error: changes/{hex}/change.json: larger than 8388608 bytes (8 MiB), the limit for a change set"
+        )
     );
 
     // Links to valid copies: a reader that followed them would accept the

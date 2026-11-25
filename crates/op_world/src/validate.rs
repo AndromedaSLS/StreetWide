@@ -7,6 +7,7 @@ use std::rc::Rc;
 
 use crate::glb;
 use crate::id::ContentId;
+use crate::limits::Document;
 use crate::manifest::{AssetManifest, BoundsMm, Layer};
 use crate::store::{ObjectKind, Store};
 use crate::tile::TileIndex;
@@ -97,7 +98,7 @@ pub fn validate_store(store: &Store) -> Report {
         let ctx = format!("tile {}", wt.tile);
         let (index, _) = tiles.get(wt.tile_id, || {
             store
-                .read_object(&wt.tile_id, ObjectKind::Json)
+                .read_document(&wt.tile_id, Document::TileIndex)
                 .and_then(|b| TileIndex::from_bytes(&b))
                 .map_err(|e| e.to_string())
         });
@@ -134,7 +135,7 @@ pub fn validate_store(store: &Store) -> Report {
             }
             let (manifest, first) = manifests.get(asset.manifest_id, || {
                 store
-                    .read_object(&asset.manifest_id, ObjectKind::Json)
+                    .read_document(&asset.manifest_id, Document::AssetManifest)
                     .and_then(|b| AssetManifest::from_bytes(&b))
                     .map_err(|e| e.to_string())
             });

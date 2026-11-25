@@ -22,7 +22,9 @@ directory and `apply` any parsed world and change set. Each returns a
 value or raises ChangeError (`problems` only returns), with time and
 memory in proportion to its input. Files are read with
 `store.read_file`: a regular file itself (not a link, a FIFO or a
-device) of at most MAX_FILE_BYTES.
+device) of at most MAX_FILE_BYTES. A change set, a tile index or an
+asset manifest over the limit for its kind (`limits`, RFC 0001 section
+7) is refused before it is parsed, with op_world's message.
 
 The field rules (`is_text`, `is_feature_id`, `is_license`,
 `is_https_url`, `is_sorted_unique`, `tile_xy`) mirror
@@ -58,6 +60,7 @@ from typing import Any, Union
 
 from tools.worldfmt import cjson, schemas
 from tools.worldfmt.ids import content_id, is_content_id
+from tools.worldfmt.limits import BY_FORMAT, CHANGE_SET, TILE_INDEX, WORLD_MANIFEST, Kind
 from tools.worldfmt.rust import rust_debug
 from tools.worldfmt.store import MAX_FILE_BYTES, Store, read_file
 
@@ -356,7 +359,11 @@ def rule_problems(change: dict) -> list[str]:
 
 def parse(data: bytes) -> dict:
     """Reads the bytes of a `change.json` as `ChangeSet::from_bytes` does:
-    canonical JSON, then `problems`. Raises ChangeError."""
+    at most the limit for change sets (8 MiB, `limits.CHANGE_SET`),
+    checked before parsing, then canonical JSON, then `problems`. Raises
+    ChangeError."""
+    if not CHANGE_SET.fits(len(data)):
+        raise ChangeError(CHANGE_SET.too_large())
     try:
         change = cjson.loads(data)  # nested at most cjson.MAX_DEPTH levels deep
     except cjson.CanonicalError as e:
@@ -368,16 +375,19 @@ def parse(data: bytes) -> dict:
 
 
 def to_bytes(change: dict) -> bytes:
-    """The bytes of `change.json` for `change`, after `problems` (as
-    `ChangeSet::to_bytes`). The change id is `content_id` of these bytes.
-    Raises ChangeError."""
+    """The bytes of `change.json` for `change`, after `problems` and within
+    the limit for change sets (as `ChangeSet::to_bytes`). The change id is
+    `content_id` of these bytes. Raises ChangeError."""
     found = problems(change)
     if found:
         raise ChangeError("; ".join(found))
     try:
-        return cjson.dumps(change)
+        data = cjson.dumps(change)
     except cjson.CanonicalError as e:  # a value only Python holds, such as a float
         raise ChangeError(f"not canonical JSON: {e}") from e
+    if not CHANGE_SET.fits(len(data)):
+        raise ChangeError(CHANGE_SET.too_large())
+    return data
 
 
 # --------------------------------------------------------------- objects --
@@ -395,7 +405,10 @@ class Objects:
     exist only in memory (a planned set's manifests, or the tile indexes
     `apply` returns). `push` puts a source in front of the others.
 
-    Every object read must hash to its id. Parsed documents are cached and
+    Every object read must hash to its id. A tile index or an asset
+    manifest over the limit for its kind (`limits`) is refused before it is
+    parsed, and a file before it is read, as op_world's
+    `Store::read_document` refuses it. Parsed documents are cached and
     shared between calls, so callers must not modify them. Sources can only
     be added, never removed, so whatever was read once stays readable.
     """
@@ -403,6 +416,7 @@ class Objects:
     def __init__(self, *sources: Source) -> None:
         self._sources: list[Store | Mapping[str, bytes]] = []
         self._docs: dict[str, dict] = {}
+        self._sizes: dict[str, int] = {}
         self._checked: dict[tuple[str, str], dict] = {}
         for source in reversed(sources):
             self.push(source)
@@ -415,22 +429,28 @@ class Objects:
             raise TypeError(f"an object source is a Store, a directory or a mapping, not {type(source).__name__}")
         self._sources.insert(0, source)
 
-    def read(self, cid: str) -> bytes:
+    def read(self, cid: str, kind: Kind | None = None) -> bytes:
         """The bytes of JSON object `cid`, from the first source that has it.
 
         A directory has an object only as a regular file: as in op_world's
         layered store, a link, a directory or a FIFO in one source does not
         hide the object in the next. The file is read with
-        `store.read_file`, at most MAX_FILE_BYTES. Raises ChangeError when
-        `cid` is not a content id, no source has the object, its file
-        cannot be read, or its bytes hash to another id."""
+        `store.read_file`, at most MAX_FILE_BYTES. Given its `kind` (a
+        `limits.Kind`), an object over the limit for its kind is refused
+        with op_world's message, a file before it is read. Raises
+        ChangeError when `cid` is not a content id, no source has the
+        object, its file cannot be read, it is too large, or its bytes hash
+        to another id."""
         if not is_content_id(cid):
             raise ChangeError(f"{rust_debug(cid)} is not a content id (blake3:<64 hex>)")
         for source in self._sources:
             if isinstance(source, Store):
                 path = source.object_path(cid, "json")
-                if not _is_regular_file(path):
+                size = _regular_file_size(path)
+                if size is None:
                     continue
+                if kind is not None and not kind.fits(size):
+                    raise ChangeError(f"object {cid}: {kind.too_large()}")
                 try:
                     data = read_file(path, MAX_FILE_BYTES)
                 except (OSError, ValueError) as e:  # too large, or replaced since it was looked up
@@ -439,24 +459,32 @@ class Objects:
                 data = source.get(cid)
                 if data is None:
                     continue
+            if kind is not None and not kind.fits(len(data)):
+                raise ChangeError(f"object {cid}: {kind.too_large()}")
             actual = content_id(data)
             if actual != cid:
                 raise ChangeError(f"object {cid}: its bytes hash to {actual}")
             return data
         raise ChangeError(f"object {cid}: not found")
 
-    def doc(self, cid: str) -> dict:
+    def doc(self, cid: str, kind: Kind | None = None) -> dict:
         """JSON object `cid`, parsed as canonical JSON. Raises ChangeError as
-        `read` does, or when the object is not canonical JSON."""
+        `read` does (given its `kind`, for an object over its limit too),
+        or when the object is not canonical JSON."""
         # An id that is not a content id (any JSON value, a list included)
         # goes to `read`, which refuses it, not to the cache.
         doc = self._docs.get(cid) if is_content_id(cid) else None
         if doc is None:
+            data = self.read(cid, kind)
             try:
-                doc = cjson.loads(self.read(cid))
+                doc = cjson.loads(data)
             except cjson.CanonicalError as e:
                 raise ChangeError(f"object {cid}: not canonical JSON: {e}") from e
             self._docs[cid] = doc
+            self._sizes[cid] = len(data)
+        elif kind is not None and not kind.fits(self._sizes[cid]):
+            # Parsed before, as a kind with a larger limit or none.
+            raise ChangeError(f"object {cid}: {kind.too_large()}")
         return doc
 
     def tile_index(self, cid: str) -> dict:
@@ -471,7 +499,7 @@ class Objects:
     def _checked_doc(self, cid: str, fmt: str) -> dict:
         doc = self._checked.get((cid, fmt)) if is_content_id(cid) else None
         if doc is None:
-            doc = self.doc(cid)
+            doc = self.doc(cid, BY_FORMAT[fmt])
             if not isinstance(doc, dict) or doc.get("format") != fmt:
                 raise ChangeError(f"object {cid} is not a {fmt} document")
             errors = sorted(schemas.errors(doc))
@@ -483,13 +511,14 @@ class Objects:
         return doc
 
 
-def _is_regular_file(path: Path) -> bool:
-    """Whether `path` names a regular file itself, not a link to one (op_world's
-    `store::is_regular_file`)."""
+def _regular_file_size(path: Path) -> int | None:
+    """The size of the file `path` names if it is a regular file itself, not
+    a link to one (op_world's `store::is_regular_file`); None otherwise."""
     try:
-        return stat.S_ISREG(path.lstat().st_mode)
+        info = path.lstat()
     except (OSError, ValueError):  # missing, or a path the system cannot name
-        return False
+        return None
+    return info.st_size if stat.S_ISREG(info.st_mode) else None
 
 
 # ----------------------------------------------------------------- apply --
@@ -554,9 +583,10 @@ def apply(world: dict, change: Mapping[str, Any], objects: Objects | Source) -> 
     Raises ChangeError, with op_world's message where it has one:
     "tile <key> is not in the world", "<layer> <feature_id>: no readable
     manifest", "tile <key> would be empty", "tile index <key>: assets must
-    be sorted by (layer, feature_id) without duplicates". Unlike the gate,
-    `apply` never reads meshes, so it does not check that a manifest
-    agrees with its mesh.
+    be sorted by (layer, feature_id) without duplicates", "tile index
+    <key>: larger than 16777216 bytes (16 MiB), the limit for a tile
+    index". Unlike the gate, `apply` never reads meshes, so it does not
+    check that a manifest agrees with its mesh.
 
     `world` and `change` may be any parsed JSON values: a world that is
     not a valid world manifest in canonical JSON, or a change that is not
@@ -617,6 +647,8 @@ def apply(world: dict, change: Mapping[str, Any], objects: Objects | Source) -> 
                 f"tile index {key}: assets must be sorted by (layer, feature_id) without duplicates"
             )
         data = cjson.dumps(index)
+        if not TILE_INDEX.fits(len(data)):
+            raise ChangeError(f"tile index {key}: {TILE_INDEX.too_large()}")
         tile_id = content_id(data)
         wt = base["tiles"][position[key]]
         wt["tile_id"] = tile_id
@@ -671,9 +703,12 @@ def _world_bytes(world: Any, what: str) -> bytes:
     if errors:
         raise ChangeError(f"{what}: {'; '.join(sorted(errors))}")
     try:
-        return cjson.dumps(world)
+        data = cjson.dumps(world)
     except cjson.CanonicalError as e:  # a value only Python holds, such as a float
         raise ChangeError(f"{what}: not canonical JSON: {e}") from e
+    if not WORLD_MANIFEST.fits(len(data)):
+        raise ChangeError(f"{what}: {WORLD_MANIFEST.too_large()}")
+    return data
 
 
 def _check_entry(c: Any) -> None:

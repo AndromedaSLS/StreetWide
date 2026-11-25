@@ -290,7 +290,10 @@ cargo run -p op_replay -- rerecord <suite> --world <canonical> --out <suite>
   from someone else. A link, a FIFO or a file over 64 MiB where a file
   should be (a replay may be larger) makes every command stop with exit
   code 2 and one line saying what it refused, as does a link at or under
-  a set's `objects/` or anywhere inside a log.
+  a set's `objects/` or anywhere inside a log. A JSON document over the
+  limit for its kind (RFC 0001 section 7) is refused too, before it is
+  parsed: 1 MiB for an asset manifest or a merge record, 8 MiB for a
+  change set, 16 MiB for a tile index or the gate's report.
 - **Review.** The gate leaves every change of a refresh to review (G3),
   and a merge needs a review that judges the set `better`. RFC 0002 says
   that the approving reviewer may not be the change set's author.
