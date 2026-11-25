@@ -33,6 +33,7 @@
 
 mod benchmark;
 mod controls;
+mod credits;
 mod geo;
 mod grid;
 mod heights;
@@ -241,6 +242,7 @@ fn main() -> ExitCode {
     }
     let panels = hud::Panels {
         help: options.screenshot.is_none() && bench.is_none(),
+        credits: false,
         debug: options.details,
     };
     let inspect = inspect::Inspect::new(options.inspect);

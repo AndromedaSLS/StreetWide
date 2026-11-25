@@ -27,7 +27,7 @@ from tools.ingest.citygml import load_buildings
 from tools.ingest.dem import Dem
 from tools.ingest.geo import Area, Frame, lonlat_to_lv95, lonlat_to_tilef, lv95_to_lonlat, tile_key, tilef_to_lonlat, to_mm
 from tools.ingest.osm import parse as parse_osm
-from tools.worldfmt.store import Store
+from tools.worldfmt.store import NOTICE_FILES, Store
 
 STAC_COLLECTIONS = "https://data.geo.admin.ch/api/stac/v1/collections/"
 OSM_URL = "https://www.openstreetmap.org/"
@@ -311,12 +311,19 @@ def build_water(frame: Frame, dem: Dem, dem_files: list[stac.SourceFile], bodies
     return assets, report
 
 
+STORE_ENTRIES = {"world.json", "objects", *NOTICE_FILES}
+"""What a store the ingest wrote holds: the world, and its licence notices
+(ADR-0019). Anything else, such as the `CANONICAL` marker of a canonical
+store (docs/contributing/baseline-refresh.md), stops the ingest from
+replacing the directory."""
+
+
 def _replace_dir(tmp: Path, out: Path) -> None:
     """Moves the freshly written store into place, replacing an older store
     but never a directory that does not look like one."""
     if out.exists():
         entries = {p.name for p in out.iterdir()}
-        if entries and not entries <= {"world.json", "objects"}:
+        if entries and not entries <= STORE_ENTRIES:
             raise RuntimeError(f"{out} exists and is not a world store; not replacing it")
         shutil.rmtree(out)
     out.parent.mkdir(parents=True, exist_ok=True)

@@ -37,3 +37,11 @@ terrain and swissBUILDINGS3D shells, and ODbL 1.0 together with the
 swisstopo terms for roads, paths, bridges, water and the one OSM fallback
 building (credit "© OpenStreetMap contributors").
 See [ATTRIBUTION.md](../ATTRIBUTION.md).
+
+The ingest also writes the licence notices beside `world.json`
+(`NOTICE.txt`, `CREDITS.txt` and the licence texts,
+[ADR-0019](../docs/adr/0019-odbl-and-the-published-world.md)), so
+regenerating `world/` writes them there too. They change no id. The
+committed fixture does not carry them: ADR-0019 asks for them beside the
+published world, and in this repository `LICENSES/` and ATTRIBUTION.md
+travel with the fixture.

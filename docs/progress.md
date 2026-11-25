@@ -2906,3 +2906,102 @@ ADR-0018's table gives.
 | `op_replay check fixtures/replays/sample.oprep` | 20/20 checkpoints, final `212bd353…`, unchanged |
 | The route, two runs a preset | 36 of 36 stops measured, exit code 0 (with the repeated high run) |
 | Screenshots of the first run of each preset | 18; the three looked at show the credit line naming the ODbL |
+
+### The ODbL notices (2026-11-25, ADR-0019)
+
+ADR-0019's option A is built where it needs no hosting: the published
+world is offered as a whole under ODbL 1.0, the ten OpenStreetMap
+fallback buildings stay in the `shell` layer, and each asset keeps the
+licence and credits of its own sources.
+
+- **Notices with the world.** The ingest writes four files beside
+  `world.json` (`tools/ingest/notices.py`, called by
+  `assemble.write_world` after the world manifest):
+  - `NOTICE.txt`: the database notice (the ODbL, its address, its text
+    beside it; "It contains information from OpenStreetMap, which is
+    made available here under the Open Database License (ODbL)"; each
+    asset keeps its sources' licence and credits), the notice for
+    pictures and videos (ODbL 4.3: "Contains information from the
+    StreetWide world, which is made available here under the Open
+    Database License (ODbL)", with its links), and a request to keep the
+    notices with the world;
+  - `CREDITS.txt`: swissBUILDINGS3D, swissALTI3D, OpenStreetMap and
+    StreetWide contributions, each with what it is used for, its credit,
+    its licence with the licence's address, and a link;
+  - `ODbL-1.0.txt` and `CC-BY-SA-4.0.txt`, copied from `LICENSES/`.
+
+  Their text depends only on the code, never on the world, so a merge
+  cannot make them wrong. The ingest refuses, before writing anything,
+  a world with a source that the credits leave out or give another
+  licence or credit (`NoticeError`).
+- **Not part of the world.** No id covers the notices.
+  `op_world::store::NOTICE_FILES` and `tools.worldfmt.store.NOTICE_FILES`
+  name them, and a test checks that they agree. No reader needed a
+  change: `op_world validate`, both `Store`s, `op_stream`, the gate's
+  candidate worlds, merges, the refresh planner and `verify`, and the
+  facade tool read only `world.json` and objects. The ingest's own guard
+  changed: it replaces an output directory holding a store and its
+  notices, and still refuses one holding anything else, such as the
+  `CANONICAL` marker. The refresh guide says to keep the notices in the
+  canonical store and to copy them from a new build when they change.
+- **The client.** A credits page (C), in the help panel's place: for a
+  world with OpenStreetMap data, the ODbL with its address; then each
+  source the world credits, with its credit, licence and link; a credit
+  the client does not know, with where its licence is (the manifests,
+  through I). F1 goes from it to the help. The help names it, and
+  spells the licence "Open Database License". The credit line is
+  unchanged.
+- **Docs.** ATTRIBUTION.md: a section "The world's licence" (the
+  decision, the notices, the 4.3 wording, the client), a row for
+  StreetWide contributions, and the claim that the OpenStreetMap assets
+  can be extracted as their own database replaced: they can be listed,
+  but the fallback buildings share the `shell` layer and the world is
+  under the ODbL as a whole. The README's licence table and keys, the
+  roadmap (section 1, the licence note in section 4, M1's status, the
+  risks table), CONTRIBUTING.md and the facade guide (contributions are
+  published inside an ODbL world; whether CC BY-SA 4.0 content fits
+  there is the Licensing Working Group's question 3, and the first
+  contribution from outside waits for its answer), the refresh guide and
+  fixtures/README.md.
+- **Not changed:** no ADR, RFC, schema, world id, fixture or replay;
+  `tools.ingest` stays at version 0.1.0, as no manifest changes.
+  `fixtures/world` does not carry the notices: ADR-0019 asks for them
+  beside the published world, and `LICENSES/` and ATTRIBUTION.md travel
+  with the fixture. Regenerating it writes them, with no id changing.
+- **Tests:** the ingest writes the notices, byte for byte, beside a
+  world whose id they do not change; the texts name the ODbL and every
+  source; the credits match ATTRIBUTION.md; every source of the
+  fixture world is credited; an uncredited or differently credited
+  source stops the ingest with nothing written; the ingest replaces its
+  own store but not one marked `CANONICAL`; the store reader and the
+  facade tool see the same world and make the same bundle with the
+  notices beside it; the planner makes the same plan, byte for byte
+  (pinned change and report ids), with notices beside both stores
+  (Python). With notices beside the fixture world, `op_world` validates
+  it with the same id, the gate gives the committed report, and a merge
+  makes the committed candidate world and leaves the notices as they
+  were; `op_stream` opens it as the same world (Rust). The client's
+  credits page, its sources against ATTRIBUTION.md, and F1 and C
+  together.
+- **Waits for hosting:** the notices at the public store's root, beside
+  `current.json` (copied from the ingest's build when the world is
+  published); the fetch command that copies them and prints the notice;
+  the store's address as the world's link in the notices, which link the
+  repository until then; the offer of ODbL 4.6 (every published version
+  in the public store).
+- **Waits for the maintainer:** the questions to the Licensing Working
+  Group, above all question 3 before the first outside contribution;
+  swisstopo's confirmation and the FSDI terms; whether the committed
+  fixture should carry the notices. RFC 0001's amendment (an asset's
+  licence is that of its contents) and ADR-0017's per-licence record
+  of fitting inside an ODbL database are for those records.
+
+| Check | Result |
+|---|---|
+| `cargo fmt --all --check`, `cargo clippy --workspace --all-targets --locked -- -D warnings` | pass |
+| `cargo test --workspace --locked` | 299 passed, 1 ignored |
+| `python -m pytest` | 795 passed, 96 skipped |
+| `op_replay check fixtures/replays/sample.oprep` | 20/20 checkpoints, final `212bd353…`, unchanged |
+| `op_world validate fixtures/world` | world `fd6446c2…`, 45 assets, 0 errors, unchanged |
+| Fixture tile re-ingested offline into a scratch directory (copied cache) | world `fd6446c2…`; every committed file byte-identical, plus the four notices |
+| District re-ingested the same way | world `4689c972…`, the 3,013 files of `data/world/zurich-altstadt` byte-identical, plus the four notices; `op_world validate`: 1,491 assets, 0 errors |

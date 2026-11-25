@@ -1,12 +1,13 @@
 """Assembles meshes into a world store: asset manifests, tile indexes and
-the world manifest (RFC 0001, sections 3 and 4). Every document is checked
-against the JSON Schemas before it is written."""
+the world manifest (RFC 0001, sections 3 and 4), with the licence notices
+beside the world manifest (ADR-0019, `tools.ingest.notices`). Every
+document is checked against the JSON Schemas before it is written."""
 
 from __future__ import annotations
 
 from dataclasses import dataclass
 
-from tools.ingest import GENERATOR, VERSION
+from tools.ingest import GENERATOR, VERSION, notices
 from tools.ingest.geo import Frame, region_key, tile_key
 from tools.ingest.mesh import MeshBuilder
 from tools.worldfmt import CONTRACT_VERSION, glb, schemas
@@ -70,8 +71,11 @@ def write_world(
     spawn_mm: list[int],
     yaw: int,
 ) -> tuple[str, dict[str, int]]:
-    """Writes every asset, tile index and the world manifest. Returns the
-    world id and per-layer asset counts."""
+    """Writes every asset, tile index and the world manifest, then the
+    licence notices beside the world manifest. Returns the world id and
+    per-layer asset counts. Raises NoticeError, before writing anything,
+    if an asset has a source that the notices do not credit."""
+    notices.check_credited(s for a in assets for s in a.sources)
     seen: set[tuple[str, str]] = set()
     by_tile: dict[tuple[int, int], list[dict]] = {}
     counts: dict[str, int] = {}
@@ -142,4 +146,6 @@ def write_world(
         "spawn": {"position_mm": spawn_mm, "yaw": yaw},
         "tiles": tiles,
     })
-    return store.write_world(world), counts
+    world_id = store.write_world(world)
+    notices.write(store.root)
+    return world_id, counts

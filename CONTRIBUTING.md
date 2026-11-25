@@ -237,6 +237,23 @@ datasets, licence and attribution. If you add a new data source, it must have
 an open licence compatible with the above, and you must credit it in
 [ATTRIBUTION.md](ATTRIBUTION.md).
 
+**Your content is published inside a world offered under the ODbL.** The
+world contains OpenStreetMap data, so the published world is offered as a
+whole under the Open Database License 1.0
+([ADR-0019](docs/adr/0019-odbl-and-the-published-world.md)). Inside it,
+your asset keeps its own licence, CC BY-SA 4.0, and its credit, both
+stated in its manifest. Whether CC BY-SA 4.0 content may sit inside an
+ODbL database this way (ODbL sections 2.4 and 4.4 d) is not settled: it
+is a question to the OpenStreetMap Foundation's Licensing Working Group,
+which the maintainer sends before publishing (ADR-0019, question 3), and
+the first contribution from outside the project is merged only after the
+answer. If the answer is no, a new decision record changes the terms for
+contributions before any is merged, and this section says what they
+are. A new data source must also fit inside an ODbL database (ODbL
+section 4.4 d); the licence allowlist
+([ADR-0017](docs/adr/0017-licence-allowlist.md)) records which licences
+do.
+
 Interiors must be fictional: do not use floor plans, photos or descriptions
 of real private homes.
 

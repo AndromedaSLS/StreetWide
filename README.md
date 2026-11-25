@@ -146,6 +146,7 @@ world. F1 shows and hides the controls in the client.
 | F2 | Detailed look, or the plain colours of the world data |
 | F3 | Details: frame rate, position, sun |
 | F4 | Graphics: high, or fast for slower GPUs |
+| C | Credits: each source of the world's data, its licence and a link |
 | **Contributing** | |
 | I | Inspect: names what the crosshair is on (a building, street, bridge, water or terrain), who made it and its licence. Amber buildings are improvable, blue ones have a contribution. A click prints the details to the terminal, and for a building the facade tool's command. Paused on the map; works in replays |
 
@@ -279,13 +280,20 @@ reports go through [SECURITY.md](SECURITY.md).
 | What | Licence |
 |---|---|
 | Code | [MIT](LICENSE-MIT) OR [Apache-2.0](LICENSE-APACHE), at your option |
-| Contributed world content (models, textures, manifests) | [CC BY-SA 4.0](LICENSES/CC-BY-SA-4.0.txt) |
-| Layers derived from OpenStreetMap | [ODbL 1.0](LICENSES/ODbL-1.0.txt) |
-| Layers derived from swisstopo data | swisstopo terms of use (free use, attribution required) |
+| The published world, as a whole | [ODbL 1.0](LICENSES/ODbL-1.0.txt) |
+| Inside it, contributed world content (models, textures, manifests) | [CC BY-SA 4.0](LICENSES/CC-BY-SA-4.0.txt) |
+| Inside it, assets derived from OpenStreetMap | [ODbL 1.0](LICENSES/ODbL-1.0.txt) |
+| Inside it, assets derived from swisstopo data | swisstopo terms of use (free use, attribution required) |
 
-Data sources and the required credits are listed in
-[ATTRIBUTION.md](ATTRIBUTION.md). The rationale is in
-[ADR-0001](docs/adr/0001-licensing.md).
+The world contains OpenStreetMap data, so it is offered as a whole under
+the Open Database License, and each asset in it keeps the licence and
+credits of its own sources, stated in its manifest
+([ADR-0019](docs/adr/0019-odbl-and-the-published-world.md)). Every world
+the ingest writes carries its notices beside `world.json`: `NOTICE.txt`,
+`CREDITS.txt` and the licence texts. Data sources and the required
+credits are listed in [ATTRIBUTION.md](ATTRIBUTION.md), and in the client
+on the credits page (C). The rationale is in
+[ADR-0001](docs/adr/0001-licensing.md) and ADR-0019.
 
 Unless you explicitly state otherwise, any contribution of code you
 intentionally submit for inclusion in this project, as defined in the

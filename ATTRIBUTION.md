@@ -12,6 +12,35 @@ list of the world manifest, which is the union of all asset credits.
 
 **Required on-screen credit:** © swisstopo, © OpenStreetMap contributors
 
+## The world's licence
+
+The published world is offered as a whole under the
+[Open Database License 1.0](LICENSES/ODbL-1.0.txt) (ODbL), because it
+contains OpenStreetMap data
+([ADR-0019](docs/adr/0019-odbl-and-the-published-world.md), option A).
+Inside it, each asset keeps the licence and the credits of its own
+sources, stated in its manifest. Our copy of swisstopo data is part of
+that ODbL world; the originals stay available from swisstopo on their
+own terms.
+
+- **Notices with the world:** every world the ingest writes has, beside
+  its `world.json`, `NOTICE.txt` (the ODbL notice), `CREDITS.txt` (each
+  source, its licence and a link) and the licence texts `ODbL-1.0.txt`
+  and `CC-BY-SA-4.0.txt`. They are not part of the world: no id covers
+  them. Keep them with the world when you copy it or pass it on.
+- **Pictures and videos:** a screenshot, video or other work made from a
+  world and shown in public carries the credits above and this notice
+  (ODbL section 4.3), with "the StreetWide world" linked to
+  <https://github.com/AndromedaSLS/StreetWide>, "Open Database License"
+  to <https://opendatacommons.org/licenses/odbl/1-0/> and "© OpenStreetMap
+  contributors" to <https://www.openstreetmap.org/copyright>:
+
+  > Contains information from the StreetWide world, which is made
+  > available here under the Open Database License (ODbL).
+- **In the client:** the credit line is always on screen and names the
+  ODbL, and the credits page (C) lists each source, its licence and a
+  link.
+
 ## Data sources
 
 | Source | Used for | Licence / terms | Credit |
@@ -19,6 +48,7 @@ list of the world manifest, which is the union of all asset credits.
 | swisstopo swissBUILDINGS3D 3.0 Beta | Building shells (roofs, walls, ground plates) | [swisstopo terms for free geodata](https://www.swisstopo.admin.ch/en/terms-of-use-free-geodata-and-geoservices) (`LicenseRef-swisstopo-OGD`) | © swisstopo |
 | swisstopo swissALTI3D | Terrain; heights of roads, bridges, water surfaces and OSM fallback buildings | swisstopo terms for free geodata (`LicenseRef-swisstopo-OGD`) | © swisstopo |
 | OpenStreetMap | Roads, paths, steps and bridges; water areas (rivers, lakes, canals, ponds); building footprints where swissBUILDINGS3D has no building | [Open Database License 1.0](LICENSES/ODbL-1.0.txt) (`ODbL-1.0`) | © OpenStreetMap contributors |
+| StreetWide contributions | What players add to the world, such as facades, once merged | [CC BY-SA 4.0](https://creativecommons.org/licenses/by-sa/4.0/) (`CC-BY-SA-4.0`), [text](LICENSES/CC-BY-SA-4.0.txt); see [CONTRIBUTING.md](CONTRIBUTING.md#contributing-world-content) | The StreetWide contributors |
 
 ### swisstopo (Federal Office of Topography)
 
@@ -49,13 +79,18 @@ list of the world manifest, which is the union of all asset credits.
   every manifest derived from it.
 - **ODbL notice:** StreetWide worlds contain information from OpenStreetMap,
   which is made available here under the Open Database License (ODbL).
-- **Derived databases:** every asset whose licence contains `ODbL-1.0`
-  (roads, paths, bridges, water and OSM fallback buildings) is a derivative
-  of OpenStreetMap. It is offered under the ODbL together with the
-  swisstopo terrain heights it uses, so its licence is
-  `ODbL-1.0 AND LicenseRef-swisstopo-OGD`. These assets can be extracted
-  mechanically from the tile indexes, which list each asset's licence.
-  Water stays in its own layer (`water`,
+  The worlds themselves are offered under the ODbL too (see
+  [The world's licence](#the-worlds-licence)).
+- **Assets from OpenStreetMap:** every asset whose licence contains
+  `ODbL-1.0` (roads, paths, bridges, water and OSM fallback buildings) is
+  derived from OpenStreetMap. It is offered under the ODbL together with
+  the swisstopo terrain heights it uses, so its licence is
+  `ODbL-1.0 AND LicenseRef-swisstopo-OGD`. The tile indexes list each
+  asset's licence, so these assets can be listed. They are not a
+  separate database that could be extracted on its own terms from the
+  rest: the OSM fallback buildings share the `shell` layer with
+  swissBUILDINGS3D's buildings, and the world as a whole is under the
+  ODbL. Water stays in its own layer (`water`,
   [RFC 0003](rfcs/0003-water-layer.md)).
 
 ## Data in this repository

@@ -40,10 +40,18 @@ it exists only on the maintainer's disk.
   by default, and it replaces that directory as a whole.
 - Never give its path to the ingest's `--out`.
 - Put an empty file named `CANONICAL` in it. The ingest refuses to
-  replace a directory that holds anything besides `world.json` and
-  `objects/`, so an `--out` that names the store by mistake fails
-  instead of deleting it. `op_world`, `plan` and `verify` ignore the
-  file. ADR-0020 proposes this marker.
+  replace a directory that holds anything besides `world.json`,
+  `objects/` and the licence notices it writes, so an `--out` that names
+  the store by mistake fails instead of deleting it. `op_world`, `plan`
+  and `verify` ignore the file. ADR-0020 proposes this marker.
+- Keep the licence notices beside its `world.json`: `NOTICE.txt`,
+  `CREDITS.txt`, `ODbL-1.0.txt` and `CC-BY-SA-4.0.txt`
+  ([ADR-0019](../adr/0019-odbl-and-the-published-world.md)). The ingest
+  writes them with every world; a store made before it did gets them
+  by copying them from a new build. They are not part of the world, so
+  no id covers them, `plan` and `verify` ignore them, and merges leave
+  them as they are. When a new ingest changes them (a new source), copy
+  them from its build into the store.
 
 The **world log** is a directory next to the store. It holds every merge
 record, with the change set, the check report and the world that go with

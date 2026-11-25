@@ -15,17 +15,19 @@ from __future__ import annotations
 
 import json
 import os
+import shutil
 import subprocess
 from pathlib import Path
 
 import pytest
 
+from tools.ingest import notices
 from tools.ingest.changes.__main__ import main
 from tools.ingest.tests.refresh_worlds import Log
 from tools.worldfmt import cjson
 from tools.worldfmt.changes import Objects, apply
 from tools.worldfmt.ids import content_id
-from tools.worldfmt.store import Store
+from tools.worldfmt.store import NOTICE_FILES, Store
 
 REPO = Path(__file__).resolve().parents[3]
 FIXTURE_WORLD = REPO / "fixtures" / "world"
@@ -115,6 +117,25 @@ def test_the_fixture_water_refresh(water_plan) -> None:
 def test_the_report_id_is_pinned(water_plan) -> None:
     _, out = water_plan
     assert content_id((out / "refresh-report.json").read_bytes()) == REPORT_ID
+
+
+def test_the_notices_beside_both_stores_change_no_plan(tmp_path: Path, capsys) -> None:
+    """The licence notices the ingest writes beside a world (ADR-0019) are
+    not part of it: with them beside the current and the new world, the
+    planner makes the same plan, byte for byte, and its sets carry none."""
+    current = pre_water_store(tmp_path / "before-water")
+    notices.write(current)
+    new = tmp_path / "new"
+    shutil.copytree(FIXTURE_WORLD, new)
+    notices.write(new)
+    log = Log(tmp_path / "log")
+    log.baseline(current, BASELINE_REASON)
+    out = tmp_path / "plan"
+    code = main(["plan", "--current", str(current), "--new", str(new), "--log", str(log.root), "--out", str(out)])
+    assert code == 0, capsys.readouterr().err
+    assert content_id((out / "refresh-report.json").read_bytes()) == REPORT_ID
+    assert content_id((out / "sets" / "001" / "change.json").read_bytes()) == CHANGE_ID
+    assert not [p for p in out.rglob("*") if p.name in NOTICE_FILES]
 
 
 @pytest.mark.skipif(os.environ.get("STREETWIDE_GATE") != "1", reason="runs op_world; set STREETWIDE_GATE=1 (needs cargo)")

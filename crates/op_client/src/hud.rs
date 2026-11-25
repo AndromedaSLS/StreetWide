@@ -1,20 +1,23 @@
-//! On-screen text: data credits (always shown), status, help (F1), debug
-//! details (F3), loading and replay results, and inspect mode's crosshair
-//! and panel; and the end of `--replay --exit-when-done` runs.
+//! On-screen text: data credits (always shown), status, help (F1), the
+//! credits page (C), debug details (F3), loading and replay results, and
+//! inspect mode's crosshair and panel; and the end of `--replay
+//! --exit-when-done` runs.
 
 use bevy::camera::Exposure;
+use bevy::input::keyboard::Key;
 use bevy::prelude::*;
 use bevy::render::view::screenshot::{Screenshot, save_to_disk};
 use bevy::window::{CursorGrabMode, CursorOptions, PrimaryWindow};
 
 use crate::Options;
 use crate::controls::Look;
+use crate::credits::credits_text;
 use crate::inspect::{self, Inspect, InspectStats, InspectSystems};
 use crate::materials::MaterialSet;
 use crate::scene::{PlayerCamera, Quality, StreamStats};
 use crate::session::{Playback, Session};
 use crate::sky::{Clock, MoonState, SunState};
-use crate::travel::{Travel, View};
+use crate::travel::{Travel, View, letter};
 
 #[derive(Component)]
 struct StatusText;
@@ -43,11 +46,21 @@ struct InspectHeader;
 #[derive(Component)]
 struct InspectBody;
 
-/// Which panels are open.
+/// Which panels are open. The credits page takes the help panel's place
+/// while it is open.
 #[derive(Resource)]
 pub struct Panels {
     pub help: bool,
+    pub credits: bool,
     pub debug: bool,
+}
+
+impl Panels {
+    /// F1: the help, shown or hidden; from the credits page, the help.
+    fn toggle_help(&mut self) {
+        self.help = self.credits || !self.help;
+        self.credits = false;
+    }
 }
 
 /// A system font with the glyphs the credits need (`©`, `·`); Bevy's
@@ -271,9 +284,16 @@ fn credit_line(attribution: &[String]) -> String {
         .join(" · ")
 }
 
-fn panel_keys(keys: Res<ButtonInput<KeyCode>>, mut panels: ResMut<Panels>) {
+fn panel_keys(
+    keys: Res<ButtonInput<KeyCode>>,
+    logical: Res<ButtonInput<Key>>,
+    mut panels: ResMut<Panels>,
+) {
     if keys.just_pressed(KeyCode::F1) {
-        panels.help = !panels.help;
+        panels.toggle_help();
+    }
+    if letter(&logical, 'c') {
+        panels.credits = !panels.credits;
     }
     if keys.just_pressed(KeyCode::F3) {
         panels.debug = !panels.debug;
@@ -305,11 +325,15 @@ fn help_text(session: &Session, travel: &Travel) -> String {
     lines.push("        amber: an improvable building · blue: contributed;".into());
     lines.push("        click: print it, with the facade tool's command".into());
     // OpenStreetMap data (streets, water) comes with its licence and where
-    // to read it (ADR-0014).
+    // to read it (ADR-0014); every source is on the credits page
+    // (ADR-0019).
     let attribution = &session.streamer().index().world().attribution;
     if attribution.iter().any(|a| a.contains("OpenStreetMap")) {
         lines.push("DATA    © OpenStreetMap contributors, under the Open Database".into());
-        lines.push("        Licence (ODbL): openstreetmap.org/copyright".into());
+        lines.push("        License (ODbL): openstreetmap.org/copyright".into());
+        lines.push("        C: credits, with every source and its licence".into());
+    } else {
+        lines.push("DATA    C: credits, with every source and its licence".into());
     }
     if session.is_playback() {
         lines.push("(replay: travel and saving are off)".into());
@@ -342,7 +366,7 @@ fn update_panels(
     } else {
         *fps * 0.95 + 0.05 / dt
     };
-    *help.1 = if panels.help {
+    *help.1 = if panels.help || panels.credits {
         Visibility::Inherited
     } else {
         Visibility::Hidden
@@ -352,7 +376,10 @@ fn update_panels(
     } else {
         Visibility::Hidden
     };
-    if panels.help {
+    if panels.credits {
+        let attribution = &session.streamer().index().world().attribution;
+        help.0.0 = font.show(&credits_text(attribution));
+    } else if panels.help {
         help.0.0 = font.show(&help_text(&session, &travel));
     }
     if !panels.debug {
@@ -635,9 +662,35 @@ mod tests {
             "{text}"
         );
         assert!(
-            text.contains("(ODbL)") && text.contains("openstreetmap.org/copyright"),
+            text.contains("Open Database\n        License (ODbL): openstreetmap.org/copyright"),
             "{text}"
         );
+        // ... and points to the credits page (ADR-0019).
+        assert!(
+            text.contains("C: credits, with every source and its licence"),
+            "{text}"
+        );
+    }
+
+    /// C opens and closes the credits page in the help panel's place; F1
+    /// goes from it to the help, and otherwise shows or hides the help.
+    #[test]
+    fn the_credits_page_and_the_help_share_a_place() {
+        let mut panels = Panels {
+            help: true,
+            credits: false,
+            debug: false,
+        };
+        let state = |p: &Panels| (p.help, p.credits);
+        panels.credits = true;
+        assert_eq!(state(&panels), (true, true), "the page shows over the help");
+        panels.toggle_help();
+        assert_eq!(state(&panels), (true, false), "F1 on the page: the help");
+        panels.toggle_help();
+        assert_eq!(state(&panels), (false, false), "F1 hides the help");
+        panels.credits = true;
+        panels.toggle_help();
+        assert_eq!(state(&panels), (true, false), "F1 on the page: the help");
     }
 
     /// The credit line, which scripted screenshots show, names the ODbL
